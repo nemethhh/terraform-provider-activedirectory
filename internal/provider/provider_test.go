@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"testing"
 
 	fwprovider "github.com/hashicorp/terraform-plugin-framework/provider"
@@ -38,8 +39,56 @@ func TestProviderSchemaIsValid(t *testing.T) {
 	}
 }
 
-var _ = map[string]func() (tfprotov6.ProviderServer, error){
-	"activedirectory": providerserver.NewProtocol6WithError(provider.New("test")()),
+// accFactories serves the real provider: no transport hook, so the transport the
+// configuration selects is the one actually exercised. The acceptance suites use
+// it; so do the two Configure-level tests below, which fail before any transport
+// is constructed and therefore need no domain.
+func accFactories() map[string]func() (tfprotov6.ProviderServer, error) {
+	return map[string]func() (tfprotov6.ProviderServer, error){
+		"activedirectory": providerserver.NewProtocol6WithError(provider.New("acc")()),
+	}
+}
+
+// Configure must refuse two transport blocks before it starts a process or opens
+// a socket, which is what makes this a unit test rather than an acceptance one.
+func TestConfigureRefusesTwoTransportBlocks(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  local {}
+  ssh {
+    host                     = "jump.corp.local"
+    user                     = "svc_tf"
+    password                 = "x"
+    insecure_ignore_host_key = true
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`Exactly one transport block is required`),
+		}},
+	})
+}
+
+func TestConfigureRefusesNoTransportBlock(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`Exactly one transport block is required`),
+		}},
+	})
 }
 
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {

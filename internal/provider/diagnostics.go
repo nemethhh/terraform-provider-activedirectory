@@ -96,8 +96,9 @@ func renderError(op, resourceType string, err error) (summary, detail string) {
 		b.WriteString("\nThe provider retried this operation and it kept failing.\n")
 	case adpwsh.KindTransport:
 		summary = "Cannot reach Active Directory"
-		b.WriteString("\nThis is a transport problem — SSH, pwsh, or the ActiveDirectory module " +
-			"on the jump box — not a refusal by Active Directory.\n")
+		b.WriteString("\nThis is a transport problem — the SSH connection, the `pwsh` process, " +
+			"or the ActiveDirectory module on the machine running it — not a refusal by " +
+			"Active Directory.\n")
 	case adpwsh.KindReplication:
 		summary = "Replication wait timed out"
 		b.WriteString("\nThe object was written successfully and the **state has been saved**; " +

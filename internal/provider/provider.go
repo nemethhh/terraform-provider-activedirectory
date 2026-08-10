@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
+	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -184,20 +185,45 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 
 	transport := p.transport
 	if transport == nil {
-		sshCfg, diags := resolveSSH(cfg, os.Getenv)
+		kind, diags := chooseTransport(cfg)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		tr, err := adssh.New(sshCfg)
-		if err != nil {
-			resp.Diagnostics.AddAttributeError(path.Root("ssh"),
-				"Cannot reach the jump box",
-				"The provider could not open an SSH connection. This is a transport problem, "+
-					"not an Active Directory one.\n\n"+err.Error())
-			return
+
+		switch kind {
+		case transportLocal:
+			localCfg, diags := resolveLocal(cfg, os.Getenv)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			tr, err := adlocal.New(localCfg)
+			if err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("local"),
+					"Cannot run PowerShell on this machine",
+					"The provider could not start PowerShell 7. This is a transport problem, "+
+						"not an Active Directory one.\n\n"+err.Error())
+				return
+			}
+			transport = tr
+
+		case transportSSH:
+			sshCfg, diags := resolveSSH(cfg, os.Getenv)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			tr, err := adssh.New(sshCfg)
+			if err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("ssh"),
+					"Cannot reach the jump box",
+					"The provider could not open an SSH connection. This is a transport problem, "+
+						"not an Active Directory one.\n\n"+err.Error())
+				return
+			}
+			transport = tr
 		}
-		transport = tr
 	}
 
 	client, err := adpwsh.New(ctx, adpwsh.Config{
@@ -209,9 +235,9 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot configure the Active Directory client",
-			"The provider connected to the jump box but could not query the domain. "+
-				"Check that RSAT-AD-PowerShell is installed and that TCP 9389 is open to the "+
-				"domain controller.\n\n"+err.Error())
+			"The provider reached PowerShell but could not query the domain. "+
+				"Check that RSAT-AD-PowerShell is installed on the machine running pwsh and "+
+				"that TCP 9389 is open from it to the domain controller.\n\n"+err.Error())
 		return
 	}
 	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
