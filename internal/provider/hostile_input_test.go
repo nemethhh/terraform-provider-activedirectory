@@ -28,3 +28,29 @@ func TestHostileInputEscapedCommaInADNAgainstTheFake(t *testing.T) {
 		Steps:                    hostileEscapedCommaSteps(fakeSuiteEnv()),
 	})
 }
+
+// What only real AD proves here: the cmdlet layer accepts these values, not
+// just the payload path. Each value is its own test case so a failure names the
+// value that caused it.
+func TestAccHostileInputRoundTrips(t *testing.T) {
+	e := accSuiteEnv()
+	for _, tt := range hostileValues {
+		t.Run(tt.Name, func(t *testing.T) {
+			resource.Test(t, resource.TestCase{
+				PreCheck:                 accPreCheck(t),
+				ProtoV6ProviderFactories: accFactories(),
+				CheckDestroy:             accCheckDestroy(t),
+				Steps:                    hostileDescriptionSteps(e, tt.Value),
+			})
+		})
+	}
+}
+
+func TestAccHostileInputEscapedCommaInADN(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    hostileEscapedCommaSteps(accSuiteEnv()),
+	})
+}

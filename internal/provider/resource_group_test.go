@@ -43,3 +43,16 @@ resource "activedirectory_group" "devs" {
 		}},
 	})
 }
+
+// What only real AD proves here: which scope conversions Active Directory
+// actually permits. global to universal is the conversion this suite makes; if
+// a real domain refuses it, that is the suite finding a defect in the provider's
+// conversion path rather than the suite being wrong.
+func TestAccGroupLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    groupLifecycleSteps(accSuiteEnv()),
+	})
+}

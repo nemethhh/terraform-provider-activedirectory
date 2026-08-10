@@ -85,3 +85,17 @@ resource "activedirectory_user" "jdoe" {
 		}},
 	})
 }
+
+// What only real AD proves here: the domain's password policy accepts these
+// passwords, and surname really does map to sn. No password check is passed: a
+// real domain will not say what it stored, and asserting on the rotation would
+// mean reading a password back.
+func TestAccUserLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		TerraformVersionChecks:   writeOnlyPasswordChecks,
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    userLifecycleSteps(accSuiteEnv(), nil),
+	})
+}
