@@ -180,3 +180,35 @@ func accCheckDestroy(t *testing.T) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// accProviderConfig composes a provider block from parts, and the replication
+// suite is the only caller that passes extra blocks. A malformed composition
+// would present as a Terraform syntax error inside an acceptance run nobody can
+// execute yet, so the shape is asserted here instead.
+func TestAccProviderConfigComposition(t *testing.T) {
+	plain := accProviderConfig()
+	if !strings.Contains(plain, "local {") || !strings.Contains(plain, "max_concurrency = 4") {
+		t.Errorf("the local block must be written literally:\n%s", plain)
+	}
+	if strings.Contains(plain, "ssh {") {
+		t.Errorf("the acceptance provider block must not configure ssh:\n%s", plain)
+	}
+	if got := strings.Count(plain, "provider \"activedirectory\""); got != 1 {
+		t.Errorf("%d provider blocks, want exactly 1", got)
+	}
+
+	withExtra := accProviderConfig("  replication {\n    wait = true\n  }")
+	if !strings.Contains(withExtra, "replication {") {
+		t.Errorf("the extra block was dropped:\n%s", withExtra)
+	}
+	// The extra block must land inside the provider block, so the last brace of
+	// the string is the provider's own.
+	if !strings.HasSuffix(strings.TrimSpace(withExtra), "}") ||
+		strings.Index(withExtra, "replication {") > strings.LastIndex(withExtra, "}") {
+		t.Errorf("the extra block escaped the provider block:\n%s", withExtra)
+	}
+
+	if got := accProviderConfigWithConcurrency(1); !strings.Contains(got, "max_concurrency = 1") {
+		t.Errorf("the concurrency override did not take:\n%s", got)
+	}
+}
