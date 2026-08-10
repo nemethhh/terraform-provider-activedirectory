@@ -1,0 +1,19 @@
+# Reference clones: kept out of the repo, out of tfplugindocs output, and out
+# of Registry ingestion.
+docs/reference/
+
+# Superpowers working scaffolding: specs, plans, brainstorms. Never repository
+# content.
+docs/superpowers/
+
+# Local cross-repo development against go-adpwsh.
+go.work
+go.work.sum
+
+# Build and Terraform artefacts.
+terraform-provider-activedirectory
+*.test
+coverage.out
+.terraform*
+*.tfstate*
+crash.log
