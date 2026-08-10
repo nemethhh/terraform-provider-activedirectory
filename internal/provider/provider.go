@@ -6,9 +6,12 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
@@ -188,9 +191,36 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 }
 
 func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{
+		newOUResource,
+	}
 }
 
 func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return nil
+}
+
+// clientFromProviderData is the boilerplate every resource's Configure runs.
+func clientFromProviderData(data any, diags *diag.Diagnostics) *adpwsh.Client {
+	if data == nil {
+		return nil // Configure runs before the provider is configured; not an error.
+	}
+	client, ok := data.(*adpwsh.Client)
+	if !ok {
+		diags.AddError("Unexpected provider data",
+			fmt.Sprintf("Expected *adpwsh.Client, got %T. This is a bug in the provider.", data))
+		return nil
+	}
+	return client
+}
+
+// withTimeout applies a resource's timeouts block, defaulting to the value the
+// transport already enforces.
+func withTimeout(ctx context.Context, v func(context.Context, time.Duration) (time.Duration, diag.Diagnostics)) (context.Context, context.CancelFunc, diag.Diagnostics) {
+	d, diags := v(ctx, 60*time.Second)
+	if diags.HasError() {
+		return ctx, func() {}, diags
+	}
+	c, cancel := context.WithTimeout(ctx, d)
+	return c, cancel, diags
 }
