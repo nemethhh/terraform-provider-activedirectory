@@ -242,3 +242,101 @@ resource "activedirectory_group" "devs" {
 		},
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+// userLifecycleSteps covers create with a write-only password, the no-diff
+// replan, a rotation driven by password_version alongside attribute clears, and
+// import by sAMAccountName — the brownfield form.
+//
+// passwordCheck is appended to the rotation step and may be nil: only the fake
+// can be asked what passwords were set, and a real domain will not tell anyone.
+func userLifecycleSteps(e suiteEnv, passwordCheck resource.TestCheckFunc) []resource.TestStep {
+	ou := accNamePrefix + "usr-ou"
+	sam := accNamePrefix + "usr"
+	upn := sam + "@" + e.upnSuffix()
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+`, ou, e.Container)
+
+	create := fmt.Sprintf(`
+resource "activedirectory_user" "jdoe" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  display_name        = "John Doe"
+  given_name          = "John"
+  surname             = "Doe"
+  enabled             = true
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}`, sam, upn)
+
+	// Bumping the version rotates; the password itself cannot be diffed,
+	// because it is never stored. Clearing surname is the row that catches a
+	// wrong LDAP mapping: its attribute is sn, not surname.
+	rotated := fmt.Sprintf(`
+resource "activedirectory_user" "jdoe" {
+  sam_account_name        = %q
+  container               = activedirectory_ou.staff.dn
+  user_principal_name     = %q
+  display_name            = "John Doe"
+  given_name              = "John"
+  surname                 = ""
+  enabled                 = false
+  password                = "Rotated-P4ssw0rd-2"
+  password_version        = 2
+  account_expiration_date = "2027-01-02T03:04:05Z"
+}`, sam, upn)
+
+	rotationChecks := []resource.TestCheckFunc{
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "surname", ""),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_version", "2"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe",
+			"account_expiration_date", "2027-01-02T03:04:05Z"),
+	}
+	if passwordCheck != nil {
+		rotationChecks = append(rotationChecks, passwordCheck)
+	}
+
+	return []resource.TestStep{
+		{
+			Config: base + create,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_user.jdoe", "id"),
+				resource.TestCheckResourceAttrSet("activedirectory_user.jdoe", "sid"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "dn",
+					"CN="+sam+",OU="+ou+","+e.Container),
+				// The CN defaults to the sAMAccountName.
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "name", sam),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "true"),
+				// The password is never in state: this is the whole point.
+				resource.TestCheckNoResourceAttr("activedirectory_user.jdoe", "password"),
+			),
+		},
+		{
+			Config:   base + create,
+			PlanOnly: true,
+		},
+		{
+			Config: base + rotated,
+			Check:  resource.ComposeAggregateTestCheckFunc(rotationChecks...),
+		},
+		{
+			ResourceName:      "activedirectory_user.jdoe",
+			ImportState:       true,
+			ImportStateId:     sam, // by sAMAccountName, the brownfield case
+			ImportStateVerify: true,
+			// A write-only attribute and its version are not readable, so they
+			// cannot round-trip through import.
+			ImportStateVerifyIgnore: []string{"password", "password_version"},
+		},
+	}
+}
