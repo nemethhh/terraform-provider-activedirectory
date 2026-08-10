@@ -340,3 +340,68 @@ resource "activedirectory_user" "jdoe" {
 		},
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Hostile input
+// ---------------------------------------------------------------------------
+
+// hostileValues each broke the archived provider at least once. They travel as
+// JSON on stdin and are splatted into the cmdlet, so there is no escaping layer
+// to get wrong — against the fake that exercises the payload path, and against a
+// real domain it exercises the cmdlet layer too.
+var hostileValues = []struct{ Name, Value string }{
+	{"underscore", "under_score"},
+	{"double_quote", `has "quotes"`},
+	{"single_quote", `O'Brien`},
+	{"dollar", `$env:PATH`},
+	{"backtick", "back`tick"},
+	{"semicolon", "semi;colon"},
+	{"ampersand", "amper&sand"},
+	{"pipe", "pipe|char"},
+	{"comma", "Smith, John"},
+	{"non_ascii", "söüäß-éòñ"},
+	{"subexpression", `$(Get-Process)`},
+}
+
+func hostileDescriptionSteps(e suiteEnv, value string) []resource.TestStep {
+	ou := accNamePrefix + "hostile-ou"
+	return []resource.TestStep{{
+		Config: e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name        = %q
+  container   = %q
+  description = %q
+}`, ou, e.Container, value),
+		Check: resource.TestCheckResourceAttr("activedirectory_ou.staff", "description", value),
+	}}
+}
+
+// hostileEscapedCommaSteps is where a string-splitting DN parser fails: an RDN
+// containing an escaped comma must survive being used as another resource's
+// container.
+func hostileEscapedCommaSteps(e suiteEnv) []resource.TestStep {
+	ouName := accNamePrefix + "hostile, EMEA"
+	group := accNamePrefix + "hostile-grp"
+	// The RDN's comma is escaped in the distinguished name, and the space after
+	// it is significant to nothing but must survive verbatim.
+	wantOUDN := `OU=` + accNamePrefix + `hostile\, EMEA,` + e.Container
+
+	return []resource.TestStep{{
+		Config: e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "sales" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "reps" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.sales.dn
+}`, ouName, e.Container, group, group),
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("activedirectory_ou.sales", "dn", wantOUDN),
+			resource.TestCheckResourceAttr("activedirectory_group.reps", "container", wantOUDN),
+			resource.TestCheckResourceAttr("activedirectory_group.reps", "dn",
+				"CN="+group+","+wantOUDN),
+		),
+	}}
+}
