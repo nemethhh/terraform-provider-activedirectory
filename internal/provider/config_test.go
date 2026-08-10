@@ -150,3 +150,131 @@ func TestResolveDomainRejectsAHalfCredential(t *testing.T) {
 		t.Fatal("expected an error naming the missing half")
 	}
 }
+
+func localOnly(l localModel) providerModel { return providerModel{Local: &l} }
+
+func TestResolveLocalDefaults(t *testing.T) {
+	got, diags := resolveLocal(localOnly(localModel{}), env(nil))
+	if diags.HasError() {
+		t.Fatalf("resolveLocal: %v", diags)
+	}
+	if got.PwshPath != "pwsh" || got.Concurrency != 4 || got.Timeout != 60*time.Second {
+		t.Errorf("resolved = %+v", got)
+	}
+	// The library's WorkingDir is deliberately not exposed, so it is never set.
+	if got.WorkingDir != "" {
+		t.Errorf("WorkingDir = %q, want empty", got.WorkingDir)
+	}
+}
+
+// One path per transport: local.pwsh_path beats the top-level pwsh_path, which
+// beats the environment. Documenting one attribute per transport is clearer than
+// one attribute whose meaning depends on a sibling block.
+func TestResolveLocalPwshPathPrecedence(t *testing.T) {
+	tests := []struct {
+		name string
+		m    providerModel
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "the local block wins",
+			m: providerModel{
+				PwshPath: types.StringValue("/top/pwsh"),
+				Local:    &localModel{PwshPath: types.StringValue("/local/pwsh")},
+			},
+			env:  map[string]string{"AD_PWSH_PATH": "/env/pwsh"},
+			want: "/local/pwsh",
+		},
+		{
+			name: "the top-level attribute is next",
+			m:    providerModel{PwshPath: types.StringValue("/top/pwsh"), Local: &localModel{}},
+			env:  map[string]string{"AD_PWSH_PATH": "/env/pwsh"},
+			want: "/top/pwsh",
+		},
+		{
+			name: "the environment is the last resort",
+			m:    providerModel{Local: &localModel{}},
+			env:  map[string]string{"AD_PWSH_PATH": "/env/pwsh"},
+			want: "/env/pwsh",
+		},
+		{
+			name: "and then the library's default",
+			m:    providerModel{Local: &localModel{}},
+			want: "pwsh",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, diags := resolveLocal(tt.m, env(tt.env))
+			if diags.HasError() {
+				t.Fatalf("resolveLocal: %v", diags)
+			}
+			if got.PwshPath != tt.want {
+				t.Errorf("PwshPath = %q, want %q", got.PwshPath, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveLocalReadsTheEnvironmentForConcurrencyAndTimeout(t *testing.T) {
+	got, diags := resolveLocal(localOnly(localModel{}), env(map[string]string{
+		"AD_LOCAL_MAX_CONCURRENCY": "2",
+		"AD_LOCAL_TIMEOUT":         "90s",
+	}))
+	if diags.HasError() {
+		t.Fatalf("resolveLocal: %v", diags)
+	}
+	if got.Concurrency != 2 || got.Timeout != 90*time.Second {
+		t.Errorf("resolved = %+v", got)
+	}
+}
+
+func TestResolveLocalConfigBeatsEnvironment(t *testing.T) {
+	got, _ := resolveLocal(localOnly(localModel{
+		MaxConcurrency: types.Int64Value(6),
+		Timeout:        types.StringValue("10s"),
+	}), env(map[string]string{
+		"AD_LOCAL_MAX_CONCURRENCY": "2",
+		"AD_LOCAL_TIMEOUT":         "90s",
+	}))
+	if got.Concurrency != 6 || got.Timeout != 10*time.Second {
+		t.Errorf("environment overrode configuration: %+v", got)
+	}
+}
+
+// A value the environment supplies is still refused, and the diagnostic points
+// at the attribute the operator can change rather than at the variable.
+func TestResolveLocalRejectsUnusableEnvironmentValues(t *testing.T) {
+	tests := []struct {
+		name, wantDetail string
+		env              map[string]string
+	}{
+		{"not a number", "AD_LOCAL_MAX_CONCURRENCY", map[string]string{"AD_LOCAL_MAX_CONCURRENCY": "four"}},
+		{"not a duration", "AD_LOCAL_TIMEOUT", map[string]string{"AD_LOCAL_TIMEOUT": "one minute"}},
+		{"negative concurrency", "concurrency", map[string]string{"AD_LOCAL_MAX_CONCURRENCY": "-1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, diags := resolveLocal(localOnly(localModel{}), env(tt.env))
+			if !diags.HasError() {
+				t.Fatal("expected an error")
+			}
+			first := diags.Errors()[0]
+			if !strings.Contains(first.Summary()+first.Detail(), tt.wantDetail) {
+				t.Errorf("diagnostic = %q / %q, should name %q",
+					first.Summary(), first.Detail(), tt.wantDetail)
+			}
+			if _, ok := first.(diag.DiagnosticWithPath); !ok {
+				t.Error("the diagnostic must carry an attribute path")
+			}
+		})
+	}
+}
+
+func TestResolveLocalRejectsABadDuration(t *testing.T) {
+	_, diags := resolveLocal(localOnly(localModel{Timeout: types.StringValue("one minute")}), env(nil))
+	if !diags.HasError() {
+		t.Fatal("an unparseable timeout must be an attribute error")
+	}
+}

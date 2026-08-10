@@ -11,14 +11,22 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
+	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
 type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
+	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
+}
+
+type localModel struct {
+	PwshPath       types.String `tfsdk:"pwsh_path"`
+	MaxConcurrency types.Int64  `tfsdk:"max_concurrency"`
+	Timeout        types.String `tfsdk:"timeout"`
 }
 
 type sshModel struct {
@@ -135,6 +143,74 @@ func resolveSSH(m providerModel, getenv func(string) string) (adssh.Config, diag
 			"Set ssh.host or the AD_SSH_HOST environment variable.")
 	}
 	return cfg, diags
+}
+
+// firstNonEmpty returns the first value that is not empty. Configuration always
+// wins; the environment is the fallback, never an override.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// resolveLocal turns the local block plus the environment into a transport
+// configuration. Unlike resolveSSH there is nothing to dial and no credential
+// precedence to enforce: the process inherits the identity of whoever launched
+// Terraform, which is the whole point of running on the host.
+func resolveLocal(m providerModel, getenv func(string) string) (adlocal.Config, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	root := path.Root("local")
+	l := localModel{}
+	if m.Local != nil {
+		l = *m.Local
+	}
+
+	var cfg adlocal.Config
+
+	// One path per transport: the local block's own attribute, then the
+	// top-level pwsh_path the SSH transport already uses, then the environment.
+	cfg.PwshPath = firstNonEmpty(
+		str(l.PwshPath, nil, ""),
+		str(m.PwshPath, nil, ""),
+		getenv("AD_PWSH_PATH"),
+	)
+
+	if !l.MaxConcurrency.IsNull() && !l.MaxConcurrency.IsUnknown() {
+		cfg.Concurrency = int(l.MaxConcurrency.ValueInt64())
+	} else if v := getenv("AD_LOCAL_MAX_CONCURRENCY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("max_concurrency"),
+				"Invalid AD_LOCAL_MAX_CONCURRENCY",
+				fmt.Sprintf("%q is not a whole number: %s", v, err))
+		}
+		cfg.Concurrency = n
+	}
+
+	// The environment supplies the default the attribute falls back to, so
+	// configuration still wins and a malformed variable is still reported.
+	timeoutDefault := 60 * time.Second
+	if v := getenv("AD_LOCAL_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("timeout"), "Invalid AD_LOCAL_TIMEOUT",
+				fmt.Sprintf("%q is not a Go duration such as \"60s\" or \"2m\": %s", v, err))
+		} else {
+			timeoutDefault = d
+		}
+	}
+	cfg.Timeout = duration(l.Timeout, root.AtName("timeout"), timeoutDefault, &diags)
+
+	// Validate before WithDefaults, exactly as the library's own New does:
+	// afterwards a negative concurrency has already become 4 and the mistake is
+	// invisible.
+	if err := cfg.Validate(); err != nil {
+		diags.AddAttributeError(root, "Invalid local configuration", err.Error())
+	}
+	return cfg.WithDefaults(), diags
 }
 
 // resolveDomain returns the pinned DC and the optional -Credential.

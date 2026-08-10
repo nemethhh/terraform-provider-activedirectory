@@ -138,6 +138,8 @@ github.com/nemethhh/go-adpwsh v0.1.0 h1:sWJa9KA8RT5w2A9lFQKYXbP9rHXPaLCSxIz0anu/
 github.com/nemethhh/go-adpwsh v0.1.0/go.mod h1:4hYTQEoCnJ7TVLx6+pqnNs436A3VXK2HXCLcX8sFN9I=
 github.com/nemethhh/go-adpwsh v0.1.1 h1:JK3dEiFBtJLX7cocVAbGfXbMR9zk4+EajRw0nmX1rFY=
 github.com/nemethhh/go-adpwsh v0.1.1/go.mod h1:4hYTQEoCnJ7TVLx6+pqnNs436A3VXK2HXCLcX8sFN9I=
+github.com/nemethhh/go-adpwsh v0.2.0 h1:p5KYnDeIy6evCxvF2x3rRL+8TSJ4ayd8V1pwK2F5P+k=
+github.com/nemethhh/go-adpwsh v0.2.0/go.mod h1:4hYTQEoCnJ7TVLx6+pqnNs436A3VXK2HXCLcX8sFN9I=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=
 github.com/oklog/run v1.2.0/go.mod h1:mgDbKRSwPhJfesJ4PntqFUbKQRZ50NgmZTSPlFA0YFk=
 github.com/pjbgf/sha1cd v0.3.2 h1:a9wb0bp1oC2TGwStyn0Umc/IGKQnEgF0vVaZ8QF8eo4=

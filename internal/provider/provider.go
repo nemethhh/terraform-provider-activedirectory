@@ -10,12 +10,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
@@ -51,14 +53,41 @@ func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, res
 func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
-			"PowerShell module on a Windows jump box, reached over SSH.",
+			"PowerShell module. `pwsh` runs either on the Windows host Terraform itself runs on " +
+			"(the `local` block) or on a Windows jump box reached over SSH (the `ssh` block). " +
+			"Exactly one of the two is required.",
 		Attributes: map[string]schema.Attribute{
 			"pwsh_path": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "Path to PowerShell 7 on the jump box. Defaults to `pwsh`.",
+				Optional: true,
+				MarkdownDescription: "Path to PowerShell 7 on whichever machine runs it. " +
+					"`local.pwsh_path` overrides it when the `local` block is used. Environment: " +
+					"`AD_PWSH_PATH`. Defaults to `pwsh`.",
 			},
 		},
 		Blocks: map[string]schema.Block{
+			"local": schema.SingleNestedBlock{
+				MarkdownDescription: "Run `pwsh` on the machine Terraform itself runs on — a " +
+					"domain-joined Windows host. The spawned process inherits that machine's " +
+					"logon token, so Active Directory operations authenticate as whoever launched " +
+					"Terraform unless `domain.credential` says otherwise. Mutually exclusive with " +
+					"`ssh`; exactly one of the two is required.",
+				Attributes: map[string]schema.Attribute{
+					"pwsh_path": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Path to PowerShell 7 on this machine. Overrides the " +
+							"top-level `pwsh_path`. Environment: `AD_PWSH_PATH`. Defaults to " +
+							"`pwsh` resolved on `PATH`, and a path that cannot be resolved is a " +
+							"configure-time error rather than a failure on the first resource."},
+					"max_concurrency": schema.Int64Attribute{Optional: true,
+						Validators: []validator.Int64{int64validator.AtLeast(1)},
+						MarkdownDescription: "Simultaneous `pwsh` processes. Environment: " +
+							"`AD_LOCAL_MAX_CONCURRENCY`. Defaults to `4`: every operation pays its " +
+							"own `Import-Module ActiveDirectory`, each process costs real memory, " +
+							"and Terraform's default parallelism is 10."},
+					"timeout": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Per-operation transport timeout. Environment: " +
+							"`AD_LOCAL_TIMEOUT`. Defaults to `60s`."},
+				},
+			},
 			"ssh": schema.SingleNestedBlock{
 				MarkdownDescription: "Connection to the Windows jump box.",
 				Attributes: map[string]schema.Attribute{
