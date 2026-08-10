@@ -84,15 +84,24 @@ func (r *userResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 			// library emits -Clear against the attribute's LDAP name — sn for
 			// surname, which is the row that catches a wrong mapping.
 			"user_principal_name": schema.StringAttribute{Optional: true, Computed: true,
-				Default: stringdefault.StaticString("")},
+				Default: stringdefault.StaticString(""),
+				MarkdownDescription: "The UPN the account signs in with, such as " +
+					"`jdoe@corp.local`. `\"\"` or removal clears the attribute."},
 			"display_name": schema.StringAttribute{Optional: true, Computed: true,
-				Default: stringdefault.StaticString("")},
+				Default: stringdefault.StaticString(""),
+				MarkdownDescription: "The name shown in address lists. Often written by a sync " +
+					"engine as well, in which case put it in `ignore_changes`. `\"\"` or removal " +
+					"clears the attribute."},
 			"given_name": schema.StringAttribute{Optional: true, Computed: true,
-				Default: stringdefault.StaticString("")},
+				Default:             stringdefault.StaticString(""),
+				MarkdownDescription: "The first name. `\"\"` or removal clears the attribute."},
 			"surname": schema.StringAttribute{Optional: true, Computed: true,
-				Default: stringdefault.StaticString("")},
+				Default: stringdefault.StaticString(""),
+				MarkdownDescription: "The last name, stored in Active Directory as `sn`. " +
+					"`\"\"` or removal clears the attribute."},
 			"description": schema.StringAttribute{Optional: true, Computed: true,
-				Default: stringdefault.StaticString("")},
+				Default:             stringdefault.StaticString(""),
+				MarkdownDescription: "Free-text description. `\"\"` or removal clears the attribute."},
 			"enabled": schema.BoolAttribute{
 				Optional: true, Computed: true, Default: booldefault.StaticBool(true),
 				MarkdownDescription: "Whether the account is enabled. Active Directory refuses to " +

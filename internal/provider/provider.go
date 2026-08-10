@@ -104,8 +104,12 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 						MarkdownDescription: "Credentials passed to the AD cmdlets. Omit to use " +
 							"the SSH session's own identity.",
 						Attributes: map[string]schema.Attribute{
-							"username": schema.StringAttribute{Optional: true},
-							"password": schema.StringAttribute{Optional: true, Sensitive: true},
+							"username": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "The account the cmdlets run as, in " +
+									"`DOMAIN\\user` or UPN form. Required alongside `password`."},
+							"password": schema.StringAttribute{Optional: true, Sensitive: true,
+								MarkdownDescription: "That account's password. Required alongside " +
+									"`username`. It is never written to state or to a log line."},
 						},
 					},
 				},

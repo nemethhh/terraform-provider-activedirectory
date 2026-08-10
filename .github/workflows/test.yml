@@ -1,0 +1,31 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.4"
+          terraform_wrapper: false
+      # go-adpwsh is a private module, so the proxy cannot serve it and the
+      # direct fetch needs a credential. GOPRIVATE also keeps it out of the
+      # checksum database, which likewise cannot see a private repository.
+      - name: Configure access to the private library
+        env:
+          GH_TOKEN: ${{ secrets.GO_ADPWSH_TOKEN }}
+        run: |
+          echo "GOPRIVATE=github.com/nemethhh/*" >> "$GITHUB_ENV"
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - run: go test ./... -timeout 10m
