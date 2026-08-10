@@ -193,6 +193,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		newOUResource,
+		newGroupResource,
 	}
 }
 
