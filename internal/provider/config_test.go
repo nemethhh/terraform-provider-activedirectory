@@ -278,3 +278,79 @@ func TestResolveLocalRejectsABadDuration(t *testing.T) {
 		t.Fatal("an unparseable timeout must be an attribute error")
 	}
 }
+
+// There is deliberately no implicit default. Defaulting to local when the block
+// is absent turns a typo'd `ssh` block into silent local execution against the
+// wrong identity; defaulting to ssh turns a typo'd `local` block into a dial to
+// nowhere. Both are worse than a refusal.
+func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
+	tests := []struct {
+		name      string
+		m         providerModel
+		want      transportKind
+		wantPaths []string // attribute paths the diagnostics must carry, in order
+	}{
+		{
+			name: "local alone",
+			m:    providerModel{Local: &localModel{}},
+			want: transportLocal,
+		},
+		{
+			name: "ssh alone",
+			m:    providerModel{SSH: &sshModel{}},
+			want: transportSSH,
+		},
+		{
+			name:      "both",
+			m:         providerModel{Local: &localModel{}, SSH: &sshModel{}},
+			want:      transportUnset,
+			wantPaths: []string{"local", "ssh"},
+		},
+		{
+			name:      "neither",
+			m:         providerModel{},
+			want:      transportUnset,
+			wantPaths: nil, // no block is written, so there is no line to underline
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, diags := chooseTransport(tt.m)
+			if got != tt.want {
+				t.Errorf("chooseTransport = %v, want %v", got, tt.want)
+			}
+			if tt.want != transportUnset {
+				if diags.HasError() {
+					t.Fatalf("unexpected diagnostics: %v", diags)
+				}
+				return
+			}
+			if !diags.HasError() {
+				t.Fatal("expected an error")
+			}
+			for _, d := range diags.Errors() {
+				// Whichever form it takes, the message must name both blocks so
+				// the operator can see which one to remove.
+				if !strings.Contains(d.Detail(), "local") || !strings.Contains(d.Detail(), "ssh") {
+					t.Errorf("detail = %q, must name both blocks", d.Detail())
+				}
+			}
+			if len(tt.wantPaths) == 0 {
+				return
+			}
+			if len(diags.Errors()) != len(tt.wantPaths) {
+				t.Fatalf("got %d diagnostics, want %d (one per offending block)",
+					len(diags.Errors()), len(tt.wantPaths))
+			}
+			for i, want := range tt.wantPaths {
+				withPath, ok := diags.Errors()[i].(diag.DiagnosticWithPath)
+				if !ok {
+					t.Fatalf("diagnostic %d carries no attribute path", i)
+				}
+				if got := withPath.Path().String(); got != want {
+					t.Errorf("diagnostic %d path = %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
