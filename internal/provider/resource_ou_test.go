@@ -52,3 +52,14 @@ resource "activedirectory_ou" "staff" {
 		}},
 	})
 }
+
+// The same steps the fake runs, against a real domain. What only real AD proves
+// here: that the cmdlets accept what the fake accepted.
+func TestAccOULifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    ouLifecycleSteps(accSuiteEnv()),
+	})
+}
