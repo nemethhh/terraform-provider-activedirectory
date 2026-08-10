@@ -6,13 +6,18 @@ package provider
 
 import (
 	"context"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
+	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
 type adProvider struct {
@@ -41,10 +46,145 @@ func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, res
 }
 
 func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
-	resp.Schema = schema.Schema{}
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
+			"PowerShell module on a Windows jump box, reached over SSH.",
+		Attributes: map[string]schema.Attribute{
+			"pwsh_path": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Path to PowerShell 7 on the jump box. Defaults to `pwsh`.",
+			},
+		},
+		Blocks: map[string]schema.Block{
+			"ssh": schema.SingleNestedBlock{
+				MarkdownDescription: "Connection to the Windows jump box.",
+				Attributes: map[string]schema.Attribute{
+					"host": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Jump box host name. Environment: `AD_SSH_HOST`."},
+					"port": schema.Int64Attribute{Optional: true,
+						MarkdownDescription: "SSH port. Environment: `AD_SSH_PORT`. Defaults to `22`."},
+					"user": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "SSH user. Environment: `AD_SSH_USER`."},
+					"private_key": schema.StringAttribute{Optional: true, Sensitive: true,
+						MarkdownDescription: "PEM-encoded private key. Environment: `AD_SSH_PRIVATE_KEY`."},
+					"private_key_path": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Path to a private key file. Environment: `AD_SSH_PRIVATE_KEY_PATH`."},
+					"password": schema.StringAttribute{Optional: true, Sensitive: true,
+						MarkdownDescription: "SSH password. Environment: `AD_SSH_PASSWORD`."},
+					"use_agent": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Authenticate through the agent at `SSH_AUTH_SOCK`."},
+					"known_hosts_file": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "known_hosts file used to verify the host key."},
+					"host_key": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "A pinned host key in `authorized_keys` form. " +
+							"Mutually exclusive with `known_hosts_file`."},
+					"insecure_ignore_host_key": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Skip host key verification. An explicit opt-out; " +
+							"it takes precedence over the other two settings."},
+					"max_concurrency": schema.Int64Attribute{Optional: true,
+						MarkdownDescription: "Simultaneous SSH channels. Defaults to `4`, because " +
+							"Windows sshd defaults to `MaxSessions 10`."},
+					"timeout": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
+				},
+			},
+			"domain": schema.SingleNestedBlock{
+				MarkdownDescription: "Domain targeting.",
+				Attributes: map[string]schema.Attribute{
+					"server": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "The domain controller to pin. Omit to discover one " +
+							"at configure time. Every cmdlet this provider runs targets it, so a " +
+							"write and its read-back cannot land on different replicas."},
+				},
+				Blocks: map[string]schema.Block{
+					"credential": schema.SingleNestedBlock{
+						MarkdownDescription: "Credentials passed to the AD cmdlets. Omit to use " +
+							"the SSH session's own identity.",
+						Attributes: map[string]schema.Attribute{
+							"username": schema.StringAttribute{Optional: true},
+							"password": schema.StringAttribute{Optional: true, Sensitive: true},
+						},
+					},
+				},
+			},
+			"replication": schema.SingleNestedBlock{
+				MarkdownDescription: "Wait for a write to reach other domain controllers.",
+				Attributes: map[string]schema.Attribute{
+					"wait": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Wait after each write. Defaults to `false`."},
+					"targets": schema.ListAttribute{Optional: true, ElementType: types.StringType,
+						MarkdownDescription: `Domain controllers to wait for, or ["all"].`},
+					"force_sync": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Issue Sync-ADObject before polling. Defaults to `true`; " +
+							"passive replication can legitimately take 15 minutes, which presents as a hang."},
+					"timeout": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "How long to wait. Defaults to `60s`."},
+					"poll_interval": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Interval between checks. Defaults to `2s`."},
+				},
+			},
+		},
+	}
 }
 
-func (p *adProvider) Configure(_ context.Context, _ provider.ConfigureRequest, _ *provider.ConfigureResponse) {
+func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var cfg providerModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Mask before anything is logged, not after. The library masks its own
+	// payloads; this covers everything the provider itself writes.
+	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password", "private_key", "credential", "AccountPassword")
+
+	server, credential, diags := resolveDomain(cfg)
+	resp.Diagnostics.Append(diags...)
+	replication, diags := resolveReplication(ctx, cfg)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	transport := p.transport
+	if transport == nil {
+		sshCfg, diags := resolveSSH(cfg, os.Getenv)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		tr, err := adssh.New(sshCfg)
+		if err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("ssh"),
+				"Cannot reach the jump box",
+				"The provider could not open an SSH connection. This is a transport problem, "+
+					"not an Active Directory one.\n\n"+err.Error())
+			return
+		}
+		transport = tr
+	}
+
+	client, err := adpwsh.New(ctx, adpwsh.Config{
+		Transport:   transport,
+		Server:      server,
+		Credential:  credential,
+		Replication: replication,
+		Log:         tflogLogger{},
+	})
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot configure the Active Directory client",
+			"The provider connected to the jump box but could not query the domain. "+
+				"Check that RSAT-AD-PowerShell is installed and that TCP 9389 is open to the "+
+				"domain controller.\n\n"+err.Error())
+		return
+	}
+	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
+		"server":                 client.Server(),
+		"default_naming_context": client.DefaultNamingContext(),
+	})
+
+	resp.ResourceData = client
+	resp.DataSourceData = client
 }
 
 func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
