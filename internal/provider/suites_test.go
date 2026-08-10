@@ -160,3 +160,85 @@ resource "activedirectory_ou" "existing" {
 		),
 	}}
 }
+
+// ---------------------------------------------------------------------------
+// Groups
+// ---------------------------------------------------------------------------
+
+// groupLifecycleSteps covers create, the no-diff replan, rename plus
+// sAMAccountName change plus a scope conversion, and import. managed_by points
+// at a group the suite creates rather than an invented DN, because Active
+// Directory requires the referenced object to exist and the fake does not.
+func groupLifecycleSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "grp-ou"
+	devs := accNamePrefix + "grp"
+	renamed := accNamePrefix + "grp-renamed"
+	mgr := accNamePrefix + "grp-mgr"
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "mgr" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+`, ou, e.Container, mgr, mgr)
+
+	create := fmt.Sprintf(`
+resource "activedirectory_group" "devs" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}`, devs, devs)
+
+	// global to universal is a conversion AD permits. Which conversions it
+	// refuses is exactly what running this suite against a real domain reveals,
+	// and the fake has no opinion on any of them.
+	updated := fmt.Sprintf(`
+resource "activedirectory_group" "devs" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+  scope            = "universal"
+  description      = "Everyone who writes code"
+  managed_by       = activedirectory_group.mgr.dn
+}`, renamed, renamed)
+
+	return []resource.TestStep{
+		{
+			Config: base + create,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_group.devs", "id"),
+				resource.TestCheckResourceAttrSet("activedirectory_group.devs", "sid"),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "dn",
+					"CN="+devs+",OU="+ou+","+e.Container),
+				// The defaults mirror the cmdlet's own.
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "scope", "global"),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "category", "security"),
+			),
+		},
+		{
+			Config:   base + create,
+			PlanOnly: true,
+		},
+		{
+			Config: base + updated,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "scope", "universal"),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "sam_account_name", renamed),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "dn",
+					"CN="+renamed+",OU="+ou+","+e.Container),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "managed_by",
+					"CN="+mgr+",OU="+ou+","+e.Container),
+			),
+		},
+		{
+			ResourceName:      "activedirectory_group.devs",
+			ImportState:       true,
+			ImportStateVerify: true,
+		},
+	}
+}
