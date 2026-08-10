@@ -103,6 +103,16 @@ func accProviderConfig(extraBlocks ...string) string {
 	return b.String()
 }
 
+// accProviderConfigWithConcurrency is accProviderConfig with an explicit
+// max_concurrency. A configuration has exactly one provider block, so a suite
+// that needs a different bound needs the whole block rebuilt rather than a
+// second one appended.
+func accProviderConfigWithConcurrency(n int) string {
+	return strings.Replace(accProviderConfig(),
+		"    max_concurrency = 4\n",
+		fmt.Sprintf("    max_concurrency = %d\n", n), 1)
+}
+
 // accSuiteEnv is the environment for a suite run against a real domain. It reads
 // the environment without checking it: accPreCheck is what fails a
 // half-configured run, and it runs after resource.Test has decided whether the
