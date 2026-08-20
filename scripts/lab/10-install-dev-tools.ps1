@@ -16,7 +16,12 @@
     version-sensitive test still runs, but it is a genuine difference between
     this host and CI and is worth remembering when triaging a failure.
 
-    Idempotent: an already-installed matching version is left alone.
+    Idempotent, and the check is a real one. An interrupted extraction leaves a
+    go.exe that reports the right version on top of a truncated standard library,
+    which then fails every build with "package unsafe is not in std". Verifying
+    the binary alone would call that installed and skip the repair, so the probe
+    compiles a throwaway program instead, and extraction lands in a temporary
+    directory that is renamed into place only once it has completed.
 
     Git is deliberately not installed. The source arrives by scp, which keeps
     every artefact on this host traceable to a published checksum.
@@ -67,16 +72,43 @@ function Get-Verified {
 }
 
 # --- Go ---------------------------------------------------------------------
+# A version string proves the binary exists; it does not prove the standard
+# library beside it is intact. Compiling something does.
+function Test-GoHealthy {
+    param([string]$GoExe, [string]$Version)
+    if (-not (Test-Path $GoExe)) { return $false }
+    if (((& $GoExe version) 2>&1) -notmatch [regex]::Escape("go$Version")) { return $false }
+    $probe = Join-Path $env:TEMP 'gohealth'
+    Remove-Item $probe -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $probe | Out-Null
+    Set-Content "$probe\go.mod"  "module gohealth`ngo 1.21`n"
+    Set-Content "$probe\main.go" 'package main; import ("fmt";"os";"time"); func main(){ fmt.Fprint(os.Stderr, time.Now()) }'
+    Push-Location $probe
+    # Routed through cmd deliberately. Under $ErrorActionPreference = 'Stop',
+    # `native 2>&1 | ...` promotes every stderr line to a terminating error, so a
+    # broken toolchain would abort this script instead of reporting unhealthy —
+    # which is the one thing this function exists to avoid.
+    try   { cmd /c "`"$GoExe`" build -o `"$probe\out.exe`" . >NUL 2>&1"; return ($LASTEXITCODE -eq 0) }
+    finally { Pop-Location; Remove-Item $probe -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 $goExe = 'C:\go\bin\go.exe'
-$haveGo = (Test-Path $goExe) -and ((& $goExe version) -match [regex]::Escape("go$GoVersion"))
-if ($haveGo) {
+if (Test-GoHealthy $goExe $GoVersion) {
     Write-Output "GO_ALREADY $(& $goExe version)"
 } else {
+    if (Test-Path $goExe) { Write-Output '  existing Go failed its health check; reinstalling' }
     $zip = "C:\Windows\Temp\go$GoVersion.windows-amd64.zip"
     Get-Verified "https://go.dev/dl/go$GoVersion.windows-amd64.zip" $GoSha256 $zip
-    if (Test-Path 'C:\go') { Remove-Item 'C:\go' -Recurse -Force }
-    Expand-Archive -Path $zip -DestinationPath 'C:\' -Force
+    # Extract beside the target and rename, so a killed run can never leave a
+    # half-populated C:\go that the next run mistakes for a good install.
+    $staging = 'C:\go.staging'
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Expand-Archive -Path $zip -DestinationPath $staging -Force
+    Remove-Item 'C:\go' -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item "$staging\go" 'C:\go'
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $zip -Force
+    if (-not (Test-GoHealthy $goExe $GoVersion)) { throw 'Go still fails its health check after reinstall' }
     Write-Output "GO_INSTALLED $(& $goExe version)"
 }
 

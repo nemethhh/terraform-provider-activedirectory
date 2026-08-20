@@ -180,13 +180,25 @@ resource "activedirectory_user" "jdoe" {
 ## Development
 
 ```bash
-make build   # compile the provider
-make test    # unit and lifecycle tests; needs the terraform binary on PATH
-make testacc # adds the suites that need a real domain
-make sweep   # delete tfacc- leftovers after a crashed acceptance run
-make docs    # regenerate docs/ with tfplugindocs
-make fmt     # gofmt and terraform fmt
+make check     # build, vet, gofmt and test -- exactly what CI runs
+make test      # unit and lifecycle tests; needs the terraform binary on PATH
+make build     # compile the provider
+make lint      # golangci-lint, pinned; the first run builds it and is slow
+make fmt       # gofmt and terraform fmt
+make fmt-check # the same, as a check rather than a rewrite
+make docs      # regenerate docs/ with tfplugindocs, pinned
+make testacc   # adds the suites that need a real domain
+make sweep     # delete tfacc- leftovers after a crashed acceptance run
 ```
+
+`make check` is what CI runs, in the same order, so a red build is reproducible
+with one command. `golangci-lint` and `tfplugindocs` are pinned by version in the
+GNUmakefile and fetched on demand: neither is imported by the provider, so
+neither belongs in the dependency graph a consumer resolves.
+
+The formatting targets cover only the Go files this repository owns. A bare
+`gofmt .` would also walk `docs/reference/`, gitignored clones of other providers
+kept for comparison -- some 24,000 vendored files that are not ours to reformat.
 
 The lifecycle tests drive full create/read/update/delete/import cycles against
 an in-memory directory from `go-adpwsh`'s `transport/fake`, so they need no

@@ -20,15 +20,20 @@ stdin, nothing is ever formatted into script text.
 ## Commands
 
 ```bash
-make build     # compile the provider binary
+make check     # build, vet, gofmt, test — exactly what CI runs, in CI's order
 make test      # everything that needs no domain (go test ./... -timeout 10m)
+make build     # compile the provider binary
+make lint      # golangci-lint, pinned; first run builds it and is slow
+make fmt       # gofmt (this repo's files only) + terraform fmt ./examples/
+make fmt-check # the same as a check rather than a rewrite
+make docs      # regenerate docs/ with tfplugindocs, pinned
 make testacc   # adds the suites that need a real domain (TF_ACC=1)
 make sweep     # delete tfacc- leftovers after a crashed acceptance run
-make docs      # regenerate docs/ with tfplugindocs (pinned @v0.25.0)
-make fmt       # gofmt -w . && terraform fmt -recursive ./examples/
-make lint      # golangci-lint run — no config file in repo, and the binary is not
-               # installed by default; CI does not run it either
 ```
+
+`golangci-lint` and `tfplugindocs` are pinned by version in the GNUmakefile and
+fetched on demand rather than added to `go.mod`: neither is imported by the
+provider. CI runs `make check`, so reproducing a red build takes one command.
 
 Single test, subtest, and acceptance test:
 
@@ -42,11 +47,11 @@ TF_ACC=1 AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
 `make test` needs the `terraform` binary on PATH — the lifecycle tests drive a real
 Terraform CLI against an in-memory directory. It needs no Windows, no `pwsh`, no domain.
 
-### Two format gotchas
+### Two gotchas
 
-- `gofmt -l .` and `make fmt` walk `docs/reference/`, gitignored vendored clones of other
-  providers. Check formatting with `gofmt -l $(git ls-files '*.go')` instead; `make fmt`
-  will rewrite those clones on disk (harmless, nothing tracked).
+- **Never run a bare `gofmt -l .` or `gofmt -w .` here.** It walks `docs/reference/`,
+  gitignored clones of other providers — some 24,000 vendored files that are not ours to
+  reformat. The Makefile targets prune that directory; use them rather than gofmt directly.
 - `docs/*.md` is **generated**. To change documentation, edit the schema
   `MarkdownDescription` strings or `examples/provider/provider.tf`, then `make docs`.
   `examples/provider/provider.tf` is rendered verbatim into `docs/index.md`'s Example Usage.

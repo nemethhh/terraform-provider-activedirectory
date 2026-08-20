@@ -15,8 +15,9 @@ jobs:
         with:
           terraform_version: "1.11.4"
           terraform_wrapper: false
-      - run: go build ./...
-      - run: go vet ./...
-      - name: gofmt
-        run: test -z "$(gofmt -l .)"
-      - run: go test ./... -timeout 10m
+      # `make check` is build, vet, gofmt and test, in this order. Running the
+      # target rather than the four commands keeps CI and a developer's machine
+      # from drifting apart: a bare `gofmt -l .` passes here only because the
+      # gitignored docs/reference clones are absent from a fresh checkout, and
+      # fails on any working copy that has them.
+      - run: make check
