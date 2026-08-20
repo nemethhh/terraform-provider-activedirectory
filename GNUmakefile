@@ -60,3 +60,8 @@ check: build vet fmt-check test
 
 clean:
 	rm -f terraform-provider-activedirectory
+
+# Lab operations live in their own file: none of it is needed to build or test
+# the provider, and it only means anything with the two Windows VMs described in
+# LAB.md. `make lab-help` lists the targets.
+-include scripts/lab/lab.mk

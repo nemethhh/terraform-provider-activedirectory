@@ -189,6 +189,7 @@ make fmt-check # the same, as a check rather than a rewrite
 make docs      # regenerate docs/ with tfplugindocs, pinned
 make testacc   # adds the suites that need a real domain
 make sweep     # delete tfacc- leftovers after a crashed acceptance run
+make lab-help  # operations against the Windows lab (see LAB.md)
 ```
 
 `make check` is what CI runs, in the same order, so a red build is reproducible

@@ -18,6 +18,22 @@ It is the same mechanism the provider itself uses.
 ./psrun.sh <ssh-alias> <script.ps1> [timeout-seconds] [-- <powershell-args>...]
 ```
 
+Most of it is wrapped in make targets, run from the repository root:
+
+```bash
+make lab-help          # the full list
+make lab-status        # reachability and role health of all three hosts
+make lab-verify-repl   # each DC's own view of replication
+make lab-ship          # copy `git archive HEAD` to the member server
+make lab-acc           # run the whole acceptance suite there
+make lab-sweep         # delete tfacc- leftovers
+```
+
+No credential is stored in the makefile. It reads them from
+`~/ad-lab-credentials.txt` at call time; the targets that need the Administrator
+password take it from `LAB_ADMIN_PW` in the environment, because it is not in
+that file.
+
 Two conventions worth knowing before editing these:
 
 - **Anything slow or reboot-inducing runs detached**, as a SYSTEM scheduled task
@@ -42,8 +58,16 @@ Two conventions worth knowing before editing these:
 | 8 | `08-provision-acceptance.ps1` | DC | Containers, `svc_tfacc`, delegation. |
 | 9 | `09-open-ssh-firewall.ps1` | both | **Run after 6 and after 7.** Promotion and domain join both switch the host to the Domain firewall profile, where the OpenSSH rule is not enabled. |
 | 10 | `10-install-dev-tools.ps1` | member | Go and Terraform, pinned and checksum-verified. Needed only to *run* the acceptance suite, which must execute on the domain-joined host because the suite's provider block declares `local {}`. |
+| 11 | `11-point-dns-at-dc.ps1` | second DC | Before promoting. A host still pointing at a router cannot resolve the domain's SRV records, and says so as if the credential were wrong. |
+| 12 | `12-promote-second-dc.ps1` | second DC | `Install-ADDSDomainController`, not `Install-ADDSForest` -- it joins an existing domain rather than creating one. Detached; poll `C:\Windows\Temp\labsetup.log`. Run 09 afterwards. |
 
 Steps 1–5 are safe to run against both hosts in parallel; 6–9 are ordered.
+
+A second domain controller runs 1, 2, 5, then 11, 12 and 9. It needs no static-IP
+step if it already holds the address it should keep, and no domain join: promotion
+is the join. Its preflight refuses to start on a SID collision, an unresolvable
+domain or a clock more than five minutes out, because each of those fails an hour
+later with a message pointing somewhere else.
 
 ## When SSH goes dark
 

@@ -14,6 +14,7 @@ in `~/ad-lab-credentials.txt` (mode 0600).
 | Alias | Address | Role |
 |---|---|---|
 | `s-server` (`ad-server`) | 192.168.50.216 | `corp.local` domain controller |
+| `s-server2` (`ad-server2`) | 192.168.50.32 | second domain controller, global catalog |
 | `s-client` (`ad-client`) | 192.168.50.31 | domain-joined member server |
 
 Both run **Windows Server 2025 Standard** with PowerShell 7 and static addresses.
@@ -84,8 +85,10 @@ The explicit deny matters. Active Directory grants Authenticated Users read on m
 objects by default, so without it `TestAccDeniedImportOutsideTheDelegatedSubtree`
 would import the object successfully and assert nothing.
 
-`AD_ACC_SECOND_DC` has no host in this lab, so the replication suite cannot run
-until a second DC exists.
+`AD_ACC_SECOND_DC` is `s-server2.corp.local`. Both DCs sit in
+`Default-First-Site-Name`, so replication runs on the intra-site notification
+delay -- long enough that a write is measurably absent from the second DC for a
+moment, which is what the replication suite depends on.
 
 ## Two hard-won lessons
 
@@ -153,14 +156,15 @@ token. The double hop below is the same effect seen from the other direction.
 export TF_ACC=1 \
        AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
        AD_ACC_DENIED_CONTAINER='OU=tfacc-denied,DC=corp,DC=local' \
+       AD_ACC_SECOND_DC='s-server2.corp.local' \
        AD_ACC_SERVER='s-server.corp.local' \
        AD_ACC_USERNAME='CORP\svc_tfacc' AD_ACC_PASSWORD='...'
-go test ./internal/provider/ -run TestAcc -skip TestAccReplication -v -timeout 120m
+go test ./internal/provider/ -run TestAcc -v -timeout 120m
 ```
 
-`-skip TestAccReplication` is not optional while `AD_ACC_SECOND_DC` has no host:
-`accPreCheck` calls `t.Fatal` on a missing variable rather than skipping, so
-`make testacc` would fail on those three suites by design.
+Every variable is now satisfied, so nothing needs skipping. `accPreCheck` calls
+`t.Fatal` on a missing one rather than skipping, so an incomplete environment
+fails loudly instead of reporting green.
 
 ### First run against a real domain, 2026-08-20
 
@@ -177,4 +181,12 @@ What only a real domain proved: the eleven hostile values survive the cmdlet
 layer; `global` to `universal` is a conversion AD permits; `generate-config-out`
 re-plans clean for all three resources; and the sweeper's PowerShell works.
 
-The three replication suites still have no second DC and are excluded.
+### The double hop bites the diagnostics too
+
+A domain controller has no local accounts, so an SSH session on `s-server` runs
+as a domain identity -- but still on a network logon token with nothing
+delegatable. Queries against that DC itself succeed, because they are local;
+anything that hops to the other DC fails, and `Sync-ADObject` reports it as
+*"the destination server ... does not have Active Directory Web Services
+running"*. ADWS was running the whole time. Any cross-DC check run over SSH needs
+an explicit `-Credential`, exactly as the provider does under the `ssh` transport.
