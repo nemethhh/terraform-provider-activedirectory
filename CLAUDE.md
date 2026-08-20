@@ -164,6 +164,14 @@ No lab exists. The four acceptance-only suites, the sweeper's PowerShell, real `
 real `Import-Module ActiveDirectory` and real ADWS have never run. Their verification is
 that they compile and skip cleanly. Do not describe them as passing.
 
+## The lab
+
+`LAB.md` documents the two Windows Server 2025 hosts used to exercise the provider
+against a real domain, and how to reach them (`ssh s-server`, `ssh s-client`). Neither
+is usable by the acceptance suite yet — as of writing both carry the installer's default
+computer name, are in WORKGROUP, and have neither AD DS, RSAT-AD-PowerShell nor `pwsh`
+installed. `LAB.md` lists what remains.
+
 ## Scaffolding that is never committed
 
 `docs/superpowers/` (specs, plans, brainstorms) and `docs/reference/` (vendored clones of
