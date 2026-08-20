@@ -32,6 +32,10 @@ func init() {
 		Name: "activedirectory_tfacc",
 		F:    sweepTestObjects,
 	})
+	resource.AddTestSweepers("activedirectory_e2e", &resource.Sweeper{
+		Name: "activedirectory_e2e",
+		F:    sweepE2EObjects,
+	})
 }
 
 // sweepScript is the one piece of PowerShell this repository owns. The library's
@@ -82,19 +86,34 @@ type sweepObject struct {
 	Class string `json:"objectClass"`
 }
 
-// sweepTestObjects deletes every object beneath AD_ACC_CONTAINER whose name
-// begins with tfacc-, deepest first, lifting ProtectedFromAccidentalDeletion as
-// it goes.
-//
-// It never deletes anything else. AD_ACC_CONTAINER itself is treated as
-// pre-existing — the suite neither creates nor destroys it — and the prefix
-// match is what keeps a sweep from touching an object a human placed in the
-// subtree by hand.
+// sweepTestObjects sweeps beneath AD_ACC_CONTAINER (the base acceptance subtree).
 func sweepTestObjects(string) error {
 	container := os.Getenv(envContainer)
 	if container == "" {
 		return fmt.Errorf("%s must be set to sweep", envContainer)
 	}
+	return sweepBeneath(container)
+}
+
+// sweepE2EObjects sweeps beneath AD_E2E_CONTAINER. Unset is a no-op, not an
+// error, so a plain `-sweep=domain` in an environment that only provisioned the
+// base fixtures does not fail — the same opt-in posture as the e2e suites.
+func sweepE2EObjects(string) error {
+	container := os.Getenv(envE2EContainer)
+	if container == "" {
+		log.Printf("[INFO] sweep: %s is not set; skipping the e2e subtree", envE2EContainer)
+		return nil
+	}
+	return sweepBeneath(container)
+}
+
+// sweepBeneath deletes every object beneath container whose name begins with
+// tfacc-, deepest first, lifting ProtectedFromAccidentalDeletion as it goes.
+//
+// It never deletes anything else. container itself is treated as pre-existing —
+// the suite neither creates nor destroys it — and the prefix match is what keeps
+// a sweep from touching an object a human placed in the subtree by hand.
+func sweepBeneath(container string) error {
 	ctx := context.Background()
 
 	// A sweep can be large and follows a crash, so it gets a generous ceiling
@@ -311,5 +330,14 @@ func TestSweepEnvelopeData(t *testing.T) {
 		`{"ok":false,"error":{"type":"ADException","message":"nope"}}` + "\n" + sweepSentinelEnd
 	if _, err := sweepEnvelopeData(failed); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("a failed search must surface the message: %v", err)
+	}
+}
+
+// The e2e sweeper must be a no-op — not an error — when its container is unset,
+// so a base-only sweep is unaffected.
+func TestSweepE2ENoopWhenUnset(t *testing.T) {
+	t.Setenv(envE2EContainer, "")
+	if err := sweepE2EObjects("domain"); err != nil {
+		t.Fatalf("sweepE2EObjects with %s unset must be a no-op, got: %v", envE2EContainer, err)
 	}
 }
