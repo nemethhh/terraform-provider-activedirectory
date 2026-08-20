@@ -90,6 +90,40 @@ would import the object successfully and assert nothing.
 delay -- long enough that a write is measurably absent from the second DC for a
 moment, which is what the replication suite depends on.
 
+## E2E fixtures
+
+Provisioned once by `make lab-e2e-fixtures` (`scripts/lab/13-provision-e2e.ps1`),
+verified with `dsacls`:
+
+| | |
+|---|---|
+| `OU=e2e,DC=corp,DC=local` | the e2e root; pre-existing, never created/destroyed by tests |
+| `svc_e2e_alpha` | Full Control on `OU=alpha,OU=e2e,…` (Scenarios A, B, C) |
+| `svc_e2e_beta`  | Full Control on `OU=beta,OU=e2e,…` (Scenario C) |
+| `svc_e2e_limited` | Full Control on `OU=limited,OU=e2e,…`, DENIED create-child of group/user (Scenario D) |
+
+The e2e layer is a **separately provisioned** environment from the acceptance
+suite above, and opt-in: the `TestAccE2E*` suites skip unless `AD_E2E_CONTAINER`
+is set, and once it is, every other `AD_E2E_*` variable is fatal-if-missing. The
+three principals live directly beneath `OU=e2e` (not inside a delegated sub-OU),
+so none can delete or re-target its own auth account and the `tfacc-` sweeper
+never touches them.
+
+All three are non-admin and share one password, added to `~/ad-lab-credentials.txt`:
+
+    e2e.password = ...
+    admin.password = ...      # only needed for `make lab-e2e-sweep`
+
+## Running the e2e suite
+
+    make lab-e2e-fixtures     # once, as admin: create the principals and OUs
+    make lab-e2e              # ship this tree and run every TestAccE2E* on s-client
+
+`make lab-e2e` needs no admin credentials: each scenario authenticates as its own
+delegated principal via the provider's `credential {}` block, and CheckDestroy
+verifies as that same principal. `make lab-e2e-sweep` removes `tfacc-` leftovers
+beneath `OU=e2e` after a crash and is the only e2e target that reads `admin.password`.
+
 ## Two hard-won lessons
 
 ### Clone the image, sysprep the clone

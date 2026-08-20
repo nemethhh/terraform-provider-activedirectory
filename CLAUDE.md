@@ -155,6 +155,26 @@ Four suites have no fake counterpart and are acceptance-only: delegation denial
 (`acc_denied_test.go`), Terraform-parallelism concurrency, `generate-config-out` brownfield
 adoption, and the replication wait.
 
+### The e2e layer
+
+`TestAccE2E*` (`acc_e2e_*_test.go`) is an end-to-end layer that drives the provider —
+in-process, through the real Terraform CLI — against the real domain as **multiple
+delegated non-admin principals**, each configured via a different `credential {}` block
+(`e2eProviderConfig`). Scenario A re-runs the shared lifecycle builders as a full-control
+user; B performs out-of-band drift (delete/modify/rename/move) **through `go-adpwsh`,
+never ad-hoc PowerShell**, then asserts plan detects and apply reconciles it; C runs two
+disjoint full-control users concurrently (`t.Parallel()`) and proves the delegation
+boundary denies a cross-subtree write; D covers wrong-password and partial-permission
+diagnostics.
+
+The layer carries the suite's **one deliberate skip**: the `TestAccE2E*` suites `t.Skip`
+when `AD_E2E_CONTAINER` is unset, because the layer is a separately provisioned environment
+(three extra principals and their OUs), and are fatal-if-missing on every other `AD_E2E_*`
+once it is set — the same fail-loud posture as `accPreCheck`, gated behind the opt-in. The
+fixtures live in `scripts/lab/13-provision-e2e.ps1` and the launcher in
+`scripts/lab/run-e2e.sh` / `make lab-e2e*`; a second, opt-in sweeper
+(`activedirectory_e2e`) clears the `tfacc-` leftovers beneath `OU=e2e`.
+
 ### Object naming and the sweeper
 
 Every object any suite creates is prefixed `tfacc-` (`accNamePrefix`) and lives beneath
