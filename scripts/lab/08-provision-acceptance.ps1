@@ -14,11 +14,22 @@
     lifts ProtectedFromAccidentalDeletion, which edits the object's DACL - a right
     standard OU delegation does not grant.
 
-    Note the explicit DENY on the denied subtree. Active Directory grants
-    Authenticated Users read on most objects by default, so without it
-    TestAccDeniedImportOutsideTheDelegatedSubtree would import the object
-    successfully and the suite would be asserting nothing. The deny is what makes
-    that test exercise the real boundary.
+    The denied subtree carries no grant to the service account and, deliberately,
+    no explicit DENY either. An absence of delegation is what a real boundary
+    looks like, and it is the only form that produces an actionable error: with
+    no grant, New-ADOrganizationalUnit fails with UnauthorizedAccessException
+    ("Access is denied"), which the provider classifies as KindDenied.
+
+    An explicit DENY on read was tried first and is wrong. It hides the container
+    from the account entirely, so ADWS answers a create with a generic
+    "The server is unwilling to process the request" / FaultException carrying
+    ErrorCode 0 and no access-denied wording anywhere - indistinguishable from a
+    constraint violation, and correctly reported by the provider as unrecognised.
+    That made TestAccDeniedOutsideTheDelegatedSubtree fail against a message it
+    could never have matched.
+
+    The import test still holds without the deny: the object it tries to adopt
+    was never created, so the read returns not-found, which that test accepts.
 
     Neither container is created or destroyed by the suite; both are treated as
     pre-existing.
@@ -75,9 +86,14 @@ if ($isAdmin) { throw "$SvcName is a Domain Admin; the denial suite would prove 
 dsacls $tfacc  /I:T /G "$Netbios\${SvcName}:GA" | Out-Null
 Write-Output "GRANTED full control on $tfacc"
 
-dsacls $denied /I:T /D "$Netbios\${SvcName}:GR" | Out-Null
-dsacls $denied /I:T /D "$Netbios\${SvcName}:GW" | Out-Null
-Write-Output "DENIED read+write on $denied"
+# No grant, and deliberately no explicit deny - see the note above. Any ACE left
+# by an earlier run is stripped, because a DENY changes how a refused create is
+# reported and makes the denial suite unmatchable.
+if (dsacls $denied | Select-String -SimpleMatch "$Netbios\$SvcName") {
+    dsacls $denied /R "$Netbios\$SvcName" | Out-Null
+    Write-Output "REMOVED stale ACEs for $SvcName on $denied"
+}
+Write-Output "NO GRANT on $denied (absence of delegation is the boundary)"
 
 Write-Output ('adws=' + (Get-Service ADWS).Status)
 Write-Output ('AD_ACC_CONTAINER=' + $tfacc)

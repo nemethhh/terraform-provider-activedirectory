@@ -29,7 +29,11 @@ resource "activedirectory_ou" "fan" {
 
 	checks := make([]resource.TestCheckFunc, 0, accConcurrentCount*2)
 	for i := 0; i < accConcurrentCount; i++ {
-		address := fmt.Sprintf("activedirectory_ou.fan[%d]", i)
+		// A counted resource is addressed with a dotted index in the state the
+		// test framework shims, not the bracketed form configuration uses:
+		// `fan.0`, never `fan[0]`. The bracketed form finds nothing and every
+		// check fails with "Not found" while the apply itself succeeded.
+		address := fmt.Sprintf("activedirectory_ou.fan.%d", i)
 		checks = append(checks,
 			resource.TestCheckResourceAttrSet(address, "id"),
 			resource.TestCheckResourceAttr(address, "dn",
