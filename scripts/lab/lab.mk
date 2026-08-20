@@ -25,6 +25,7 @@ LAB_DOMAIN  ?= corp.local
 
 LAB_CONTAINER        ?= OU=tfacc,DC=corp,DC=local
 LAB_DENIED_CONTAINER ?= OU=tfacc-denied,DC=corp,DC=local
+LAB_E2E_CONTAINER    ?= OU=e2e,DC=corp,DC=local
 LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
 
 # One awk per lookup, evaluated only when a recipe runs, so no secret is read
@@ -33,7 +34,8 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
 
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-verify-repl \
-        lab-ship lab-acc lab-acc-repl lab-acc-only lab-sweep
+        lab-ship lab-acc lab-acc-repl lab-acc-only lab-sweep \
+        lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
 	@echo 'Lab targets. HOST defaults where sensible; override on the command line.'
@@ -56,6 +58,10 @@ lab-help:
 	@echo '    lab-acc-repl               run only the replication suites'
 	@echo '    lab-acc-only PATTERN=<re>  run one suite, or any -run pattern'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
+	@echo '    lab-e2e-fixtures           e2e OUs and three delegated principals (one-time, admin)'
+	@echo '    lab-e2e                    ship, then run the whole e2e suite'
+	@echo '    lab-e2e-only PATTERN=<re>  run one e2e suite, or any -run pattern'
+	@echo '    lab-e2e-sweep              delete tfacc- leftovers beneath OU=e2e (admin)'
 
 # --- host build-out ---------------------------------------------------------
 
@@ -159,3 +165,23 @@ lab-acc-only:
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30
+
+# --- e2e layer --------------------------------------------------------------
+
+# One-time: create the three delegated principals and their OUs (needs admin).
+lab-e2e-fixtures:
+	$(PSRUN) $(LAB_DC) $(LAB_DIR)/13-provision-e2e.ps1 300 -- \
+	  -SvcPassword '$(call labcred,e2e.password)'
+
+# Ship this working tree, then run the whole e2e suite there. Needs no admin.
+lab-e2e: lab-ship
+	$(LAB_DIR)/run-e2e.sh TestAccE2E 90
+
+# Any e2e subset, e.g. make lab-e2e-only PATTERN=TestAccE2EDrift
+lab-e2e-only: lab-ship
+	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
+	$(LAB_DIR)/run-e2e.sh '$(PATTERN)' $(or $(MINUTES),40)
+
+# Delete tfacc- leftovers beneath OU=e2e (needs admin.password in $(LAB_CREDS)).
+lab-e2e-sweep:
+	$(LAB_DIR)/run-e2e.sh --sweep 30
