@@ -43,9 +43,12 @@ function EnsureOU($name, $path) {
         # Unprotected: the suite's own OUs are protected by default, but these two
         # are fixtures a human may need to remove.
         New-ADOrganizationalUnit -Name $name -Path $path -ProtectedFromAccidentalDeletion $false
-        Write-Output "OU_CREATED OU=$name,$path"
+        # Write-Host, not Write-Output: anything written to the output stream
+        # inside a function becomes part of its return value, and the DN would
+        # come back as an array with the status line glued to the front.
+        Write-Host "OU_CREATED OU=$name,$path"
     } else {
-        Write-Output "OU_EXISTS OU=$name,$path"
+        Write-Host "OU_EXISTS OU=$name,$path"
     }
     return "OU=$name,$path"
 }

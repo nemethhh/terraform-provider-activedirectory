@@ -19,12 +19,37 @@ shift 3 || shift $#
 
 body=$(cat "$script")
 if [[ $# -gt 0 ]]; then
-    # Wrap the script in a scriptblock so parameters can be passed positionally.
-    body="& { $body } $*"
+    # Quote every argument for PowerShell. Passing them raw loses the shell's
+    # quoting, and a value containing '#' would then start a PowerShell comment
+    # and silently truncate -- which is exactly how a password ending in '#'
+    # turns into an inscrutable "user name or password is incorrect".
+    args=""
+    for a in "$@"; do
+        if [[ $a == -* ]]; then
+            args+=" $a"                      # a parameter name, pass through
+        else
+            args+=" '${a//\'/\'\'}'"          # a value: single-quote, doubling any quote
+        fi
+    done
+    body="& { $body }$args"
 fi
 
 enc=$(printf '%s' "$body" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
-timeout "$tmo" ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "powershell -NoProfile -NonInteractive -EncodedCommand $enc" 2>&1 |
+
+# Windows caps a command line at 8191 characters, and base64-of-UTF-16 is about
+# 2.7x the source. Past that, ship the script over scp and run it by path
+# instead -- otherwise cmd.exe answers "The command line is too long".
+if [[ ${#enc} -lt 7000 ]]; then
+    run="powershell -NoProfile -NonInteractive -EncodedCommand $enc"
+else
+    base="psrun_$(basename "$script")"
+    tmp=$(mktemp)
+    printf '%s' "$body" > "$tmp"
+    scp -q -o BatchMode=yes "$tmp" "$host:C:/Windows/Temp/$base"
+    rm -f "$tmp"
+    run="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\$base"
+fi
+
+timeout "$tmo" ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "$run" 2>&1 |
     grep -viE 'warning: connection|post-quantum|store now|may need to be upgraded|^#< CLIXML' |
     grep -v '^<Objs' | sed '/^[[:space:]]*$/d'
