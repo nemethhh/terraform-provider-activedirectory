@@ -138,14 +138,29 @@ of that deployment.
 
 ## Running the suite against this lab
 
+The suite's provider block declares `local {}`, so **the tests run on `s-client`,
+not on the workstation** — the local transport spawns `pwsh` on whichever machine
+executes the tests. `scripts/lab/10-install-dev-tools.ps1` puts Go and Terraform
+there; the source goes over `scp` (`git archive HEAD`), so the host needs no Git.
+
+`AD_ACC_USERNAME` and `AD_ACC_PASSWORD` are **required even under the `local`
+transport** when the run is launched over SSH. `whoami` in an SSH session on
+`s-client` reports `s-client\administrator` — the local account, which holds no
+rights in the directory — and every `pwsh` the transport spawns inherits that
+token. The double hop below is the same effect seen from the other direction.
+
 ```bash
 export TF_ACC=1 \
        AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
        AD_ACC_DENIED_CONTAINER='OU=tfacc-denied,DC=corp,DC=local' \
        AD_ACC_SERVER='s-server.corp.local' \
        AD_ACC_USERNAME='CORP\svc_tfacc' AD_ACC_PASSWORD='...'
-make testacc
+go test ./internal/provider/ -run TestAcc -skip TestAccReplication -v -timeout 120m
 ```
+
+`-skip TestAccReplication` is not optional while `AD_ACC_SECOND_DC` has no host:
+`accPreCheck` calls `t.Fatal` on a missing variable rather than skipping, so
+`make testacc` would fail on those three suites by design.
 
 The suite has never been executed against a real domain. The first run is expected
 to find defects; that is the suite working, not the suite failing.

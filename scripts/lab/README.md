@@ -41,6 +41,7 @@ Two conventions worth knowing before editing these:
 | 7 | `07-join-domain.ps1` | member | Repoints DNS, installs RSAT, joins, reboots. |
 | 8 | `08-provision-acceptance.ps1` | DC | Containers, `svc_tfacc`, delegation. |
 | 9 | `09-open-ssh-firewall.ps1` | both | **Run after 6 and after 7.** Promotion and domain join both switch the host to the Domain firewall profile, where the OpenSSH rule is not enabled. |
+| 10 | `10-install-dev-tools.ps1` | member | Go and Terraform, pinned and checksum-verified. Needed only to *run* the acceptance suite, which must execute on the domain-joined host because the suite's provider block declares `local {}`. |
 
 Steps 1–5 are safe to run against both hosts in parallel; 6–9 are ordered.
 
