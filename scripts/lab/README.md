@@ -40,8 +40,39 @@ Two conventions worth knowing before editing these:
 | 6 | `06-promote-dc.ps1` | DC | Detached; poll `C:\Windows\Temp\labsetup.log`. Long reboot. |
 | 7 | `07-join-domain.ps1` | member | Repoints DNS, installs RSAT, joins, reboots. |
 | 8 | `08-provision-acceptance.ps1` | DC | Containers, `svc_tfacc`, delegation. |
+| 9 | `09-open-ssh-firewall.ps1` | both | **Run after 6 and after 7.** Promotion and domain join both switch the host to the Domain firewall profile, where the OpenSSH rule is not enabled. |
 
-Steps 1–5 are safe to run against both hosts in parallel; 6–8 are ordered.
+Steps 1–5 are safe to run against both hosts in parallel; 6–9 are ordered.
+
+## When SSH goes dark
+
+Promotion and domain join both move a host to the **Domain** firewall profile.
+The OpenSSH rule Windows creates at install time is scoped to Private, so SSH
+stops answering — and so does ping, because that profile drops inbound ICMP by
+default. It reads exactly like a host that never came back from its reboot.
+
+WinRM stays reachable throughout, so recover through it:
+
+```bash
+LAB_USER='CORP\Administrator' LAB_ADMIN_PW='...' \
+    python3 winrun.py 192.168.50.31 09-open-ssh-firewall.ps1
+```
+
+`winrun.py` needs `pywinrm` (`pip install pywinrm`).
+
+## Clone the image, sysprep the clone
+
+If two hosts first boot with the same `WIN-xxxxxxxx` name, they came from one
+image that was never generalised and they share a machine SID. Promote one and
+the domain inherits that SID, after which the other can never join: the DC
+validates the credential (event 4776, code 0x0) and then fails to build the
+logon session (4625, `0xC000006D`, sub `0x0`), which surfaces as the entirely
+misleading "The user name or password is incorrect". Compare before you start:
+
+```powershell
+(Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='Administrator'").SID  # member
+(Get-ADDomain).DomainSID.Value                                                                # DC
+```
 
 ## Verifying
 
