@@ -70,6 +70,39 @@ console access.
 
 No credentials live in those scripts; each takes what it needs as a parameter.
 
+## Blocker: s-client shares the domain's SID
+
+`s-server` is a working `corp.local` domain controller. `s-client` **cannot join
+it**, and the cause is not fixable by configuration:
+
+```
+s-client machine SID  : S-1-5-21-3238716028-3923111687-1729273309
+corp.local domain SID : S-1-5-21-3238716028-3923111687-1729273309
+```
+
+Both hosts were cloned from one image without `sysprep /generalize`, which is why
+both first booted as `WIN-1QTFT7Q2QCO`. Promotion derives the domain SID from the
+DC's machine SID, so the domain now claims the same SID `s-client` uses locally.
+
+The symptom is deeply misleading. The join reports *"The user name or password is
+incorrect"*, but the password is provably correct: the DC logs event **4776 with
+Error Code 0x0** (credentials validated) immediately before event **4625** with
+`Status 0xC000006D`, `Sub Status 0x0`, "An Error occured during Logon" and
+`Key Length: 0`. Authentication succeeds; building the logon session is what
+fails. A Linux client authenticates to the same DC with the same account over
+both NTLM and Kerberos without trouble, because it carries no Windows SID.
+
+Things that were ruled out along the way, each verified rather than assumed:
+a wrong password (LDAP simple bind and `smbclient` both succeed), account lockout
+(`badPwdCount` stays 0), clock skew (was a real and separate 9-hour problem, since
+fixed), NTLM restrictions (none set on either host), and the built-in
+Administrator being special (a fresh `svc_join` Domain Admin fails identically).
+
+**Fix:** `s-client` needs a new machine SID. The only supported way is
+`sysprep /generalize`, or a rebuild from the installation media. Cloning a Windows
+host without generalising is what caused this, so any future lab host must be
+sysprepped before promotion or join.
+
 ## Current state — not yet usable by the provider
 
 As built, neither host can run the acceptance suite. Outstanding work:
