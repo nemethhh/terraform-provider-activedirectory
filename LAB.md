@@ -58,6 +58,18 @@ No `sshd` restart is needed. Verify from Linux with:
 ssh -o BatchMode=yes s-server 'powershell -NoProfile -Command "$env:COMPUTERNAME"'
 ```
 
+## Provisioning scripts
+
+`scripts/lab/` builds this lab from a fresh Windows Server install: SSH key,
+PowerShell 7, static addressing, rename, forest promotion, domain join, and the
+acceptance-suite containers and delegated account. See
+[`scripts/lab/README.md`](scripts/lab/README.md) for the order and the two
+conventions that matter — long or reboot-inducing work runs detached and logged,
+and anything that could strand a host self-heals, because these machines have no
+console access.
+
+No credentials live in those scripts; each takes what it needs as a parameter.
+
 ## Current state — not yet usable by the provider
 
 As built, neither host can run the acceptance suite. Outstanding work:
