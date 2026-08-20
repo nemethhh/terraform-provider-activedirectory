@@ -162,5 +162,19 @@ go test ./internal/provider/ -run TestAcc -skip TestAccReplication -v -timeout 1
 `accPreCheck` calls `t.Fatal` on a missing variable rather than skipping, so
 `make testacc` would fail on those three suites by design.
 
-The suite has never been executed against a real domain. The first run is expected
-to find defects; that is the suite working, not the suite failing.
+### First run against a real domain, 2026-08-20
+
+All thirteen non-replication suites pass. The first run found three defects,
+which is the suite working rather than the suite failing:
+
+| Defect | Where it was |
+|---|---|
+| An OU carrying AD's default protection could never be moved: the flag denies the Delete right a move is authorised through | `go-adpwsh`, fixed in **v0.2.1**; `fake.Directory` now enforces the same rule, so it reproduces without a domain |
+| The concurrency suite addressed counted resources as `fan[0]`; the shimmed state uses `fan.0`, so every check said "Not found" while the apply had succeeded | the test |
+| `OU=tfacc-denied` carried an explicit DENY on read, so ADWS answered a create with a generic "server is unwilling to process the request" and no access-denied wording | the lab fixture |
+
+What only a real domain proved: the eleven hostile values survive the cmdlet
+layer; `global` to `universal` is a conversion AD permits; `generate-config-out`
+re-plans clean for all three resources; and the sweeper's PowerShell works.
+
+The three replication suites still have no second DC and are excluded.
