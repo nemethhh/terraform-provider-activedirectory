@@ -34,22 +34,56 @@ func (d *groupDataSource) Metadata(_ context.Context, _ datasource.MetadataReque
 	resp.TypeName = groupDataSourceType
 }
 
-func (d *groupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	attrs := identitySelectorSchema(true)
+// groupResultAttributes is the full set of computed group attributes, matching
+// every tfsdk tag on groupDataSourceModel. The plural activedirectory_groups
+// source uses it verbatim for each result object; the singular source overlays
+// the identity selector on top of it, so the two sources share one projection.
+func groupResultAttributes() map[string]dschema.Attribute {
+	attrs := map[string]dschema.Attribute{}
 	for name, desc := range map[string]string{
-		"id": "The objectGUID.", "name": "The group's name (RDN).",
+		"id": "The objectGUID.", "guid": "The objectGUID.",
+		"dn": "The distinguished name.", "sid": "The security identifier.",
+		"sam_account_name": "The sAMAccountName.", "name": "The group's name (RDN).",
 		"container": "Distinguished name of the parent.", "scope": "global, domainlocal, or universal.",
 		"category": "security or distribution.", "description": "Free-text description.",
 		"managed_by": "DN of the managing principal.",
 	} {
 		attrs[name] = dschema.StringAttribute{Computed: true, MarkdownDescription: desc}
 	}
-	// sam_account_name and sid are in the selector (Optional); the read fills
-	// them with canonical values.
+	return attrs
+}
+
+func (d *groupDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	attrs := identitySelectorSchema(true)
+	for name, attr := range groupResultAttributes() {
+		// guid/dn/sid/sam_account_name are the Optional selector on the singular
+		// source; the read fills them with canonical values afterwards.
+		if _, isSelector := attrs[name]; isSelector {
+			continue
+		}
+		attrs[name] = attr
+	}
 	resp.Schema = dschema.Schema{
 		MarkdownDescription: "Look up a group by GUID, DN, SID, or sAMAccountName. Errors if it does not exist.",
 		Attributes:          attrs,
 	}
+}
+
+// applyGroup projects a library Group onto the model, filling every field.
+// Shared by the singular source's Read and the plural source's per-result
+// mapping.
+func applyGroup(m *groupDataSourceModel, g *adpwsh.Group) {
+	m.ID = types.StringValue(g.GUID)
+	m.GUID = types.StringValue(g.GUID)
+	m.DN = types.StringValue(g.DN)
+	m.SID = types.StringValue(g.SID)
+	m.SamAccountName = types.StringValue(g.SamAccountName)
+	m.Name = types.StringValue(g.Name)
+	m.Container = types.StringValue(g.Container)
+	m.Scope = types.StringValue(string(g.Scope))
+	m.Category = types.StringValue(string(g.Category))
+	m.Description = types.StringValue(g.Description)
+	m.ManagedBy = types.StringValue(g.ManagedBy)
 }
 
 func (d *groupDataSource) ConfigValidators(context.Context) []datasource.ConfigValidator {
@@ -71,17 +105,7 @@ func (d *groupDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		resp.Diagnostics.Append(errorDiagnostics("Group.Get", groupDataSourceType, err)...)
 		return
 	}
-	cfg.ID = types.StringValue(g.GUID)
-	cfg.GUID = types.StringValue(g.GUID)
-	cfg.DN = types.StringValue(g.DN)
-	cfg.SID = types.StringValue(g.SID)
-	cfg.SamAccountName = types.StringValue(g.SamAccountName)
-	cfg.Name = types.StringValue(g.Name)
-	cfg.Container = types.StringValue(g.Container)
-	cfg.Scope = types.StringValue(string(g.Scope))
-	cfg.Category = types.StringValue(string(g.Category))
-	cfg.Description = types.StringValue(g.Description)
-	cfg.ManagedBy = types.StringValue(g.ManagedBy)
+	applyGroup(&cfg, g)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &cfg)...)
 }
 
