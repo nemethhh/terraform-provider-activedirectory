@@ -405,3 +405,61 @@ resource "activedirectory_group" "reps" {
 		),
 	}}
 }
+
+// ---------------------------------------------------------------------------
+// Group membership — non-authoritative (activedirectory_group_member)
+// ---------------------------------------------------------------------------
+
+// groupMemberSteps covers one membership edge: create, a no-diff replan (Read via
+// IsMember must plan nothing), delete, and import by the composite id. It seeds a
+// group and one user via the existing resources, then joins them.
+func groupMemberSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "gm-ou"
+	grp := accNamePrefix + "gm-grp"
+	usr := accNamePrefix + "gm-usr"
+	upn := usr + "@" + e.upnSuffix()
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "u" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+`, ou, e.Container, grp, grp, usr, upn)
+
+	edge := `
+resource "activedirectory_group_member" "m" {
+  group_id  = activedirectory_group.g.id
+  member_id = activedirectory_user.u.id
+}`
+
+	return []resource.TestStep{
+		{
+			Config: base + edge,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_group_member.m", "id"),
+				resource.TestCheckResourceAttrPair(
+					"activedirectory_group_member.m", "group_id", "activedirectory_group.g", "id"),
+				resource.TestCheckResourceAttrPair(
+					"activedirectory_group_member.m", "member_id", "activedirectory_user.u", "id"),
+			),
+		},
+		{Config: base + edge, PlanOnly: true},
+		{
+			ResourceName:      "activedirectory_group_member.m",
+			ImportState:       true,
+			ImportStateVerify: true,
+		},
+	}
+}
