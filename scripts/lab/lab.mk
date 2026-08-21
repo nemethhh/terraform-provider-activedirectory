@@ -178,6 +178,9 @@ lab-e2e: lab-ship
 	$(LAB_DIR)/run-e2e.sh TestAccE2E 90
 
 # Any e2e subset, e.g. make lab-e2e-only PATTERN=TestAccE2EDrift
+# PATTERN must not contain a '|' alternation: it reaches go test -run through a
+# cmd /c "..." on the member, where cmd.exe reads an unquoted '|' as a pipe. Use
+# a common prefix (Go -run is a regex) or run the whole suite with lab-e2e.
 lab-e2e-only: lab-ship
 	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
 	$(LAB_DIR)/run-e2e.sh '$(PATTERN)' $(or $(MINUTES),40)

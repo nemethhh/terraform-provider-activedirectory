@@ -124,6 +124,12 @@ delegated principal via the provider's `credential {}` block, and CheckDestroy
 verifies as that same principal. `make lab-e2e-sweep` removes `tfacc-` leftovers
 beneath `OU=e2e` after a crash and is the only e2e target that reads `admin.password`.
 
+To run a subset use `make lab-e2e-only PATTERN=<re>`, but the pattern cannot
+contain a `|` alternation: it is handed to `go test -run` inside a `cmd /c "..."`
+on the member, where cmd.exe reads an unquoted `|` as a pipe and splits it. Select
+a set with a common prefix instead (`-run` is a regex, so `TestAccE2EDrift` matches
+every drift test), or run everything with `make lab-e2e`.
+
 ## Two hard-won lessons
 
 ### Clone the image, sysprep the clone

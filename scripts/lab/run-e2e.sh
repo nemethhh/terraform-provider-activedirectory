@@ -7,6 +7,13 @@
 # whatever any principal left behind after a crash.
 #
 #   usage: run-e2e.sh <test-pattern|--sweep> <timeout-minutes>
+#
+# The pattern reaches `go test -run` inside a `cmd /c "..."` on the member, and
+# cmd.exe treats an unquoted `|` as a pipe -- so a `|`-alternation such as
+# 'TestAccFoo|TestAccBar' is split and fails ("... is not recognized"). Use a
+# common prefix that selects the set (Go -run is a regex: 'TestAccE2EDrift'
+# matches every drift test) or run the whole suite. This is a lab test-runner
+# limitation only; it does not touch the provider.
 set -euo pipefail
 
 pattern=${1:?test pattern, or --sweep}
