@@ -161,6 +161,38 @@ resource "activedirectory_ou" "existing" {
 	}}
 }
 
+// ouDataSourceSteps creates a managed OU and reads it straight back through the
+// activedirectory_ou data source in the same config, so the data source's
+// resolve-by-identity and state mapping are asserted against both backends. The
+// data source keys off the resource's dn, which both establishes the dependency
+// (the read is deferred until the OU exists) and proves lookup by DN.
+func ouDataSourceSteps(e suiteEnv) []resource.TestStep {
+	name := accNamePrefix + "ds-ou"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name        = %q
+  container   = %q
+  description = "data source read-back"
+}
+
+data "activedirectory_ou" "src" {
+  dn = activedirectory_ou.src.dn
+}`, name, e.Container)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_ou.src", "id", "activedirectory_ou.src", "id"),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "container", e.Container),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src",
+				"protected_from_accidental_deletion", "true"),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Groups
 // ---------------------------------------------------------------------------

@@ -260,7 +260,9 @@ func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
 }
 
 func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		newOUDataSource,
+	}
 }
 
 // clientFromProviderData is the boilerplate every resource's Configure runs.
