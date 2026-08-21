@@ -91,7 +91,7 @@ lab-dev-tools:
 lab-promote-dc2:
 	@test -n "$${LAB_ADMIN_PW}" || { echo 'LAB_ADMIN_PW must be set in the environment'; exit 1; }
 	$(PSRUN) $(or $(HOST),$(LAB_DC2)) $(LAB_DIR)/12-promote-second-dc.ps1 360 -- \
-	  -DsrmPassword '$(call labcred,dsrm.password)' \
+	  -DsrmPassword "$(call labcred,dsrm.password)" \
 	  -AdminUser 'CORP\Administrator' -AdminPassword "$${LAB_ADMIN_PW}"
 
 # Over WinRM on purpose: promotion and domain join both close SSH.
@@ -102,7 +102,7 @@ lab-open-ssh:
 
 lab-acceptance-fixtures:
 	$(PSRUN) $(LAB_DC) $(LAB_DIR)/08-provision-acceptance.ps1 300 -- \
-	  -SvcPassword '$(call labcred,svc.password)'
+	  -SvcPassword "$(call labcred,svc.password)"
 
 # --- using the lab ----------------------------------------------------------
 
@@ -171,7 +171,7 @@ lab-sweep:
 # One-time: create the three delegated principals and their OUs (needs admin).
 lab-e2e-fixtures:
 	$(PSRUN) $(LAB_DC) $(LAB_DIR)/13-provision-e2e.ps1 300 -- \
-	  -SvcPassword '$(call labcred,e2e.password)'
+	  -SvcPassword "$(call labcred,e2e.password)"
 
 # Ship this working tree, then run the whole e2e suite there. Needs no admin.
 lab-e2e: lab-ship
