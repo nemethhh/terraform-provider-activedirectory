@@ -14,3 +14,12 @@ func TestAccessRuleLifecycleAgainstTheFake(t *testing.T) {
 		Steps:                    accessRuleSteps(fakeSuiteEnv()),
 	})
 }
+
+func TestAccAccessRuleLifecycle(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    accessRuleSteps(accSuiteEnv()),
+	})
+}

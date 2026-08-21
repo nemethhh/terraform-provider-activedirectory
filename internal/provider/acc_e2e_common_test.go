@@ -151,6 +151,19 @@ func e2eAlphaDN() string       { return e2eSub("OU=alpha") }
 func e2eBetaDN() string        { return e2eSub("OU=beta") }
 func e2eLimitedDN() string     { return e2eSub("OU=limited") }
 
+// e2eBareSAM strips a possible "DOMAIN\" prefix from an AD_E2E_*_USERNAME
+// value. Those variables are Windows credentials, written like AD_ACC_USERNAME
+// in LAB.md ("CORP\svc_tfacc"), but an access_rule's trustee is an AD identity:
+// Get-ADUser -Identity does not accept the "DOMAIN\sam" form. The delegation
+// scenarios need the bare sAMAccountName to name a principal as a trustee, so
+// the two uses of the same env var need different derivations.
+func e2eBareSAM(cred string) string {
+	if i := strings.LastIndex(cred, `\`); i >= 0 {
+		return cred[i+1:]
+	}
+	return cred
+}
+
 // captureAttr stores one attribute of a resource into dst, so a later step's
 // PreConfig can mutate that object out of band by its GUID/DN.
 func captureAttr(resourceName, attr string, dst *string) resource.TestCheckFunc {
