@@ -183,19 +183,26 @@ Every object any suite creates is prefixed `tfacc-` (`accNamePrefix`) and lives 
 else. `accCheckDestroy` asks the *directory* whether the object is gone rather than
 trusting state, because an object absent from state may still exist and now be unmanaged.
 
-### What is written but has never been executed
+### Validating real-domain behaviour — the lab is mandatory
 
-No lab exists. The four acceptance-only suites, the sweeper's PowerShell, real `pwsh`,
-real `Import-Module ActiveDirectory` and real ADWS have never run. Their verification is
-that they compile and skip cleanly. Do not describe them as passing.
+A lab **exists** (see `LAB.md`) and is the required validation path for everything that
+needs a real domain: the acceptance suites, the e2e layer, the sweeper's PowerShell, and
+real `pwsh` / `Import-Module ActiveDirectory` / ADWS. Compiling and skipping cleanly is
+**not** validation. Any change that touches AD behaviour must be run against the lab
+(`make lab-acc`, `make lab-e2e`, or a narrower `make lab-acc-only PATTERN=…`) before it is
+described as working. A real-domain path that has not actually been run against the domain
+is not "passing" — say so plainly. `LAB.md` records what has run (the first full run was
+2026-08-20).
 
 ## The lab
 
-`LAB.md` documents the two Windows Server 2025 hosts used to exercise the provider
-against a real domain, and how to reach them (`ssh s-server`, `ssh s-client`). Neither
-is usable by the acceptance suite yet — as of writing both carry the installer's default
-computer name, are in WORKGROUP, and have neither AD DS, RSAT-AD-PowerShell nor `pwsh`
-installed. `LAB.md` lists what remains.
+`LAB.md` documents the Windows Server 2025 hosts — two domain controllers and a
+domain-joined member — used to exercise this provider against the real `corp.local`
+domain, how to reach them (`ssh s-server`, `ssh s-server2`, `ssh s-client`), and the
+`make lab-*` targets that ship this working tree and run the suites there (start with
+`make lab-help` and `make lab-status`). The lab is provisioned and in active use; it
+**must** be used to validate any change to real-domain behaviour. `LAB.md` is the source
+of truth for its current state and its run log.
 
 ## Scaffolding that is never committed
 

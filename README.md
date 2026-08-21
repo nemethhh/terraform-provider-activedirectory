@@ -230,6 +230,15 @@ make testacc  # adds the suites that need one
 make sweep    # deletes leftovers after a crashed run
 ```
 
+A provisioned Windows lab exists for the domain-backed runs (see `LAB.md`). The
+`make lab-*` targets ship this working tree to it and run the suites there:
+`make lab-status` for health, `make lab-acc` for the whole acceptance suite,
+`make lab-acc-only PATTERN=<re>` for a subset, and `make lab-e2e` for the e2e
+layer (`make lab-help` lists them all). **Any change to real-domain behaviour
+must be validated against the lab before it is called done** — the in-memory
+backend proves the plan/state mapping but not the PowerShell paths, so a
+real-domain path that has not been run on the lab is not "passing".
+
 ### What the suite needs
 
 | Variable | Required by | Meaning |
