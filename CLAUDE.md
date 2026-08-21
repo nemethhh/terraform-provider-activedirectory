@@ -120,10 +120,3 @@ the Registry ingests. The full cut-a-release checklist, the GPG-key and
 GitHub-secrets setup, and the Registry-side steps are in
 [CONTRIBUTING.md](./CONTRIBUTING.md#releasing-to-the-terraform-registry). Never
 modify an already-released tag — the Registry stores its checksums.
-
-## Never commit
-
-`docs/superpowers/` (specs, plans, brainstorms) and `docs/reference/` (vendored
-clones of other providers) are gitignored working material. Never `git add` them.
-The design documents behind the current code are in `docs/superpowers/specs/` and
-are worth reading before a substantial change.
