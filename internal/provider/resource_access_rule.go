@@ -264,8 +264,18 @@ func (r *accessRuleResource) resolveACE(ctx context.Context, m accessRuleModel) 
 		path.Root("applies_to").AtName("object_class"))
 	diags.Append(d...)
 
-	sid, d := r.resolveTrusteeSID(ctx, m.Trustee.ValueString())
-	diags.Append(d...)
+	// The trustee's SID is cached in state at Create and by ImportState. Once
+	// it is known, reuse it instead of re-resolving trustee live: a
+	// DN-or-SAM-shaped trustee that is later renamed or moved must not break
+	// every subsequent Read/Delete, and this is what "resolved to a SID at
+	// apply time" (the trustee schema doc) means. Only Create, where
+	// trustee_sid is still empty/unknown, does the live resolution.
+	sid := m.TrusteeSID.ValueString()
+	if sid == "" {
+		resolved, d := r.resolveTrusteeSID(ctx, m.Trustee.ValueString())
+		diags.Append(d...)
+		sid = resolved
+	}
 
 	if diags.HasError() {
 		return adpwsh.ACE{}, "", "", diags
