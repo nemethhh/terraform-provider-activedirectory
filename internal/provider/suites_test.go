@@ -969,3 +969,56 @@ resource "activedirectory_group_membership" "s" {
 		},
 	}
 }
+
+// accessRuleSteps proves a single access_rule creates one ACE, replans clean,
+// and round-trips through import: the ACE's friendly names (object_type
+// "Reset Password", applies_to.object_class "user") resolve to GUIDs and the
+// trustee resolves to a SID, none of which are echoed back verbatim on import
+// (hence the ImportStateVerifyIgnore below).
+func accessRuleSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ar-ou"
+	grp := accNamePrefix + "ar-grp"
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "t" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "helpdesk" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.t.dn
+}
+`, ou, e.Container, grp, grp)
+
+	rule := `
+resource "activedirectory_access_rule" "reset" {
+  target      = activedirectory_ou.t.dn
+  trustee     = activedirectory_group.helpdesk.id
+  rights      = ["ExtendedRight"]
+  object_type = "Reset Password"
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Allow"
+}`
+
+	return []resource.TestStep{
+		{
+			Config: base + rule,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "id"),
+				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "trustee_sid"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.reset", "type", "Allow"),
+			),
+		},
+		{Config: base + rule, PlanOnly: true},
+		{
+			ResourceName:            "activedirectory_access_rule.reset",
+			ImportState:             true,
+			ImportStateVerify:       true,
+			ImportStateVerifyIgnore: []string{"target", "trustee", "object_type", "applies_to"},
+		},
+	}
+}
