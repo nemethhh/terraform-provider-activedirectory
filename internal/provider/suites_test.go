@@ -673,6 +673,68 @@ resource "activedirectory_group_membership" "s" {
 	}
 }
 
+// groupMembersDataSourceSteps grows a group to two members through the
+// authoritative membership resource, then reads them back through the
+// activedirectory_group_members data source. depends_on defers the data source
+// read until the membership apply has run, so the read sees the full set. The
+// class assertion uses the set form because a member list has no guaranteed
+// order on a real domain. Large-group paging past the 1500-entry boundary is
+// proved directly against the library by TestAccGroupMembershipLargeSet and by
+// TestAccGroupMembersDataSourceLargeSet through this data source.
+func groupMembersDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dsm-ou"
+	grp := accNamePrefix + "dsm-grp"
+	a := accNamePrefix + "dsm-a"
+	b := accNamePrefix + "dsm-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = [activedirectory_user.a.id, activedirectory_user.b.id]
+}
+
+data "activedirectory_group_members" "g" {
+  sam_account_name = activedirectory_group.g.sam_account_name
+  depends_on       = [activedirectory_group_membership.s]
+}`, ou, e.Container, grp, grp, a, upnA, b, upnB)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_group_members.g", "members.#", "2"),
+			// Order is not guaranteed on a real domain, so assert by set membership.
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_group_members.g", "members.*",
+				map[string]string{"class": "user"}),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Group membership — nested (a group is a member of another group)
 // ---------------------------------------------------------------------------
