@@ -359,3 +359,138 @@ resource "activedirectory_user" "u" {
 		},
 	})
 }
+
+// A managed membership edge removed out of band → Read (IsMember) returns false
+// → RemoveResource → next apply re-adds it.
+func TestAccE2EDriftGroupMemberRemoved(t *testing.T) {
+	user, pass, e := driftAlpha()
+	ou := accNamePrefix + "drift-gm-ou"
+	grp := accNamePrefix + "drift-gm-grp"
+	sam := accNamePrefix + "drift-gm-usr"
+	upn := sam + "@" + e.upnSuffix()
+	cfg := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "u" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_group_member" "m" {
+  group_id  = activedirectory_group.g.id
+  member_id = activedirectory_user.u.id
+}`, ou, e.Container, grp, grp, sam, upn)
+
+	var groupID, memberID string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             e2eCheckDestroy(t, user, pass),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_group.g", "id", &groupID),
+					captureAttr("activedirectory_user.u", "id", &memberID),
+				),
+			},
+			{
+				PreConfig: func() {
+					cl := e2eClient(t, user, pass)
+					if err := cl.Group.RemoveMembers(context.Background(),
+						adpwsh.ByGUID(groupID), []adpwsh.Identity{adpwsh.ByGUID(memberID)}); err != nil {
+						t.Fatalf("out-of-band remove failed: %v", err)
+					}
+				},
+				Config:             cfg,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{Config: cfg},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
+
+// A member added out of band to an authoritatively-managed group → apply removes
+// it, reconciling the group to exactly the configured set.
+func TestAccE2EDriftGroupMembershipReconciled(t *testing.T) {
+	user, pass, e := driftAlpha()
+	ou := accNamePrefix + "drift-gs-ou"
+	grp := accNamePrefix + "drift-gs-grp"
+	a := accNamePrefix + "drift-gs-a"
+	b := accNamePrefix + "drift-gs-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+	cfg := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = [activedirectory_user.a.id]
+}`, ou, e.Container, grp, grp, a, upnA, b, upnB)
+
+	var groupID, intruderID string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             e2eCheckDestroy(t, user, pass),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_group.g", "id", &groupID),
+					captureAttr("activedirectory_user.b", "id", &intruderID),
+					resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "1"),
+				),
+			},
+			{
+				PreConfig: func() {
+					cl := e2eClient(t, user, pass)
+					if err := cl.Group.AddMembers(context.Background(),
+						adpwsh.ByGUID(groupID), []adpwsh.Identity{adpwsh.ByGUID(intruderID)}); err != nil {
+						t.Fatalf("out-of-band add failed: %v", err)
+					}
+				},
+				Config:             cfg,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				Config: cfg,
+				Check:  resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "1"),
+			},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
