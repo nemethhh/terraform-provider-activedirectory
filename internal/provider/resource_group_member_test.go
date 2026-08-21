@@ -91,3 +91,20 @@ func TestAccGroupMemberLifecycle(t *testing.T) {
 		Steps:                    groupMemberSteps(accSuiteEnv()),
 	})
 }
+
+func TestGroupMemberNestedAgainstTheFake(t *testing.T) {
+	dir := fake.NewDirectory()
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factoriesWith(dir),
+		Steps:                    groupMemberNestedSteps(fakeSuiteEnv()),
+	})
+}
+
+func TestAccGroupMemberNested(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    groupMemberNestedSteps(accSuiteEnv()),
+	})
+}

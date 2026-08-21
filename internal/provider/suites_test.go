@@ -550,3 +550,99 @@ resource "activedirectory_group_membership" "s" {
 		},
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Group membership — nested (a group is a member of another group)
+// ---------------------------------------------------------------------------
+
+// nestedBase is the OU, a parent and child group, and a user — the fixtures both
+// nested builders below share. Kept as one function so the two builders stay in
+// step and neither is managed by both membership resources at once.
+func nestedBase(e suiteEnv, ou, parent, child, usr, upn string) string {
+	return e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "parent" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_group" "child" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "u" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+`, ou, e.Container, parent, parent, child, child, usr, upn)
+}
+
+// groupMemberNestedSteps proves a non-authoritative edge's member need not be a
+// user: a child group is added to a parent group. The member_id space is any
+// objectGUID, so nothing special is needed — this pins that it stays so.
+func groupMemberNestedSteps(e suiteEnv) []resource.TestStep {
+	usr := accNamePrefix + "gn-usr"
+	base := nestedBase(e, accNamePrefix+"gn-ou", accNamePrefix+"gn-parent",
+		accNamePrefix+"gn-child", usr, usr+"@"+e.upnSuffix())
+
+	edge := `
+resource "activedirectory_group_member" "nested" {
+  group_id  = activedirectory_group.parent.id
+  member_id = activedirectory_group.child.id
+}`
+
+	return []resource.TestStep{
+		{
+			Config: base + edge,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_group_member.nested", "id"),
+				resource.TestCheckResourceAttrPair(
+					"activedirectory_group_member.nested", "member_id", "activedirectory_group.child", "id"),
+			),
+		},
+		{Config: base + edge, PlanOnly: true},
+		{
+			ResourceName:      "activedirectory_group_member.nested",
+			ImportState:       true,
+			ImportStateVerify: true,
+		},
+	}
+}
+
+// groupMembershipNestedSteps proves an authoritative set may mix member types: a
+// user and a nested group are owned together, reconciled to exactly that pair.
+func groupMembershipNestedSteps(e suiteEnv) []resource.TestStep {
+	usr := accNamePrefix + "gnm-usr"
+	base := nestedBase(e, accNamePrefix+"gnm-ou", accNamePrefix+"gnm-parent",
+		accNamePrefix+"gnm-child", usr, usr+"@"+e.upnSuffix())
+
+	mixed := `
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.parent.id
+  members  = [activedirectory_user.u.id, activedirectory_group.child.id]
+}`
+
+	return []resource.TestStep{
+		{
+			Config: base + mixed,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "2"),
+				resource.TestCheckResourceAttrPair(
+					"activedirectory_group_membership.s", "id", "activedirectory_group.parent", "id"),
+			),
+		},
+		{Config: base + mixed, PlanOnly: true},
+		{
+			ResourceName:      "activedirectory_group_membership.s",
+			ImportState:       true,
+			ImportStateVerify: true,
+		},
+	}
+}

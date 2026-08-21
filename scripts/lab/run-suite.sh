@@ -30,6 +30,11 @@ pwsh_path=${LAB_PWSH:-'C:\Program Files\PowerShell\7\pwsh.exe'}
 user=$(cred 'svc\.username'); pass=$(cred 'svc\.password')
 [[ -n $user && -n $pass ]] || { echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
 
+# AD_ACC_LARGE_COUNT opts the (heavy) large-group suite in; forward it to the
+# member only when the caller set it, so the ordinary run never triggers it.
+large_line=""
+[[ -n ${AD_ACC_LARGE_COUNT:-} ]] && large_line="\$env:AD_ACC_LARGE_COUNT = '${AD_ACC_LARGE_COUNT}'"
+
 if [[ $pattern == --sweep ]]; then
     go_cmd='go test ./internal/provider -v -sweep=domain -timeout 30m'
     label=SWEEP
@@ -52,6 +57,7 @@ Set-Location 'C:\src\provider'
 \$env:AD_ACC_USERNAME         = \$Username
 \$env:AD_ACC_PASSWORD         = \$Password
 \$env:AD_ACC_PWSH_PATH        = '$pwsh_path'
+$large_line
 \$log = 'C:\Windows\Temp\lab-run.log'
 Remove-Item \$log -Force -ErrorAction SilentlyContinue
 \$sw = [Diagnostics.Stopwatch]::StartNew()
