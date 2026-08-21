@@ -1,215 +1,129 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository. It covers
+the invariants that break silently when violated and where things live; the
+mechanical process — build, test, lab, release — is in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
-## The split that governs everything
+## The one rule
 
-This repository is a Terraform provider and **nothing else**. Every Active Directory
-behaviour — cmdlet composition, DC pinning, the read-back after each write, delete
-verification, error classification, serialized writes, the replication wait — lives in
-[`github.com/nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh) and is *not*
-reimplemented here. This repo contains only schemas, plan/state mapping, diagnostics,
-and import.
+This repository is a Terraform provider and **nothing else**. Every Active
+Directory behaviour — cmdlet composition, DC pinning, the read-back after each
+write, delete verification, error classification, serialized writes and the
+replication wait — lives in
+[`github.com/nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh) and is
+*not* reimplemented here. This repo contains only schemas, plan/state mapping,
+diagnostics, and import.
 
-When a task needs new AD behaviour, the change belongs in the library, not here. The
-library's operation set is deliberately narrow: as of `go-adpwsh` v0.4.0 it exposes
-directory search as three typed, class-scoped reads (`OU.Search`/`Group.Search`/`User.Search`),
-but it is still not an arbitrary directory API — there is no generic object search, and
-object mutation remains get-by-identity only. The one place this repo owns PowerShell is
-the test sweeper (`acc_sweeper_test.go`), and it follows the library's contract — script
-is a constant, every value arrives as JSON on stdin, nothing is ever formatted into script
-text.
+**When a task needs new AD behaviour, the change belongs in the library, not
+here.** The library's operation set is deliberately narrow: as of `go-adpwsh`
+v0.4.0 it exposes directory search as three typed, class-scoped reads
+(`OU.Search`/`Group.Search`/`User.Search`), but there is still no generic object
+search, and object mutation remains get-by-identity only. The one place this repo
+owns PowerShell is the test sweeper (`acc_sweeper_test.go`), and it follows the
+library's contract — script is a constant, every value arrives as JSON on stdin,
+nothing is ever formatted into script text.
 
-## Commands
+## Invariants that break silently if violated
 
-```bash
-make check     # build, vet, gofmt, test — exactly what CI runs, in CI's order
-make test      # everything that needs no domain (go test ./... -timeout 10m)
-make build     # compile the provider binary
-make lint      # golangci-lint, pinned; first run builds it and is slow
-make fmt       # gofmt (this repo's files only) + terraform fmt ./examples/
-make fmt-check # the same as a check rather than a rewrite
-make docs      # regenerate docs/ with tfplugindocs, pinned
-make testacc   # adds the suites that need a real domain (TF_ACC=1)
-make sweep     # delete tfacc- leftovers after a crashed acceptance run
-```
+These are the conventions the three resources (OU, group, user) share. Before
+adding or changing a resource, read one existing resource end to end and preserve
+these — a violation compiles and often passes the fake, then diverges on a real
+domain or cascades a false diff.
 
-`golangci-lint` and `tfplugindocs` are pinned by version in the GNUmakefile and
-fetched on demand rather than added to `go.mod`: neither is imported by the
-provider. CI runs `make check`, so reproducing a red build takes one command.
-
-Single test, subtest, and acceptance test:
-
-```bash
-go test ./internal/provider/ -run TestResolveLocalDefaults -v
-go test ./internal/provider/ -run 'TestHostileInputRoundTripsAgainstTheFake/comma' -v
-TF_ACC=1 AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
-  go test ./internal/provider/ -run TestAccOULifecycle -v -timeout 30m
-```
-
-`make test` needs the `terraform` binary on PATH — the lifecycle tests drive a real
-Terraform CLI against an in-memory directory. It needs no Windows, no `pwsh`, no domain.
-
-### Two gotchas
-
-- **Never run a bare `gofmt -l .` or `gofmt -w .` here.** It walks `docs/reference/`,
-  gitignored clones of other providers — some 24,000 vendored files that are not ours to
-  reformat. The Makefile targets prune that directory; use them rather than gofmt directly.
-- `docs/*.md` is **generated**. To change documentation, edit the schema
-  `MarkdownDescription` strings or `examples/provider/provider.tf`, then `make docs`.
-  `examples/provider/provider.tf` is rendered verbatim into `docs/index.md`'s Example Usage.
-
-### Local library development
-
-A gitignored `go.work` resolves the sibling `../go-adpwsh` checkout. `go.mod` still pins
-the published version, so **`GOWORK=off go build ./...` and `GOWORK=off go test ./...`
-must both pass** — that is what a consumer without the workspace gets, and it is the only
-way to catch depending on unreleased library code.
-
-## Architecture
-
-### Transport selection
-
-`Configure` (`provider.go`) runs `chooseTransport` (`config.go`), which requires **exactly
-one** of the `local {}` and `ssh {}` blocks. Zero or two is an error with one
-attribute-scoped diagnostic per offending block. There is deliberately **no implicit
-default**: guessing would let a mistyped `ssh` block execute locally as whoever launched
-Terraform. Do not add one.
-
-`resolveLocal` and `resolveSSH` are siblings that turn a block plus the environment into
-the library's transport config. Configuration always wins over the environment; the
-environment is a fallback, never an override. Errors attributable to a configuration
-value use `AddAttributeError` with the attribute's path so Terraform underlines the line.
-
-`NewWithTransport` is the test-only hook that substitutes a transport and skips selection
-entirely — that is how the fake-backed suites run a full resource cycle with no jump box.
-
-### Shared machinery the three resources depend on
-
-The OU, group and user resources are deliberately near-identical in shape. Before adding
-a resource, read one existing resource end to end; the pieces it must reuse are:
-
-- **`dn.go`** — `keepEquivalentDN` (a DN echoed back in different case or spacing must
-  plan no change) and `dnFollowsNameAndContainer` (keeps `dn` from going unknown and
-  cascading a false diff). `splitDN` honours escaped commas: `OU=Sales\, EMEA` is one
-  component. Never split a DN on bare commas.
-- **`diagnostics.go`** — `errorDiagnostics(op, resourceType, err)` renders every
-  `adpwsh.Error` kind. `KindAlreadyExists` emits a ready-to-paste `import {` block;
-  a tombstone points at `Restore-ADObject`. Resources never format AD errors themselves.
-- **`identity.go`** — `identityFromImportID` detects GUID / DN / SID / sAMAccountName, so
-  every resource imports by all four forms.
-- **`provider.go`** — `clientFromProviderData` and `withTimeout` are the boilerplate every
-  resource's `Configure` and CRUD methods run.
-
-### Resource conventions
+**Resource semantics**
 
 - The parent is always `container` (never `path`), and it is a distinguished name.
 - The Terraform ID is always the `objectGUID`; it survives rename and move.
-- **Nothing forces a replace.** Rename and move are in-place updates, because deleting and
-  recreating an AD object destroys its SID and every ACL naming it.
-- Booleans are stated positively (`password_expires`, `can_change_password`) even though
-  AD's own parameters are the negative form.
-- A not-found during `Read` calls `RemoveResource` — drift, not failure. A not-found during
-  `Delete` is success.
-- `password` is a Terraform **write-only** attribute (Terraform 1.11+). It never reaches
-  state, so it cannot be diffed; rotation is driven by incrementing `password_version`.
+- **Nothing forces a replace.** Rename and move are in-place updates, because
+  deleting and recreating an AD object destroys its SID and every ACL naming it.
+- Booleans are stated positively (`password_expires`, `can_change_password`) even
+  though AD's own parameters are the negative form.
+- A not-found during `Read` calls `RemoveResource` — drift, not failure. A
+  not-found during `Delete` is success.
+- `password` is a Terraform **write-only** attribute (Terraform 1.11+). It never
+  reaches state, so it cannot be diffed; rotation is driven by incrementing
+  `password_version`.
 
-## Test architecture
+**Shared machinery — reuse it, do not reinvent it**
 
-This is the part that is not obvious from any single file.
+- **`dn.go`** — `keepEquivalentDN` (a DN echoed back in different case or spacing
+  must plan no change) and `dnFollowsNameAndContainer` (keeps `dn` from going
+  unknown and cascading a false diff). `splitDN` honours escaped commas:
+  `OU=Sales\, EMEA` is one component. Never split a DN on bare commas.
+- **`diagnostics.go`** — `errorDiagnostics(op, resourceType, err)` renders every
+  `adpwsh.Error` kind. `KindAlreadyExists` emits a ready-to-paste `import {`
+  block; a tombstone points at `Restore-ADObject`. Resources never format AD
+  errors themselves.
+- **`identity.go`** — `identityFromImportID` detects GUID / DN / SID /
+  sAMAccountName, so every resource imports by all four forms.
+- **`provider.go`** — `clientFromProviderData` and `withTimeout` are the
+  boilerplate every resource's `Configure` and CRUD methods run.
 
-### One directory, two test packages
+**Transport selection has no implicit default**
 
-`internal/provider/` compiles two test packages: internal `package provider` (unit tests
-for `config.go`, `dn.go`, `diagnostics.go`, `identity.go`) and external
-`package provider_test` (everything that drives Terraform). They share one test binary, so
-there is exactly one `TestMain` — it lives in `acc_sweeper_test.go` and only diverges from
-normal behaviour when `-sweep` is passed.
+`Configure` (`provider.go`) runs `chooseTransport` (`config.go`), which requires
+**exactly one** of the `local {}` and `ssh {}` blocks. Zero or two is an error
+with one attribute-scoped diagnostic per offending block. There is deliberately
+no implicit default: guessing would let a mistyped `ssh` block execute locally as
+whoever launched Terraform. Do not add one. `resolveLocal`/`resolveSSH` turn a
+block plus the environment into the library's transport config — configuration
+always wins over the environment. `NewWithTransport` is the test-only hook that
+substitutes a transport and skips selection, so the fake-backed suites run a full
+resource cycle with no jump box.
 
-### Every lifecycle suite runs against two backends
+## Two gotchas
 
-`suites_test.go` holds no tests. It holds **config builders parameterised by container DN**
-(`ouLifecycleSteps`, `groupLifecycleSteps`, `userLifecycleSteps`, `hostileDescriptionSteps`,
-…) taking a `suiteEnv`. Each builder is driven by two entry points:
+- **Never run a bare `gofmt -l .` or `gofmt -w .` here.** It walks
+  `docs/reference/`, gitignored clones of other providers — some 24,000 vendored
+  files that are not ours to reformat. Use the Makefile targets, which prune it.
+- **`docs/*.md` is generated.** To change documentation, edit the schema
+  `MarkdownDescription` strings or `examples/provider/provider.tf`, then
+  `make docs`. `examples/provider/provider.tf` renders verbatim into
+  `docs/index.md`'s Example Usage.
 
-| Entry point | Backend | Gate |
-|---|---|---|
-| `Test*AgainstTheFake` | `fake.Directory`, via `factoriesWith(dir)` | `resource.UnitTest`, always runs |
-| `TestAcc*` | a real domain, via `accFactories()` | `resource.Test`, needs `TF_ACC=1` |
+## Tests: the fake/real duality
 
-**The naming convention is load-bearing: `TestAcc*` means "requires a real domain".** A
-fake-backed test must never carry the `Acc` prefix. Fake-versus-real divergence is the
-central risk in this design, and one set of assertions run against both backends is the
-only thing that detects it — so when you change a lifecycle assertion, change the builder,
-never one entry point.
+Full detail is in [CONTRIBUTING.md](./CONTRIBUTING.md#test-architecture); the
+load-bearing facts an agent must not break:
 
-### Acceptance suites fail loudly rather than skipping
+- `internal/provider/` compiles **two test packages** sharing one binary, so
+  there is exactly one `TestMain` (in `acc_sweeper_test.go`).
+- Every lifecycle suite is a container-parameterised builder in `suites_test.go`
+  driven by **two** entry points: `Test*AgainstTheFake` (in-memory, always runs)
+  and `TestAcc*` (real domain, needs `TF_ACC=1`).
+- **`TestAcc*` means "requires a real domain" — the naming is load-bearing.** A
+  fake-backed test must never carry the `Acc` prefix. When you change a lifecycle
+  assertion, change the **builder**, never one entry point, or the two backends
+  drift.
+- Acceptance suites `t.Fatal` (not `t.Skip`) on a missing variable; the e2e layer
+  (`TestAccE2E*`) is the one deliberate skip, gated on `AD_E2E_CONTAINER`.
 
-`accPreCheck` calls `t.Fatal`, not `t.Skip`, on a missing variable: `resource.Test` has
-already decided the suite should run, so a half-configured CI reporting green is worse
-than one reporting red. Required: `AD_ACC_CONTAINER`; plus `AD_ACC_DENIED_CONTAINER` for
-the denial suite and `AD_ACC_SECOND_DC` for replication. Optional: `AD_ACC_SERVER`,
-`AD_ACC_USERNAME`/`AD_ACC_PASSWORD` (both or neither), `AD_ACC_PWSH_PATH`.
+## Real-domain changes must run on the lab
 
-`accProviderConfig` writes the `local {}` block **literally** — selecting the transport by
-environment variable would let the suite pass without ever exercising it.
+A provisioned Windows lab (`corp.local`, two DCs and a member) is the required
+validation path for anything that needs a real domain. **Compiling and skipping
+cleanly is not validation.** Any change that touches AD behaviour must be run
+against the lab (`make lab-acc`, `make lab-e2e`, or `make lab-acc-only
+PATTERN=…`) before it is described as working — say so plainly when a real-domain
+path has not actually been run. `LAB.md` is the source of truth for the lab and
+its run log; the `make lab-*` mechanics are in
+[CONTRIBUTING.md](./CONTRIBUTING.md#the-lab).
 
-Four suites have no fake counterpart and are acceptance-only: delegation denial
-(`acc_denied_test.go`), Terraform-parallelism concurrency, `generate-config-out` brownfield
-adoption, and the replication wait.
+## Releases
 
-### The e2e layer
+The provider publishes to the Terraform Registry as
+[`nemethhh/activedirectory`](https://registry.terraform.io/providers/nemethhh/activedirectory).
+A semver tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`, which runs
+GoReleaser to build every target, GPG-sign the checksums and attach the artefacts
+the Registry ingests. The full cut-a-release checklist, the GPG-key and
+GitHub-secrets setup, and the Registry-side steps are in
+[CONTRIBUTING.md](./CONTRIBUTING.md#releasing-to-the-terraform-registry). Never
+modify an already-released tag — the Registry stores its checksums.
 
-`TestAccE2E*` (`acc_e2e_*_test.go`) is an end-to-end layer that drives the provider —
-in-process, through the real Terraform CLI — against the real domain as **multiple
-delegated non-admin principals**, each configured via a different `credential {}` block
-(`e2eProviderConfig`). Scenario A re-runs the shared lifecycle builders as a full-control
-user; B performs out-of-band drift (delete/modify/rename/move) **through `go-adpwsh`,
-never ad-hoc PowerShell**, then asserts plan detects and apply reconciles it; C runs two
-disjoint full-control users concurrently (`t.Parallel()`) and proves the delegation
-boundary denies a cross-subtree write; D covers wrong-password and partial-permission
-diagnostics.
+## Never commit
 
-The layer carries the suite's **one deliberate skip**: the `TestAccE2E*` suites `t.Skip`
-when `AD_E2E_CONTAINER` is unset, because the layer is a separately provisioned environment
-(three extra principals and their OUs), and are fatal-if-missing on every other `AD_E2E_*`
-once it is set — the same fail-loud posture as `accPreCheck`, gated behind the opt-in. The
-fixtures live in `scripts/lab/13-provision-e2e.ps1` and the launcher in
-`scripts/lab/run-e2e.sh` / `make lab-e2e*`; a second, opt-in sweeper
-(`activedirectory_e2e`) clears the `tfacc-` leftovers beneath `OU=e2e`.
-
-### Object naming and the sweeper
-
-Every object any suite creates is prefixed `tfacc-` (`accNamePrefix`) and lives beneath
-`AD_ACC_CONTAINER`, which is treated as pre-existing and is never created or destroyed.
-`make sweep` deletes exactly the `tfacc-` objects beneath it, deepest first, and nothing
-else. `accCheckDestroy` asks the *directory* whether the object is gone rather than
-trusting state, because an object absent from state may still exist and now be unmanaged.
-
-### Validating real-domain behaviour — the lab is mandatory
-
-A lab **exists** (see `LAB.md`) and is the required validation path for everything that
-needs a real domain: the acceptance suites, the e2e layer, the sweeper's PowerShell, and
-real `pwsh` / `Import-Module ActiveDirectory` / ADWS. Compiling and skipping cleanly is
-**not** validation. Any change that touches AD behaviour must be run against the lab
-(`make lab-acc`, `make lab-e2e`, or a narrower `make lab-acc-only PATTERN=…`) before it is
-described as working. A real-domain path that has not actually been run against the domain
-is not "passing" — say so plainly. `LAB.md` records what has run (the first full run was
-2026-08-20).
-
-## The lab
-
-`LAB.md` documents the Windows Server 2025 hosts — two domain controllers and a
-domain-joined member — used to exercise this provider against the real `corp.local`
-domain, how to reach them (`ssh s-server`, `ssh s-server2`, `ssh s-client`), and the
-`make lab-*` targets that ship this working tree and run the suites there (start with
-`make lab-help` and `make lab-status`). The lab is provisioned and in active use; it
-**must** be used to validate any change to real-domain behaviour. `LAB.md` is the source
-of truth for its current state and its run log.
-
-## Scaffolding that is never committed
-
-`docs/superpowers/` (specs, plans, brainstorms) and `docs/reference/` (vendored clones of
-other providers, kept for comparison) are gitignored working material. Never `git add`
-them. The design documents behind the current code are in `docs/superpowers/specs/` and are
-worth reading before a substantial change.
+`docs/superpowers/` (specs, plans, brainstorms) and `docs/reference/` (vendored
+clones of other providers) are gitignored working material. Never `git add` them.
+The design documents behind the current code are in `docs/superpowers/specs/` and
+are worth reading before a substantial change.

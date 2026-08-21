@@ -1,0 +1,36 @@
+# Terraform Registry release. A semver tag (vX.Y.Z) triggers GoReleaser, which
+# builds every target, signs the checksums with the imported GPG key and
+# attaches the artefacts the Registry ingests to a GitHub Release. The layout is
+# HashiCorp's own, from the framework scaffolding provider.
+name: release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  # goreleaser needs to create the GitHub Release and upload the artefacts.
+  contents: write
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Import GPG key
+        # Imports the key into the runner keyring and primes gpg-agent with the
+        # passphrase, so goreleaser's unattended --batch sign never blocks.
+        uses: crazy-max/ghaction-import-gpg@v6
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # .goreleaser.yml passes this to gpg --local-user to pick the key.
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
