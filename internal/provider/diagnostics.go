@@ -104,6 +104,11 @@ func renderError(op, resourceType string, err error) (summary, detail string) {
 		b.WriteString("\nThe object was written successfully and the **state has been saved**; " +
 			"only the wait for other domain controllers timed out. Re-running apply is safe. " +
 			"Raise replication.timeout, or set replication.wait = false if the wait is not needed.\n")
+	case adpwsh.KindTooManyResults:
+		summary = "Too many results"
+		b.WriteString("\nThe search matched more objects than its limit, and the provider errors " +
+			"rather than silently returning a truncated set. Narrow the filter (container, scope, " +
+			"filter_by or ldap_filter), or raise max_results if you really do want them all.\n")
 	default:
 		summary = "Active Directory operation failed"
 		b.WriteString("\nThe provider does not recognise this condition and deliberately does not " +

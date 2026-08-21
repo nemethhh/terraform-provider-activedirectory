@@ -40,10 +40,18 @@ func (d *userDataSource) Metadata(_ context.Context, _ datasource.MetadataReques
 	resp.TypeName = userDataSourceType
 }
 
-func (d *userDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	attrs := identitySelectorSchema(true)
+// userResultAttributes is the full set of computed user attributes, matching
+// every tfsdk tag on userDataSourceModel. The plural activedirectory_users
+// source uses it verbatim for each result object; the singular source overlays
+// the identity selector (guid/dn/sid/sam_account_name become Optional inputs)
+// on top of it, so the two sources share one projection.
+func userResultAttributes() map[string]dschema.Attribute {
+	attrs := map[string]dschema.Attribute{}
 	for name, desc := range map[string]string{
-		"id": "The objectGUID.", "name": "The user's name (RDN).",
+		"id": "The objectGUID.", "guid": "The objectGUID.",
+		"dn": "The distinguished name.", "sid": "The security identifier.",
+		"sam_account_name":    "The sAMAccountName.",
+		"name":                "The user's name (RDN).",
 		"user_principal_name": "The UPN.", "display_name": "Display name.",
 		"given_name": "First name.", "surname": "Last name.",
 		"description": "Free-text description.", "container": "Distinguished name of the parent.",
@@ -59,9 +67,48 @@ func (d *userDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 	} {
 		attrs[name] = dschema.BoolAttribute{Computed: true, MarkdownDescription: desc}
 	}
+	return attrs
+}
+
+func (d *userDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	attrs := identitySelectorSchema(true)
+	for name, attr := range userResultAttributes() {
+		// guid/dn/sid/sam_account_name are the Optional selector on the singular
+		// source; the read fills them with canonical values afterwards.
+		if _, isSelector := attrs[name]; isSelector {
+			continue
+		}
+		attrs[name] = attr
+	}
 	resp.Schema = dschema.Schema{
 		MarkdownDescription: "Look up a user by GUID, DN, SID, or sAMAccountName. Errors if it does not exist.",
 		Attributes:          attrs,
+	}
+}
+
+// applyUser projects a library User onto the model, filling every field. Shared
+// by the singular source's Read and the plural source's per-result mapping.
+func applyUser(m *userDataSourceModel, u *adpwsh.User) {
+	m.ID = types.StringValue(u.GUID)
+	m.GUID = types.StringValue(u.GUID)
+	m.DN = types.StringValue(u.DN)
+	m.SID = types.StringValue(u.SID)
+	m.SamAccountName = types.StringValue(u.SamAccountName)
+	m.Name = types.StringValue(u.Name)
+	m.UserPrincipalName = types.StringValue(u.UserPrincipalName)
+	m.DisplayName = types.StringValue(u.DisplayName)
+	m.GivenName = types.StringValue(u.GivenName)
+	m.Surname = types.StringValue(u.Surname)
+	m.Description = types.StringValue(u.Description)
+	m.Container = types.StringValue(u.Container)
+	m.Enabled = types.BoolValue(u.Enabled)
+	m.ChangePasswordAtLogon = types.BoolValue(u.ChangePasswordAtLogon)
+	m.CanChangePassword = types.BoolValue(u.CanChangePassword)
+	m.PasswordExpires = types.BoolValue(u.PasswordExpires)
+	if u.AccountExpiration != nil {
+		m.AccountExpiration = types.StringValue(u.AccountExpiration.Format("2006-01-02T15:04:05Z07:00"))
+	} else {
+		m.AccountExpiration = types.StringNull()
 	}
 }
 
@@ -84,27 +131,7 @@ func (d *userDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		resp.Diagnostics.Append(errorDiagnostics("User.Get", userDataSourceType, err)...)
 		return
 	}
-	cfg.ID = types.StringValue(u.GUID)
-	cfg.GUID = types.StringValue(u.GUID)
-	cfg.DN = types.StringValue(u.DN)
-	cfg.SID = types.StringValue(u.SID)
-	cfg.SamAccountName = types.StringValue(u.SamAccountName)
-	cfg.Name = types.StringValue(u.Name)
-	cfg.UserPrincipalName = types.StringValue(u.UserPrincipalName)
-	cfg.DisplayName = types.StringValue(u.DisplayName)
-	cfg.GivenName = types.StringValue(u.GivenName)
-	cfg.Surname = types.StringValue(u.Surname)
-	cfg.Description = types.StringValue(u.Description)
-	cfg.Container = types.StringValue(u.Container)
-	cfg.Enabled = types.BoolValue(u.Enabled)
-	cfg.ChangePasswordAtLogon = types.BoolValue(u.ChangePasswordAtLogon)
-	cfg.CanChangePassword = types.BoolValue(u.CanChangePassword)
-	cfg.PasswordExpires = types.BoolValue(u.PasswordExpires)
-	if u.AccountExpiration != nil {
-		cfg.AccountExpiration = types.StringValue(u.AccountExpiration.Format("2006-01-02T15:04:05Z07:00"))
-	} else {
-		cfg.AccountExpiration = types.StringNull()
-	}
+	applyUser(&cfg, u)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &cfg)...)
 }
 

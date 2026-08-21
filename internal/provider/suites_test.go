@@ -464,6 +464,145 @@ data "activedirectory_user" "src" {
 }
 
 // ---------------------------------------------------------------------------
+// Plural search data sources
+// ---------------------------------------------------------------------------
+
+// usersDataSourceSteps creates two users under a dedicated OU, then searches for
+// them through activedirectory_users with a one_level scope and a filter_by
+// equality term. depends_on defers the search until both users exist. Scoping
+// under a freshly created OU keeps the result set to exactly the suite's own
+// objects on a shared domain, so the count assertion is stable against both
+// backends.
+func usersDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dss-usr-ou"
+	a := accNamePrefix + "dss-usr-a"
+	b := accNamePrefix + "dss-usr-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.src.dn
+  user_principal_name = %q
+  description         = "tfacc-search-target"
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.src.dn
+  user_principal_name = %q
+  description         = "tfacc-search-target"
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+
+data "activedirectory_users" "src" {
+  container  = activedirectory_ou.src.dn
+  scope      = "one_level"
+  filter_by  = { description = "tfacc-search-target" }
+  depends_on = [activedirectory_user.a, activedirectory_user.b]
+}`, ou, e.Container, a, upnA, b, upnB)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_users.src", "users.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_users.src", "users.*",
+				map[string]string{"sam_account_name": a}),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_users.src", "users.*",
+				map[string]string{"sam_account_name": b, "description": "tfacc-search-target"}),
+		),
+	}}
+}
+
+// groupsDataSourceSteps creates two groups under a dedicated OU whose names share
+// a prefix, then searches for them through activedirectory_groups with a raw
+// ldap_filter wildcard. The wildcard exercises the fake evaluator's substring
+// path and, against a real domain, Get-ADGroup's -LDAPFilter.
+func groupsDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dss-grp-ou"
+	a := accNamePrefix + "dss-grp-app-a"
+	b := accNamePrefix + "dss-grp-app-b"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "a" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+}
+resource "activedirectory_group" "b" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+}
+
+data "activedirectory_groups" "src" {
+  container   = activedirectory_ou.src.dn
+  scope       = "one_level"
+  ldap_filter = "(name=%s*)"
+  depends_on  = [activedirectory_group.a, activedirectory_group.b]
+}`, ou, e.Container, a, a, b, b, accNamePrefix+"dss-grp-app-")
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_groups.src", "groups.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_groups.src", "groups.*",
+				map[string]string{"sam_account_name": a, "scope": "global", "category": "security"}),
+		),
+	}}
+}
+
+// ousDataSourceSteps creates two child OUs under a dedicated parent OU, then
+// searches for them through activedirectory_ous with a one_level scope. The
+// parent is the search base, so the two children are exactly the result set.
+func ousDataSourceSteps(e suiteEnv) []resource.TestStep {
+	parent := accNamePrefix + "dss-ou-parent"
+	a := accNamePrefix + "dss-ou-a"
+	b := accNamePrefix + "dss-ou-b"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "a" {
+  name      = %q
+  container = activedirectory_ou.parent.dn
+}
+resource "activedirectory_ou" "b" {
+  name      = %q
+  container = activedirectory_ou.parent.dn
+}
+
+data "activedirectory_ous" "src" {
+  container  = activedirectory_ou.parent.dn
+  scope      = "one_level"
+  depends_on = [activedirectory_ou.a, activedirectory_ou.b]
+}`, parent, e.Container, a, b)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_ous.src", "ous.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_ous.src", "ous.*",
+				map[string]string{"name": a}),
+		),
+	}}
+}
+
+// ---------------------------------------------------------------------------
 // Hostile input
 // ---------------------------------------------------------------------------
 

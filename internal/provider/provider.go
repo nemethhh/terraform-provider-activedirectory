@@ -265,6 +265,7 @@ func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSour
 		newGroupDataSource,
 		newUserDataSource,
 		newGroupMembersDataSource,
+		newUsersDataSource,
 	}
 }
 
