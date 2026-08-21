@@ -21,13 +21,13 @@ jobs:
       - name: Import GPG key
         # Imports the key into the runner keyring and primes gpg-agent with the
         # passphrase, so goreleaser's unattended --batch sign never blocks.
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         id: import_gpg
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           args: release --clean
         env:
