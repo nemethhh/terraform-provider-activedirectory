@@ -263,6 +263,7 @@ func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSour
 	return []func() datasource.DataSource{
 		newOUDataSource,
 		newGroupDataSource,
+		newUserDataSource,
 	}
 }
 

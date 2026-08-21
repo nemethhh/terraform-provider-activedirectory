@@ -412,6 +412,57 @@ resource "activedirectory_user" "jdoe" {
 	}
 }
 
+// userDataSourceSteps creates a managed user and reads it back through the
+// activedirectory_user data source, keyed by objectGUID. It asserts the data
+// source resolves the account and projects the positively-stated flags and the
+// account expiry (the RFC 3339 formatting path) the same way Get-ADUser reads
+// them.
+func userDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-usr-ou"
+	sam := accNamePrefix + "ds-usr"
+	upn := sam + "@" + e.upnSuffix()
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_user" "src" {
+  sam_account_name        = %q
+  container               = activedirectory_ou.src.dn
+  user_principal_name     = %q
+  display_name            = "Jane Roe"
+  given_name              = "Jane"
+  surname                 = "Roe"
+  enabled                 = true
+  password                = "Correct-Horse-Battery-Staple-9"
+  password_version        = 1
+  account_expiration_date = "2027-06-01T12:00:00Z"
+}
+
+data "activedirectory_user" "src" {
+  guid = activedirectory_user.src.id
+}`, ou, e.Container, sam, upn)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_user.src", "id", "activedirectory_user.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_user.src", "sid", "activedirectory_user.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "sam_account_name", sam),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "display_name", "Jane Roe"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "surname", "Roe"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "enabled", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "can_change_password", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "password_expires", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src",
+				"account_expiration_date", "2027-06-01T12:00:00Z"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "container", e.dn("OU="+ou)),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Hostile input
 // ---------------------------------------------------------------------------
