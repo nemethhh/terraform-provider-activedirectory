@@ -221,6 +221,27 @@ What only a real domain proved: the eleven hostile values survive the cmdlet
 layer; `global` to `universal` is a conversion AD permits; `generate-config-out`
 re-plans clean for all three resources; and the sweeper's PowerShell works.
 
+### Group membership, 2026-08-21
+
+The two membership resources (`activedirectory_group_member`,
+`activedirectory_group_membership`) had their first real-domain run. It found one
+defect, again the suite working:
+
+| Defect | Where it was |
+|---|---|
+| `Group.Members` read the member attribute with the LDAP ranged-retrieval option (`-Properties "member;range=0-1499"`), which `Get-ADObject` rejects with `System.ArgumentException`. The AD cmdlets page a multivalued attribute internally, so `-Properties member` already returns the whole set | `go-adpwsh`, fixed in **v0.3.1**; a unit guard now fails if the read op ever uses `range=`. The fake could not catch it — it does not model the cmdlet layer, which is the standing fake-vs-real risk |
+
+What only a real domain proved: `AddMembers`/`RemoveMembers`/`IsMember` (the
+base-scoped `Test-AdMember` search included) all work; a group can be a member of
+a group (nested membership, both resources); and — via the opt-in
+`TestAccGroupMembershipLargeSet` with `AD_ACC_LARGE_COUNT=5000` — `Group.Members`
+reads back all 5000 members of a real group, exercising the cmdlets' internal
+ranged retrieval across four pages. That large-group run is the empirical answer
+to the ranged-read question `LAB.md` and the design had left open.
+
+`s-server2` was down during this run, so the replication suite was not
+re-exercised; the membership suites do not use the second DC.
+
 ### The double hop bites the diagnostics too
 
 A domain controller has no local accounts, so an SSH session on `s-server` runs
