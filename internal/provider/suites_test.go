@@ -161,6 +161,38 @@ resource "activedirectory_ou" "existing" {
 	}}
 }
 
+// ouDataSourceSteps creates a managed OU and reads it straight back through the
+// activedirectory_ou data source in the same config, so the data source's
+// resolve-by-identity and state mapping are asserted against both backends. The
+// data source keys off the resource's dn, which both establishes the dependency
+// (the read is deferred until the OU exists) and proves lookup by DN.
+func ouDataSourceSteps(e suiteEnv) []resource.TestStep {
+	name := accNamePrefix + "ds-ou"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name        = %q
+  container   = %q
+  description = "data source read-back"
+}
+
+data "activedirectory_ou" "src" {
+  dn = activedirectory_ou.src.dn
+}`, name, e.Container)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_ou.src", "id", "activedirectory_ou.src", "id"),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "container", e.Container),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src", "description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_ou.src",
+				"protected_from_accidental_deletion", "true"),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Groups
 // ---------------------------------------------------------------------------
@@ -241,6 +273,45 @@ resource "activedirectory_group" "devs" {
 			ImportStateVerify: true,
 		},
 	}
+}
+
+// groupDataSourceSteps creates a managed group and reads it back through the
+// activedirectory_group data source, keyed by sAMAccountName. It asserts the
+// data source resolves the security principal and projects the same id, sid,
+// scope and category the resource holds.
+func groupDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-grp-ou"
+	name := accNamePrefix + "ds-grp"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "src" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+  description      = "data source read-back"
+}
+
+data "activedirectory_group" "src" {
+  sam_account_name = activedirectory_group.src.sam_account_name
+}`, ou, e.Container, name, name)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_group.src", "id", "activedirectory_group.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_group.src", "sid", "activedirectory_group.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "scope", "global"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "category", "security"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "container", e.dn("OU="+ou)),
+		),
+	}}
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +410,196 @@ resource "activedirectory_user" "jdoe" {
 			ImportStateVerifyIgnore: []string{"password", "password_version"},
 		},
 	}
+}
+
+// userDataSourceSteps creates a managed user and reads it back through the
+// activedirectory_user data source, keyed by objectGUID. It asserts the data
+// source resolves the account and projects the positively-stated flags and the
+// account expiry (the RFC 3339 formatting path) the same way Get-ADUser reads
+// them.
+func userDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-usr-ou"
+	sam := accNamePrefix + "ds-usr"
+	upn := sam + "@" + e.upnSuffix()
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_user" "src" {
+  sam_account_name        = %q
+  container               = activedirectory_ou.src.dn
+  user_principal_name     = %q
+  display_name            = "Jane Roe"
+  given_name              = "Jane"
+  surname                 = "Roe"
+  enabled                 = true
+  password                = "Correct-Horse-Battery-Staple-9"
+  password_version        = 1
+  account_expiration_date = "2027-06-01T12:00:00Z"
+}
+
+data "activedirectory_user" "src" {
+  guid = activedirectory_user.src.id
+}`, ou, e.Container, sam, upn)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_user.src", "id", "activedirectory_user.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_user.src", "sid", "activedirectory_user.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "sam_account_name", sam),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "display_name", "Jane Roe"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "surname", "Roe"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "enabled", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "can_change_password", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "password_expires", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src",
+				"account_expiration_date", "2027-06-01T12:00:00Z"),
+			resource.TestCheckResourceAttr("data.activedirectory_user.src", "container", e.dn("OU="+ou)),
+		),
+	}}
+}
+
+// ---------------------------------------------------------------------------
+// Plural search data sources
+// ---------------------------------------------------------------------------
+
+// usersDataSourceSteps creates two users under a dedicated OU, then searches for
+// them through activedirectory_users with a one_level scope and a filter_by
+// equality term. depends_on defers the search until both users exist. Scoping
+// under a freshly created OU keeps the result set to exactly the suite's own
+// objects on a shared domain, so the count assertion is stable against both
+// backends.
+func usersDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dss-usr-ou"
+	a := accNamePrefix + "dss-usr-a"
+	b := accNamePrefix + "dss-usr-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.src.dn
+  user_principal_name = %q
+  description         = "tfacc-search-target"
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.src.dn
+  user_principal_name = %q
+  description         = "tfacc-search-target"
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+
+data "activedirectory_users" "src" {
+  container  = activedirectory_ou.src.dn
+  scope      = "one_level"
+  filter_by  = { description = "tfacc-search-target" }
+  depends_on = [activedirectory_user.a, activedirectory_user.b]
+}`, ou, e.Container, a, upnA, b, upnB)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_users.src", "users.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_users.src", "users.*",
+				map[string]string{"sam_account_name": a}),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_users.src", "users.*",
+				map[string]string{"sam_account_name": b, "description": "tfacc-search-target"}),
+		),
+	}}
+}
+
+// groupsDataSourceSteps creates two groups under a dedicated OU whose names share
+// a prefix, then searches for them through activedirectory_groups with a raw
+// ldap_filter wildcard. The wildcard exercises the fake evaluator's substring
+// path and, against a real domain, Get-ADGroup's -LDAPFilter.
+func groupsDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dss-grp-ou"
+	a := accNamePrefix + "dss-grp-app-a"
+	b := accNamePrefix + "dss-grp-app-b"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "a" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+}
+resource "activedirectory_group" "b" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+}
+
+data "activedirectory_groups" "src" {
+  container   = activedirectory_ou.src.dn
+  scope       = "one_level"
+  ldap_filter = "(name=%s*)"
+  depends_on  = [activedirectory_group.a, activedirectory_group.b]
+}`, ou, e.Container, a, a, b, b, accNamePrefix+"dss-grp-app-")
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_groups.src", "groups.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_groups.src", "groups.*",
+				map[string]string{"sam_account_name": a, "scope": "global", "category": "security"}),
+		),
+	}}
+}
+
+// ousDataSourceSteps creates two child OUs under a dedicated parent OU, then
+// searches for them through activedirectory_ous with a one_level scope. The
+// parent is the search base, so the two children are exactly the result set.
+func ousDataSourceSteps(e suiteEnv) []resource.TestStep {
+	parent := accNamePrefix + "dss-ou-parent"
+	a := accNamePrefix + "dss-ou-a"
+	b := accNamePrefix + "dss-ou-b"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "a" {
+  name      = %q
+  container = activedirectory_ou.parent.dn
+}
+resource "activedirectory_ou" "b" {
+  name      = %q
+  container = activedirectory_ou.parent.dn
+}
+
+data "activedirectory_ous" "src" {
+  container  = activedirectory_ou.parent.dn
+  scope      = "one_level"
+  depends_on = [activedirectory_ou.a, activedirectory_ou.b]
+}`, parent, e.Container, a, b)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_ous.src", "ous.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_ous.src", "ous.*",
+				map[string]string{"name": a}),
+		),
+	}}
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +810,68 @@ resource "activedirectory_group_membership" "s" {
 			ImportStateVerify: true,
 		},
 	}
+}
+
+// groupMembersDataSourceSteps grows a group to two members through the
+// authoritative membership resource, then reads them back through the
+// activedirectory_group_members data source. depends_on defers the data source
+// read until the membership apply has run, so the read sees the full set. The
+// class assertion uses the set form because a member list has no guaranteed
+// order on a real domain. Large-group paging past the 1500-entry boundary is
+// proved directly against the library by TestAccGroupMembershipLargeSet and by
+// TestAccGroupMembersDataSourceLargeSet through this data source.
+func groupMembersDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dsm-ou"
+	grp := accNamePrefix + "dsm-grp"
+	a := accNamePrefix + "dsm-a"
+	b := accNamePrefix + "dsm-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = [activedirectory_user.a.id, activedirectory_user.b.id]
+}
+
+data "activedirectory_group_members" "g" {
+  sam_account_name = activedirectory_group.g.sam_account_name
+  depends_on       = [activedirectory_group_membership.s]
+}`, ou, e.Container, grp, grp, a, upnA, b, upnB)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_group_members.g", "members.#", "2"),
+			// Order is not guaranteed on a real domain, so assert by set membership.
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_group_members.g", "members.*",
+				map[string]string{"class": "user"}),
+		),
+	}}
 }
 
 // ---------------------------------------------------------------------------

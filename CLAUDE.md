@@ -12,10 +12,13 @@ reimplemented here. This repo contains only schemas, plan/state mapping, diagnos
 and import.
 
 When a task needs new AD behaviour, the change belongs in the library, not here. The
-library's operation set is deliberately closed and exposes no directory search; the one
-place this repo owns PowerShell is the test sweeper (`acc_sweeper_test.go`), and it
-follows the library's contract — script is a constant, every value arrives as JSON on
-stdin, nothing is ever formatted into script text.
+library's operation set is deliberately narrow: as of `go-adpwsh` v0.4.0 it exposes
+directory search as three typed, class-scoped reads (`OU.Search`/`Group.Search`/`User.Search`),
+but it is still not an arbitrary directory API — there is no generic object search, and
+object mutation remains get-by-identity only. The one place this repo owns PowerShell is
+the test sweeper (`acc_sweeper_test.go`), and it follows the library's contract — script
+is a constant, every value arrives as JSON on stdin, nothing is ever formatted into script
+text.
 
 ## Commands
 

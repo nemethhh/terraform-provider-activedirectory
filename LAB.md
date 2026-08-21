@@ -242,6 +242,37 @@ to the ranged-read question `LAB.md` and the design had left open.
 `s-server2` was down during this run, so the replication suite was not
 re-exercised; the membership suites do not use the second DC.
 
+### Data sources and directory search, 2026-08-21
+
+The seven read-only data sources — `activedirectory_ou`/`_group`/`_user`,
+`activedirectory_group_members`, and the plural typed searches
+`activedirectory_ous`/`_groups`/`_users` — had their first real-domain run,
+backed by the new class-scoped search primitive in `go-adpwsh` **v0.4.0**
+(`OU.Search`/`Group.Search`/`User.Search`, and the exported
+`EscapeFilter`/`Equal`/`And` filter builder). The full `make lab-acc` run was
+clean: all seven data-source suites passed, and every existing resource,
+membership, hostile-input, concurrency, brownfield and delegation-denial suite
+passed again against `v0.4.0`, so the library bump introduced no regression.
+
+What only a real domain proved: the singular sources resolve a managed object
+back through `Get-AD*` (OU by DN, group by sAMAccountName, user by objectGUID,
+including the account-expiry RFC 3339 round-trip); the plural sources honour
+`container` + `scope` (`one_level`) and both filter inputs — `filter_by`
+equality (users) and a raw `ldap_filter` wildcard `(name=…*)` matched by
+`Get-ADGroup` (groups); and `activedirectory_group_members` enumerates a real
+group's membership. The `max_results` over-limit error (`KindTooManyResults`)
+and the fake's bounded-grammar evaluator are exercised by the always-on
+fake-backed suites rather than a dedicated acc assertion; the >1500-member
+paging path through the data source has an opt-in acc test
+(`TestAccGroupMembersDataSourceLargeSet`, gated on `AD_ACC_LARGE_COUNT`) on top
+of the library-level `TestAccGroupMembershipLargeSet` already recorded above.
+
+`s-server2` was down during this run (`192.168.50.32` refused 22/389/9389), so
+the three `TestAccReplication*` suites failed with `Cannot reach Active
+Directory` (a transport error reaching the second DC) — infrastructure, not a
+regression: nothing in this change touches the replication path. Everything else
+passed.
+
 ### The double hop bites the diagnostics too
 
 A domain controller has no local accounts, so an SSH session on `s-server` runs
