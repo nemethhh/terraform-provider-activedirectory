@@ -255,6 +255,7 @@ func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
 		newGroupResource,
 		newUserResource,
 		newGroupMemberResource,
+		newGroupMembershipResource,
 	}
 }
 

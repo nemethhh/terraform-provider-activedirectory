@@ -463,3 +463,90 @@ resource "activedirectory_group_member" "m" {
 		},
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Group membership — authoritative (activedirectory_group_membership)
+// ---------------------------------------------------------------------------
+
+// groupMembershipSteps owns a group's whole member set: start with one member,
+// grow to two, shrink to one, then empty. Each apply reconciles the group to
+// exactly the configured set, and a no-diff replan follows the grow step.
+func groupMembershipSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "gs-ou"
+	grp := accNamePrefix + "gs-grp"
+	a := accNamePrefix + "gs-a"
+	b := accNamePrefix + "gs-b"
+	upnA := a + "@" + e.upnSuffix()
+	upnB := b + "@" + e.upnSuffix()
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_user" "a" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+resource "activedirectory_user" "b" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}
+`, ou, e.Container, grp, grp, a, upnA, b, upnB)
+
+	one := `
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = [activedirectory_user.a.id]
+}`
+	two := `
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = [activedirectory_user.a.id, activedirectory_user.b.id]
+}`
+	empty := `
+resource "activedirectory_group_membership" "s" {
+  group_id = activedirectory_group.g.id
+  members  = []
+}`
+
+	return []resource.TestStep{
+		{
+			Config: base + one,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrPair(
+					"activedirectory_group_membership.s", "id", "activedirectory_group.g", "id"),
+				resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "1"),
+			),
+		},
+		{
+			Config: base + two,
+			Check:  resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "2"),
+		},
+		{Config: base + two, PlanOnly: true},
+		{
+			Config: base + one,
+			Check:  resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "1"),
+		},
+		{
+			Config: base + empty,
+			Check:  resource.TestCheckResourceAttr("activedirectory_group_membership.s", "members.#", "0"),
+		},
+		{
+			ResourceName:      "activedirectory_group_membership.s",
+			ImportState:       true,
+			ImportStateVerify: true,
+		},
+	}
+}
