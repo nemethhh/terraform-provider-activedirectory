@@ -275,6 +275,45 @@ resource "activedirectory_group" "devs" {
 	}
 }
 
+// groupDataSourceSteps creates a managed group and reads it back through the
+// activedirectory_group data source, keyed by sAMAccountName. It asserts the
+// data source resolves the security principal and projects the same id, sid,
+// scope and category the resource holds.
+func groupDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-grp-ou"
+	name := accNamePrefix + "ds-grp"
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "src" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.src.dn
+  description      = "data source read-back"
+}
+
+data "activedirectory_group" "src" {
+  sam_account_name = activedirectory_group.src.sam_account_name
+}`, ou, e.Container, name, name)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_group.src", "id", "activedirectory_group.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_group.src", "sid", "activedirectory_group.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "scope", "global"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "category", "security"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_group.src", "container", e.dn("OU="+ou)),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
