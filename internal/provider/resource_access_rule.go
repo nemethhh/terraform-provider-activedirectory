@@ -180,6 +180,69 @@ func (r *accessRuleResource) Configure(_ context.Context, req resource.Configure
 	r.client = clientFromProviderData(req.ProviderData, &resp.Diagnostics)
 }
 
+// appliesToScopeValidator rejects an applies_to.object_class paired with
+// applies_to.scope = "this". InheritanceThis maps to .NET's
+// ActiveDirectorySecurityInheritance.None, which carries no
+// inheritedObjectType, so a real DC does not persist or report one: Read would
+// see object_class come back "" while state still holds the configured value,
+// canonicalACEKey would stop matching, and the resource would loop through
+// RemoveResource and recreate forever. The four delegation templates never
+// pair "this" with a class, but a hand-written config can, so this is caught
+// at plan time instead.
+type appliesToScopeValidator struct{}
+
+func (appliesToScopeValidator) Description(context.Context) string {
+	return "applies_to.object_class must be empty when applies_to.scope is \"this\"."
+}
+
+func (v appliesToScopeValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (appliesToScopeValidator) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config accessRuleModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	scope := config.AppliesTo.Scope
+	objectClass := config.AppliesTo.ObjectClass
+	// An unknown value (e.g. interpolated from another resource) cannot be
+	// checked until apply time; let it through here.
+	if scope.IsUnknown() || objectClass.IsUnknown() {
+		return
+	}
+
+	// Both fields default within the nested attribute itself, so a config that
+	// omits one or both (or the whole applies_to object) reads back null here,
+	// not the eventual default. Apply the same defaults ("this" / "") the
+	// schema would, so the omitted-scope case (object_class set, scope left to
+	// default to "this") is caught too, not just an explicit scope = "this".
+	effectiveScope := string(adpwsh.InheritanceThis)
+	if !scope.IsNull() {
+		effectiveScope = scope.ValueString()
+	}
+	effectiveObjectClass := ""
+	if !objectClass.IsNull() {
+		effectiveObjectClass = objectClass.ValueString()
+	}
+
+	if effectiveScope == string(adpwsh.InheritanceThis) && effectiveObjectClass != "" {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("applies_to").AtName("object_class"),
+			"Invalid applies_to combination",
+			"applies_to.object_class is only meaningful when applies_to.scope is \"descendants\" or "+
+				"\"children\"; with scope = \"this\" the rule applies to the target object itself, so "+
+				"object_class must be empty.",
+		)
+	}
+}
+
+func (r *accessRuleResource) ConfigValidators(context.Context) []resource.ConfigValidator {
+	return []resource.ConfigValidator{appliesToScopeValidator{}}
+}
+
 // inferObjectTypeRefKind decides which schema partition object_type names,
 // from the rights it is paired with (ruling P2): CreateChild/DeleteChild name
 // a child class, ExtendedRight names an extended right, and anything else
@@ -484,7 +547,8 @@ func (r *accessRuleResource) ImportState(ctx context.Context, req resource.Impor
 }
 
 var (
-	_ resource.Resource                = (*accessRuleResource)(nil)
-	_ resource.ResourceWithConfigure   = (*accessRuleResource)(nil)
-	_ resource.ResourceWithImportState = (*accessRuleResource)(nil)
+	_ resource.Resource                     = (*accessRuleResource)(nil)
+	_ resource.ResourceWithConfigure        = (*accessRuleResource)(nil)
+	_ resource.ResourceWithConfigValidators = (*accessRuleResource)(nil)
+	_ resource.ResourceWithImportState      = (*accessRuleResource)(nil)
 )
