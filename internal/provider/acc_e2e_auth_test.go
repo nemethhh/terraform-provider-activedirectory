@@ -13,12 +13,12 @@ import (
 // a panic; a partially-delegated principal must get the right classification
 // when an operation exceeds its grant.
 
-// The exact classification of a bad credential (KindDenied vs KindTransport) is
-// what the FIRST real run against the lab pins — like the three defects the base
-// suite's first run surfaced. Until then, match the family of clean diagnostics
-// the provider can render, and never a raw cmdlet dump or a panic.
+// Pinned to what the first real lab run produced (2026-08-21): a bad credential
+// is caught at provider-configure time and rendered as the clean summary
+// "Cannot configure the Active Directory client" whose detail carries the
+// authentication failure from ADWS — never a raw cmdlet dump or a panic.
 var e2eWrongPasswordRe = regexp.MustCompile(
-	`(?s)(Access denied by Active Directory|Cannot reach Active Directory|Active Directory operation failed)`)
+	`(?s)Cannot configure the Active Directory client.*Authentication failed`)
 
 func TestAccE2EWrongPassword(t *testing.T) {
 	cfg := e2eProviderConfig(os.Getenv(envE2EAlphaUser), "definitely-the-wrong-password-x9") +

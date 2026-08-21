@@ -136,7 +136,7 @@ resource "activedirectory_ou" "r" {
   container = %q
 }`, name, e.Container)
 
-	var guid1 string
+	var guid1, guid2 string
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
 		ProtoV6ProviderFactories: accFactories(),
@@ -160,7 +160,16 @@ resource "activedirectory_ou" "r" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("activedirectory_ou.r", "name", name),
 					resource.TestCheckResourceAttr("activedirectory_ou.r", "dn", "OU="+name+","+e.Container),
-					resource.TestCheckResourceAttr("activedirectory_ou.r", "id", guid1), // stable
+					// The GUID is captured and compared at check-time: guid1 is
+					// still "" when the TestStep slice is built, so it cannot be
+					// passed to TestCheckResourceAttr directly (that reads it eagerly).
+					captureAttr("activedirectory_ou.r", "id", &guid2),
+					func(*terraform.State) error {
+						if guid2 != guid1 {
+							return fmt.Errorf("rename reconcile must be in-place: GUID changed %q -> %q", guid1, guid2)
+						}
+						return nil
+					},
 				),
 			},
 			{Config: cfg, PlanOnly: true},
@@ -184,7 +193,7 @@ resource "activedirectory_ou" "child" {
   container = %q
 }`, parent, e.Container, child, e.Container)
 
-	var childGUID, parentDN string
+	var childGUID, childGUID2, parentDN string
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
 		ProtoV6ProviderFactories: accFactories(),
@@ -214,7 +223,15 @@ resource "activedirectory_ou" "child" {
 				Config: cfg,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("activedirectory_ou.child", "dn", "OU="+child+","+e.Container),
-					resource.TestCheckResourceAttr("activedirectory_ou.child", "id", childGUID), // stable
+					// See TestAccE2EDriftOURenamed: compare the GUID at check-time,
+					// because childGUID is empty when the TestStep slice is built.
+					captureAttr("activedirectory_ou.child", "id", &childGUID2),
+					func(*terraform.State) error {
+						if childGUID2 != childGUID {
+							return fmt.Errorf("move reconcile must be in-place: GUID changed %q -> %q", childGUID, childGUID2)
+						}
+						return nil
+					},
 				),
 			},
 			{Config: cfg, PlanOnly: true},
