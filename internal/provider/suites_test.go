@@ -100,6 +100,32 @@ resource "activedirectory_ou" "staff" {
   description = ""
 }`, parent, e.Container, renamed)
 
+	// Protection toggled off in place, then back on. The objectGUID is stable
+	// throughout: this is an attribute update, not a replace.
+	movedUnprotected := fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "staff" {
+  name                               = %q
+  container                          = activedirectory_ou.parent.dn
+  description                        = ""
+  protected_from_accidental_deletion = false
+}`, parent, e.Container, renamed)
+
+	movedReprotected := fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "staff" {
+  name                               = %q
+  container                          = activedirectory_ou.parent.dn
+  description                        = ""
+  protected_from_accidental_deletion = true
+}`, parent, e.Container, renamed)
+
 	return []resource.TestStep{
 		{
 			Config: e.ProviderConfig + create,
@@ -107,7 +133,6 @@ resource "activedirectory_ou" "staff" {
 				resource.TestCheckResourceAttrSet("activedirectory_ou.staff", "id"),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "dn", e.dn("OU="+staff)),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "description", "The staff OU"),
-				// AD's own default, mirrored rather than silently inverted.
 				resource.TestCheckResourceAttr("activedirectory_ou.staff",
 					"protected_from_accidental_deletion", "true"),
 			),
@@ -124,6 +149,16 @@ resource "activedirectory_ou" "staff" {
 					"OU="+renamed+",OU="+parent+","+e.Container),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "description", ""),
 			),
+		},
+		{
+			Config: e.ProviderConfig + movedUnprotected,
+			Check: resource.TestCheckResourceAttr("activedirectory_ou.staff",
+				"protected_from_accidental_deletion", "false"),
+		},
+		{
+			Config: e.ProviderConfig + movedReprotected,
+			Check: resource.TestCheckResourceAttr("activedirectory_ou.staff",
+				"protected_from_accidental_deletion", "true"),
 		},
 		{
 			ResourceName:      "activedirectory_ou.staff",
