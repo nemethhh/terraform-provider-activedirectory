@@ -83,6 +83,7 @@ try {
             # >= buckets for every child to be non-empty, which the large-set test is.)
             $base = [Math]::Floor($p.count / $buckets)
             $rem  = $p.count - ($base * $buckets)
+            $chunk = 500
             $all = New-Object System.Collections.Generic.List[string]
             $made = 0
             for ($b = 0; $b -lt $buckets; $b++) {
@@ -95,14 +96,14 @@ try {
                     $u = New-ADUser -Name $name -SamAccountName $name -Path $ou -Enabled $false -PassThru @common
                     $dns.Add($u.DistinguishedName); $all.Add($u.DistinguishedName); $made++
                 }
-                for ($i = 0; $i -lt $dns.Count; $i += 500) {
-                    $hi = [Math]::Min($i + 499, $dns.Count - 1)
+                for ($i = 0; $i -lt $dns.Count; $i += $chunk) {
+                    $hi = [Math]::Min($i + $chunk - 1, $dns.Count - 1)
                     Add-ADGroupMember -Identity $child -Members $dns[$i..$hi] -Confirm:$false @common
                 }
                 Add-ADGroupMember -Identity $top -Members $child -Confirm:$false @common
             }
-            for ($i = 0; $i -lt $all.Count; $i += 500) {
-                $hi = [Math]::Min($i + 499, $all.Count - 1)
+            for ($i = 0; $i -lt $all.Count; $i += $chunk) {
+                $hi = [Math]::Min($i + $chunk - 1, $all.Count - 1)
                 Add-ADGroupMember -Identity $flat -Members $all[$i..$hi] -Confirm:$false @common
             }
             $data = [ordered]@{ topGuid = $top.ObjectGUID.ToString(); flatGuid = $flat.ObjectGUID.ToString(); ou = $ou; count = $made; buckets = $buckets }
