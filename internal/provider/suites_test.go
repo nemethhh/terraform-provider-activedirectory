@@ -1087,11 +1087,15 @@ resource "activedirectory_group_membership" "s" {
 	}
 }
 
-// accessRuleSteps proves a single access_rule creates one ACE, replans clean,
-// and round-trips through import: the ACE's friendly names (object_type
-// "Reset Password", applies_to.object_class "user") resolve to GUIDs and the
-// trustee resolves to a SID, none of which are echoed back verbatim on import
-// (hence the ImportStateVerifyIgnore below).
+// accessRuleSteps proves depth beyond a single ACE: three independent rules
+// coexist on the same target (single-right + object_type, multi-right, and an
+// independent Deny), a no-diff replan, a replace-as-revoke+grant when an
+// existing rule's Type flips Allow->Deny (access_rule is replace-only — every
+// attribute forces a replace, so Update is unreachable), and round-trip
+// through import. The ACE's friendly names (object_type "Reset Password",
+// applies_to.object_class "user") resolve to GUIDs and the trustee resolves
+// to a SID, none of which are echoed back verbatim on import (hence the
+// ImportStateVerifyIgnore below).
 func accessRuleSteps(e suiteEnv) []resource.TestStep {
 	ou := accNamePrefix + "ar-ou"
 	grp := accNamePrefix + "ar-grp"
@@ -1108,7 +1112,8 @@ resource "activedirectory_group" "helpdesk" {
 }
 `, ou, e.Container, grp, grp)
 
-	rule := `
+	// reset: the original single ExtendedRight ACE.
+	reset := `
 resource "activedirectory_access_rule" "reset" {
   target      = activedirectory_ou.t.dn
   trustee     = activedirectory_group.helpdesk.id
@@ -1121,21 +1126,77 @@ resource "activedirectory_access_rule" "reset" {
   type = "Allow"
 }`
 
+	// write: a second, independent ACE on the same target with two rights and no
+	// object_type (all properties). Proves multiple ACEs coexist and multi-right
+	// mapping.
+	write := `
+resource "activedirectory_access_rule" "write" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["ReadProperty", "WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Allow"
+}`
+
+	// writeDeny: the same rule as write but Type flipped Allow->Deny. Because the
+	// resource is replace-only, applying this destroys the Allow ACE and creates
+	// the Deny ACE; the DACL must end with exactly the Deny form.
+	writeDeny := `
+resource "activedirectory_access_rule" "write" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["ReadProperty", "WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Deny"
+}`
+
+	// deny: an independent Deny ACE. Distinct rights set from write, so its
+	// canonical key never collides.
+	deny := `
+resource "activedirectory_access_rule" "deny" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Deny"
+}`
+
 	return []resource.TestStep{
 		{
-			Config: base + rule,
+			Config: base + reset + write + deny,
 			Check: resource.ComposeAggregateTestCheckFunc(
-				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "id"),
 				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "trustee_sid"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.reset", "type", "Allow"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Allow"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.deny", "type", "Deny"),
 			),
 		},
-		{Config: base + rule, PlanOnly: true},
+		{Config: base + reset + write + deny, PlanOnly: true},
+		{
+			// Replace proof: flip write from Allow to Deny.
+			Config: base + reset + writeDeny + deny,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Deny"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
+			),
+		},
+		{Config: base + reset + writeDeny + deny, PlanOnly: true},
 		{
 			ResourceName:            "activedirectory_access_rule.reset",
 			ImportState:             true,
 			ImportStateVerify:       true,
 			ImportStateVerifyIgnore: []string{"target", "trustee", "object_type", "applies_to"},
+			Config:                  base + reset + writeDeny + deny,
 		},
 	}
 }
