@@ -278,7 +278,7 @@ func TestAccGroupMembersRecursiveLargeSet(t *testing.T) {
 		}
 	})
 
-	config := accProviderConfig() + fmt.Sprintf(`
+	config := accProviderConfigWithTimeout("20m") + fmt.Sprintf(`
 data "activedirectory_group_members" "flat_direct" {
   guid = %q
 }
