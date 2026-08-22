@@ -147,8 +147,10 @@ func TestAccE2EReorgLeafMove(t *testing.T) {
 				Config: after,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					reorgStable(&ids),
-					resource.TestCheckResourceAttr("activedirectory_group.devs", "container", e.dn("OU="+bench)),
-					resource.TestCheckResourceAttr("activedirectory_user.alice", "container", e.dn("OU="+bench)),
+					// bench sits under dept, so its DN is not e.dn("OU="+bench);
+					// compare against the OU's own computed dn instead.
+					resource.TestCheckResourceAttrPair("activedirectory_group.devs", "container", "activedirectory_ou.bench", "dn"),
+					resource.TestCheckResourceAttrPair("activedirectory_user.alice", "container", "activedirectory_ou.bench", "dn"),
 					resource.TestCheckResourceAttr("activedirectory_group_membership.devs", "members.#", "1"),
 					resource.TestCheckResourceAttrSet("activedirectory_access_rule.helpdesk", "trustee_sid"),
 				),
