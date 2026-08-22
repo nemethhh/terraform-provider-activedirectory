@@ -138,6 +138,10 @@ github.com/mitchellh/reflectwalk v1.0.2 h1:G2LzWKi524PWgd3mLHV8Y5k7s6XUvT0Gef6zx
 github.com/mitchellh/reflectwalk v1.0.2/go.mod h1:mSTlrgnPZtwu0c4WaC2kGObEpuNDbx0jmZXqmk4esnw=
 github.com/nemethhh/go-adpwsh v0.5.1 h1:tQbyWP/l4uwoReQMTZQHR+G4Jv9eC5NGntKnYJPIq+E=
 github.com/nemethhh/go-adpwsh v0.5.1/go.mod h1:WODKtO1rRs0RYiK0t1i1gpOC5/v/ceSCreiKckyiaKs=
+github.com/nemethhh/go-adpwsh v0.5.2-0.20260822131400-165e4142bde3 h1:GuazLUxD3j9/MugZkEs8EBeGljZnaCEcU/T3ibL58oQ=
+github.com/nemethhh/go-adpwsh v0.5.2-0.20260822131400-165e4142bde3/go.mod h1:WODKtO1rRs0RYiK0t1i1gpOC5/v/ceSCreiKckyiaKs=
+github.com/nemethhh/go-adpwsh v0.6.0 h1:xrxSQ9ccVL1coQjrHj9i+mF6GqfcerFUrYZ4Nr5XGBU=
+github.com/nemethhh/go-adpwsh v0.6.0/go.mod h1:WODKtO1rRs0RYiK0t1i1gpOC5/v/ceSCreiKckyiaKs=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=
 github.com/oklog/run v1.2.0/go.mod h1:mgDbKRSwPhJfesJ4PntqFUbKQRZ50NgmZTSPlFA0YFk=
 github.com/pjbgf/sha1cd v0.3.2 h1:a9wb0bp1oC2TGwStyn0Umc/IGKQnEgF0vVaZ8QF8eo4=
