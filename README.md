@@ -1,8 +1,9 @@
 # Terraform Provider for Active Directory
 
-Manage organizational units, groups and user accounts in Active Directory from
-Terraform — create, update, rename, move, import and search, with a real
-read-back after every write so an apply converges on the first run.
+Manage organizational units, groups, user accounts and access control in Active
+Directory from Terraform — create, update, rename, move, import, search and
+delegate, with a real read-back after every write so an apply converges on the
+first run.
 
 - **Registry:** [`nemethhh/activedirectory`](https://registry.terraform.io/providers/nemethhh/activedirectory/latest)
 - **Documentation:** [registry docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs)
@@ -72,6 +73,11 @@ the host the problem does not arise, and `domain.credential` remains available
 for the case where operations must authenticate as some account other than the
 one that launched Terraform.
 
+Most operations produce a script too large for a command line, so over SSH they
+are shipped to a temporary file with SFTP and run with `-File` — which also lets
+the transport work when the jump box's OpenSSH `DefaultShell` is `cmd.exe`. This
+needs the OpenSSH `sftp` subsystem, which Windows OpenSSH enables by default.
+
 DC pinning matters in both deployments: a write and the read-back that follows
 it cannot land on different replicas, which is what makes an apply converge on
 the first run rather than the third.
@@ -108,6 +114,7 @@ deployment; `AD_SSH_HOST`, `AD_SSH_PORT`, `AD_SSH_USER`, `AD_SSH_PRIVATE_KEY`,
 | `activedirectory_user` | A user account |
 | `activedirectory_group_member` | A single, non-authoritative membership edge — leaves other members untouched |
 | `activedirectory_group_membership` | A group's entire, authoritative member set — reconciles out-of-band members away |
+| `activedirectory_access_rule` | A single access-control entry (ACE) on any object — non-authoritative; grants a trustee specific rights, the building block for delegation |
 
 Use at most one of `activedirectory_group_member` and
 `activedirectory_group_membership` per group; do not manage the same group with
@@ -120,6 +127,7 @@ both.
 | `activedirectory_ou` / `activedirectory_group` / `activedirectory_user` | One object by GUID, DN, SID or sAMAccountName |
 | `activedirectory_ous` / `activedirectory_groups` / `activedirectory_users` | A search under a container, by scope and filter |
 | `activedirectory_group_members` | A group's direct members |
+| `activedirectory_delegation_template` | The access rules a named delegation task expands into — fed into `activedirectory_access_rule` |
 
 A few conventions worth knowing before reading the schemas:
 
@@ -130,9 +138,11 @@ A few conventions worth knowing before reading the schemas:
 - Booleans are stated positively: `can_change_password`, `password_expires`.
   Active Directory's own parameters are the negative form, and mirroring that
   would make every configuration read as a double negative.
-- Renaming or moving an object updates it in place. Nothing in this provider
-  forces a replace, because deleting and recreating an AD object destroys its
-  SID and every ACL that references it.
+- Renaming or moving an *object* updates it in place — the provider never
+  deletes and recreates an object, because that would destroy its SID and every
+  ACL that references it. The relationship resources
+  (`activedirectory_group_member`, `activedirectory_access_rule`) do replace on
+  change, since a membership edge or an ACE has no SID of its own to preserve.
 
 ## Adopting an existing directory
 
@@ -186,6 +196,49 @@ resource "activedirectory_user" "jdoe" {
   password_version = 1
 }
 ```
+
+## Access control and delegation
+
+`activedirectory_access_rule` manages a **single access-control entry** on any
+object's DACL. It is non-authoritative: it owns exactly the ACE it creates and
+leaves every other entry — inherited defaults, other trustees' grants —
+untouched, so several rules can target the same object safely. Rights and object
+types are named, not raw masks or GUIDs; the friendly names resolve to schema
+GUIDs against the directory, with the common ones answered from a built-in table.
+
+```hcl
+resource "activedirectory_access_rule" "helpdesk_reset_pw" {
+  target      = activedirectory_ou.staff.dn        # any object, DN or GUID
+  trustee     = activedirectory_group.helpdesk.id  # any security principal
+  rights      = ["ExtendedRight"]
+  object_type = "Reset Password"
+  applies_to  = { scope = "descendants", object_class = "user" }
+  type        = "Allow"
+}
+```
+
+For the common tasks, `activedirectory_delegation_template` expands a named task
+into the exact set of rules it needs; fan them out with `for_each`:
+
+```hcl
+data "activedirectory_delegation_template" "manage_users" {
+  task = "manage_users" # or reset_user_passwords, modify_group_membership, manage_groups
+}
+
+resource "activedirectory_access_rule" "manage_users" {
+  for_each    = { for i, r in data.activedirectory_delegation_template.manage_users.rules : i => r }
+  target      = activedirectory_ou.staff.dn
+  trustee     = activedirectory_group.admins.id
+  rights      = each.value.rights
+  object_type = each.value.object_type
+  applies_to  = each.value.applies_to
+  type        = each.value.type
+}
+```
+
+An access rule is a relationship, not an object: changing any field replaces it
+(a revoke of the old ACE and a grant of the new one), and drift is matched
+against the explicit ACE only, so inherited entries are never fought.
 
 ## Contributing
 
