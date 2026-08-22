@@ -1156,47 +1156,42 @@ resource "activedirectory_access_rule" "write" {
   type = "Deny"
 }`
 
-	// deny: an independent Deny ACE. Distinct rights set from write, so its
-	// canonical key never collides.
-	deny := `
-resource "activedirectory_access_rule" "deny" {
-  target  = activedirectory_ou.t.dn
-  trustee = activedirectory_group.helpdesk.id
-  rights  = ["WriteProperty"]
-  applies_to = {
-    scope        = "descendants"
-    object_class = "user"
-  }
-  type = "Deny"
-}`
+	// No standalone second Deny ACE on the same (trustee, type, scope) is used
+	// here on purpose. Real Active Directory coalesces same-scope ACEs by
+	// union-ing their access masks (Grant maps to .NET AddAccessRule), so two
+	// overlapping Deny rules that differ only in rights merge into one ACE — the
+	// subset rule then cannot be read back or revoked as an independent resource.
+	// Deny coverage comes from the writeDeny replacement below instead, which
+	// coexists with the Allow reset ACE (a different type/objectType, so no merge).
 
 	return []resource.TestStep{
 		{
-			Config: base + reset + write + deny,
+			Config: base + reset + write,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "trustee_sid"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.reset", "type", "Allow"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Allow"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.deny", "type", "Deny"),
 			),
 		},
-		{Config: base + reset + write + deny, PlanOnly: true},
+		{Config: base + reset + write, PlanOnly: true},
 		{
-			// Replace proof: flip write from Allow to Deny.
-			Config: base + reset + writeDeny + deny,
+			// Replace proof: flip write from Allow to Deny. Because the resource
+			// is replace-only, this destroys the Allow ACE and creates the Deny
+			// one; the DACL must end with exactly the Deny form and replan clean.
+			Config: base + reset + writeDeny,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Deny"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
 			),
 		},
-		{Config: base + reset + writeDeny + deny, PlanOnly: true},
+		{Config: base + reset + writeDeny, PlanOnly: true},
 		{
 			ResourceName:            "activedirectory_access_rule.reset",
 			ImportState:             true,
 			ImportStateVerify:       true,
 			ImportStateVerifyIgnore: []string{"target", "trustee", "object_type", "applies_to"},
-			Config:                  base + reset + writeDeny + deny,
+			Config:                  base + reset + writeDeny,
 		},
 	}
 }
