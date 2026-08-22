@@ -113,6 +113,16 @@ func accProviderConfigWithConcurrency(n int) string {
 		fmt.Sprintf("    max_concurrency = %d\n", n), 1)
 }
 
+// accProviderConfigWithTimeout is accProviderConfig with an explicit local
+// transport timeout, for suites whose single operations legitimately exceed the
+// 60s default — e.g. reading a group with thousands of members, where the
+// per-member read-back is a long sequence of directory calls.
+func accProviderConfigWithTimeout(d string) string {
+	return strings.Replace(accProviderConfig(),
+		"    max_concurrency = 4\n",
+		fmt.Sprintf("    max_concurrency = 4\n    timeout = %q\n", d), 1)
+}
+
 // accSuiteEnv is the environment for a suite run against a real domain. It reads
 // the environment without checking it: accPreCheck is what fails a
 // half-configured run, and it runs after resource.Test has decided whether the

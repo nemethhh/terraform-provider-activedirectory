@@ -327,3 +327,36 @@ fails at plan. (2) `terraform-plugin-testing` v1.16.0's legacy state shim reject
 limitation, not a provider one: the apply itself succeeds and the pattern works
 in real Terraform, so the example keeps `for_each`, but the acc/e2e tests were
 rewritten to index the template's `rules[0]`/`rules[1]` explicitly.
+
+### Recursive (effective) group membership, 2026-08-22
+
+The `activedirectory_group_members` data source gained a `recursive` flag —
+effective (transitive) membership resolved through nested groups — backed by
+`go-adpwsh` **v0.7.0** (`Group.MembersRecursive` and the
+`group_members_read_recursive` op, running `Get-ADGroupMember -Recursive`).
+Validated on the real domain in three passes: the functional suite
+(`TestAccGroupMembersRecursiveDataSource`) proved a direct read of a parent
+returns the nested child *group* while the recursive read flattens it to the leaf
+*user*; the group-member regression sweep (`-run TestAccGroupMember`:
+`TestAccGroupMemberLifecycle`/`Nested`, `TestAccGroupMembershipLifecycle`/`Nested`,
+`TestAccGroupMembersDataSource`) passed again against the v0.7.0-pinned provider,
+so the library bump introduced no regression; and the opt-in
+`TestAccGroupMembersRecursiveLargeSet` (`AD_ACC_LARGE_COUNT=5000`) proved the
+feature at scale from a single 5000-user fixture — a flat group with all 5000 as
+direct members (direct **and** recursive both return 5000) and a top group whose
+5000 members are reached only through five nested child groups (direct returns the
+five child groups, recursive flattens to all 5000).
+
+What only a real domain proved: `Get-ADGroupMember -Recursive` returns exactly
+5000 members within ADWS's default `MaxGroupOrMemberEntries` (5000, unset on the
+lab DCs) — for both a single large group and a multiply-nested hierarchy. The
+size-limit ceiling the design flagged as a risk does not trip at exactly that
+boundary (the limit is an inclusive maximum). `s-server2` was reachable during
+the runs; the replication path is untouched by this change, so the
+`TestAccReplication*` suites were not re-exercised.
+
+Lab-caught, fixed and re-validated:
+
+| Defect | Where it was |
+|---|---|
+| The 5000-member scale run's `flat_direct` step (`Group.Members`, whose read-back does a per-member `Get-ADObject` — 5000 sequential directory calls) exceeded the provider's default **60s** transport timeout and aborted the plan before the recursive reads ran | the test — a legitimately long single operation, not a hang. Fixed by configuring `local { timeout = "20m" }` for that suite (`accProviderConfigWithTimeout`); the recursive reads themselves are a single `Get-ADGroupMember` call and are not the slow path. The fake cannot catch a real-cmdlet latency wall — the standing fake-vs-real risk |

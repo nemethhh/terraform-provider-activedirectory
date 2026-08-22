@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 )
@@ -68,6 +69,44 @@ try {
             }
             $data = [ordered]@{ groupGuid = $g.ObjectGUID.ToString(); ou = $ou; count = $dns.Count }
         }
+        'provision_nested' {
+            $ou = "OU=$($p.tag),$($p.base)"
+            Remove-Fixture $ou
+            New-ADOrganizationalUnit -Name $p.tag -Path $p.base -ProtectedFromAccidentalDeletion:$false @common
+            $top  = New-ADGroup -Name "$($p.tag)-top"  -SamAccountName "$($p.tag)-top"  -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+            $flat = New-ADGroup -Name "$($p.tag)-flat" -SamAccountName "$($p.tag)-flat" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+            $buckets = [int]$p.buckets
+            # Distribute count users across exactly $buckets child groups: a floor
+            # share each, with the remainder spread one-per-bucket over the first
+            # buckets. Every bucket is created and added to -top regardless of its
+            # share, so the returned bucket count is always truthful. (count must be
+            # >= buckets for every child to be non-empty, which the large-set test is.)
+            $base = [Math]::Floor($p.count / $buckets)
+            $rem  = $p.count - ($base * $buckets)
+            $all = New-Object System.Collections.Generic.List[string]
+            $made = 0
+            for ($b = 0; $b -lt $buckets; $b++) {
+                $child = New-ADGroup -Name "$($p.tag)-c$b" -SamAccountName "$($p.tag)-c$b" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+                $share = $base
+                if ($b -lt $rem) { $share++ }
+                $dns = New-Object System.Collections.Generic.List[string]
+                for ($i = 0; $i -lt $share; $i++) {
+                    $name = "$($p.tag)-m$made"
+                    $u = New-ADUser -Name $name -SamAccountName $name -Path $ou -Enabled $false -PassThru @common
+                    $dns.Add($u.DistinguishedName); $all.Add($u.DistinguishedName); $made++
+                }
+                for ($i = 0; $i -lt $dns.Count; $i += 500) {
+                    $hi = [Math]::Min($i + 499, $dns.Count - 1)
+                    Add-ADGroupMember -Identity $child -Members $dns[$i..$hi] -Confirm:$false @common
+                }
+                Add-ADGroupMember -Identity $top -Members $child -Confirm:$false @common
+            }
+            for ($i = 0; $i -lt $all.Count; $i += 500) {
+                $hi = [Math]::Min($i + 499, $all.Count - 1)
+                Add-ADGroupMember -Identity $flat -Members $all[$i..$hi] -Confirm:$false @common
+            }
+            $data = [ordered]@{ topGuid = $top.ObjectGUID.ToString(); flatGuid = $flat.ObjectGUID.ToString(); ou = $ou; count = $made; buckets = $buckets }
+        }
         'teardown' {
             Remove-Fixture $p.ou
             $data = [ordered]@{ removed = $true }
@@ -88,8 +127,11 @@ Write-Output '<<<TFAD:END>>>'
 
 type largeGroupResult struct {
 	GroupGUID string `json:"groupGuid"`
+	TopGUID   string `json:"topGuid"`
+	FlatGUID  string `json:"flatGuid"`
 	OU        string `json:"ou"`
 	Count     int    `json:"count"`
+	Buckets   int    `json:"buckets"`
 	Removed   bool   `json:"removed"`
 }
 
@@ -187,4 +229,85 @@ func TestAccGroupMembershipLargeSet(t *testing.T) {
 			len(members), count)
 	}
 	t.Logf("read back all %d members of a real group (%d ranged pages)", count, (count+1499)/1500)
+}
+
+// TestAccGroupMembersRecursiveLargeSet proves the recursive read at scale, from a
+// single 5000-user fixture, for both membership shapes: a flat group with all
+// users as direct members (direct and recursive both return the full count), and
+// a top group whose users are reached only through multiple nested child groups
+// (direct returns just the child groups; recursive flattens to the full count).
+// Opt-in via AD_ACC_LARGE_COUNT, the same gate as the other large-set suites;
+// the lab run sets AD_ACC_LARGE_COUNT=5000.
+func TestAccGroupMembersRecursiveLargeSet(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("acceptance test; set TF_ACC=1")
+	}
+	countStr := os.Getenv(envLargeCount)
+	if countStr == "" {
+		t.Skipf("%s is not set; skipping the recursive large-group suite", envLargeCount)
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil || count <= 0 {
+		t.Fatalf("%s=%q must be a positive integer", envLargeCount, countStr)
+	}
+	container := os.Getenv(envContainer)
+	if container == "" {
+		t.Fatalf("%s must be set", envContainer)
+	}
+	const buckets = 5
+
+	ctx := context.Background()
+	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath), Timeout: 30 * time.Minute})
+	if err != nil {
+		t.Fatalf("start PowerShell: %v", err)
+	}
+	defer func() { _ = tr.Close() }()
+
+	tag := accNamePrefix + "rl" // short: "tfacc-rl-m4999" is 14 chars (<= 20)
+	prov, err := runLargeGroup(ctx, tr, map[string]any{
+		"action": "provision_nested", "base": container, "tag": tag, "count": count, "buckets": buckets,
+	})
+	if err != nil {
+		t.Fatalf("provision nested %d members: %v", count, err)
+	}
+	t.Cleanup(func() {
+		if _, err := runLargeGroup(context.Background(), tr, map[string]any{
+			"action": "teardown", "ou": prov.OU,
+		}); err != nil {
+			t.Errorf("teardown %s: %v", prov.OU, err)
+		}
+	})
+
+	config := accProviderConfigWithTimeout("20m") + fmt.Sprintf(`
+data "activedirectory_group_members" "flat_direct" {
+  guid = %q
+}
+data "activedirectory_group_members" "flat_recursive" {
+  guid      = %q
+  recursive = true
+}
+data "activedirectory_group_members" "top_direct" {
+  guid = %q
+}
+data "activedirectory_group_members" "top_recursive" {
+  guid      = %q
+  recursive = true
+}`, prov.FlatGUID, prov.FlatGUID, prov.TopGUID, prov.TopGUID)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: config,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				// Direct case: a flat group with every account as a direct member.
+				resource.TestCheckResourceAttr("data.activedirectory_group_members.flat_direct", "members.#", strconv.Itoa(count)),
+				resource.TestCheckResourceAttr("data.activedirectory_group_members.flat_recursive", "members.#", strconv.Itoa(count)),
+				// Nested case: the top group holds only the child groups directly, but
+				// resolves to every account recursively.
+				resource.TestCheckResourceAttr("data.activedirectory_group_members.top_direct", "members.#", strconv.Itoa(buckets)),
+				resource.TestCheckResourceAttr("data.activedirectory_group_members.top_recursive", "members.#", strconv.Itoa(count)),
+			),
+		}},
+	})
 }
