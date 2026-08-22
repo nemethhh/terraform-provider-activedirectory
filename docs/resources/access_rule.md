@@ -18,10 +18,10 @@ A single explicit access-control entry (ACE) on an object's discretionary ACL �
 # OU=Staff, without taking ownership of the OU's DACL as a whole -- any other
 # ACE on the same object, inherited or explicit, is left untouched.
 resource "activedirectory_access_rule" "helpdesk_reset_pw" {
-  target      = activedirectory_ou.staff.dn         # any object, DN or GUID
-  trustee     = activedirectory_group.helpdesk.id   # any security principal -> SID
-  rights      = ["ExtendedRight"]                   # AD rights names, not hex
-  object_type = "Reset Password"                    # friendly name or GUID; "" = all
+  target      = activedirectory_ou.staff.dn       # any object, DN or GUID
+  trustee     = activedirectory_group.helpdesk.id # any security principal -> SID
+  rights      = ["ExtendedRight"]                 # AD rights names, not hex
+  object_type = "Reset Password"                  # friendly name or GUID; "" = all
   applies_to = {
     scope        = "descendants" # this | descendants | children
     object_class = "user"        # inheritedObjectType: name, GUID, or ""
@@ -76,8 +76,8 @@ resource "activedirectory_access_rule" "manage_users" {
 
 Optional:
 
-- `object_class` (String) The child class `descendants` scope is limited to — a friendly class name (e.g. `"user"`) or a GUID; empty means all classes.
-- `scope` (String) `this` (the object only), `descendants` (all descendants, scoped by `object_class`), or `children` (immediate children only). Defaults to `this`.
+- `object_class` (String) The child class the `descendants` or `children` scope is limited to — a friendly class name (e.g. `"user"`) or a GUID; empty means all classes. Only meaningful when `scope` is `descendants` or `children`; must be empty when `scope` is `this`.
+- `scope` (String) `this` (the object only), `descendants` (all descendants, scoped by `object_class`), or `children` (immediate children only, scoped by `object_class`). Defaults to `this`. `object_class` is only meaningful together with `descendants` or `children`; with `scope = "this"` the rule applies to the target object itself and `object_class` must be empty.
 
 
 <a id="nestedblock--timeouts"></a>

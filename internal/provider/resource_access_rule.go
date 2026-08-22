@@ -29,8 +29,12 @@ import (
 const accessRuleResourceType = "activedirectory_access_rule"
 
 // sidShapePattern recognises a value that already looks like a SID, so trustee
-// resolution can skip the Group.Get/User.Get round trip for it.
-var sidShapePattern = regexp.MustCompile(`^S-\d`)
+// resolution can skip the Group.Get/User.Get round trip for it. Matches
+// identity.go's case-insensitive "S-1-" prefix check for SID detection, so a
+// lowercase "s-1-..." trustee is recognised directly here too; this is only a
+// fast pre-check, so a value that slips past it still resolves correctly via
+// Group.Get/User.Get.
+var sidShapePattern = regexp.MustCompile(`(?i)^S-1-`)
 
 // appliesToAttrTypes is the object type of the applies_to nested attribute,
 // shared between the schema default and ImportState.
@@ -43,9 +47,11 @@ type accessRuleResource struct{ client *adpwsh.Client }
 
 func newAccessRuleResource() resource.Resource { return &accessRuleResource{} }
 
-// accessRuleAppliesTo is a convenience shape for building/reading applies_to
-// values with ObjectValueFrom/As. It is never the state model's field type:
-// see accessRuleModel.AppliesTo for why.
+// accessRuleAppliesTo is a convenience shape for building applies_to values
+// with ObjectValueFrom (used today only by ImportState); the symmetric .As()
+// direction is reserved for future read-side use and nothing calls it yet.
+// It is never the state model's field type: see accessRuleModel.AppliesTo for
+// why.
 type accessRuleAppliesTo struct {
 	Scope       types.String `tfsdk:"scope"`
 	ObjectClass types.String `tfsdk:"object_class"`
@@ -82,8 +88,37 @@ func appliesToAttributes(o types.Object) (scope, objectClass types.String) {
 		return types.StringNull(), types.StringNull()
 	}
 	attrs := o.Attributes()
+	// These type assertions fall back to a null types.String on a missing key
+	// or a mismatched type, but that fallback is unreachable in practice: o's
+	// object type is always appliesToAttrTypes, which guarantees both "scope"
+	// and "object_class" are present as types.String.
 	scope, _ = attrs["scope"].(types.String)
 	objectClass, _ = attrs["object_class"].(types.String)
+	return scope, objectClass
+}
+
+// effectiveAppliesTo returns the effective scope and object_class an
+// applies_to object represents, applying the schema's own "this"/""
+// defaults whenever the object itself, or one of its two fields, is null (or
+// unknown — the same fallback resolveACE already relied on before this was
+// extracted). Both call sites — appliesToScopeValidator and resolveACE — used
+// to compute this inline, identically; a caller that needs to distinguish
+// "still unknown" from "defaulted" (as appliesToScopeValidator does, to skip
+// validation rather than validate against a default) still checks
+// IsUnknown() itself before calling this.
+func effectiveAppliesTo(o types.Object) (scope, objectClass string) {
+	scopeVal, objectClassVal := appliesToAttributes(o)
+
+	scope = string(adpwsh.InheritanceThis)
+	if !scopeVal.IsNull() && !scopeVal.IsUnknown() {
+		scope = scopeVal.ValueString()
+	}
+
+	objectClass = ""
+	if !objectClassVal.IsNull() && !objectClassVal.IsUnknown() {
+		objectClass = objectClassVal.ValueString()
+	}
+
 	return scope, objectClass
 }
 
@@ -184,15 +219,19 @@ func (r *accessRuleResource) Schema(ctx context.Context, _ resource.SchemaReques
 						},
 						MarkdownDescription: "`this` (the object only), `descendants` (all " +
 							"descendants, scoped by `object_class`), or `children` (immediate " +
-							"children only). Defaults to `this`.",
+							"children only, scoped by `object_class`). Defaults to `this`. " +
+							"`object_class` is only meaningful together with `descendants` or " +
+							"`children`; with `scope = \"this\"` the rule applies to the target " +
+							"object itself and `object_class` must be empty.",
 					},
 					"object_class": schema.StringAttribute{
 						Optional: true,
 						Computed: true,
 						Default:  stringdefault.StaticString(""),
-						MarkdownDescription: "The child class `descendants` scope is limited to — " +
-							"a friendly class name (e.g. `\"user\"`) or a GUID; empty means all " +
-							"classes.",
+						MarkdownDescription: "The child class the `descendants` or `children` " +
+							"scope is limited to — a friendly class name (e.g. `\"user\"`) or a " +
+							"GUID; empty means all classes. Only meaningful when `scope` is " +
+							"`descendants` or `children`; must be empty when `scope` is `this`.",
 					},
 				},
 			},
@@ -250,14 +289,7 @@ func (appliesToScopeValidator) ValidateResource(ctx context.Context, req resourc
 	// not the eventual default. Apply the same defaults ("this" / "") the
 	// schema would, so the omitted-scope case (object_class set, scope left to
 	// default to "this") is caught too, not just an explicit scope = "this".
-	effectiveScope := string(adpwsh.InheritanceThis)
-	if !scope.IsNull() {
-		effectiveScope = scope.ValueString()
-	}
-	effectiveObjectClass := ""
-	if !objectClass.IsNull() {
-		effectiveObjectClass = objectClass.ValueString()
-	}
+	effectiveScope, effectiveObjectClass := effectiveAppliesTo(config.AppliesTo)
 
 	if effectiveScope == string(adpwsh.InheritanceThis) && effectiveObjectClass != "" {
 		resp.Diagnostics.AddAttributeError(
@@ -324,11 +356,17 @@ func (r *accessRuleResource) resolveTrusteeSID(ctx context.Context, trustee stri
 	if g, err := r.client.Group.Get(ctx, id); err == nil {
 		return g.SID, diags
 	}
-	if u, err := r.client.User.Get(ctx, id); err == nil {
+	u, err := r.client.User.Get(ctx, id)
+	if err == nil {
 		return u.SID, diags
 	}
+	// Both lookups failed; the group error is discarded (any-error-try-next,
+	// ruling P3), but the user lookup's error — the last one tried — is
+	// included below so a transient transport failure reads differently from
+	// a genuine "no such group or user".
 	diags.AddAttributeError(path.Root("trustee"), "Trustee not found",
-		fmt.Sprintf("%q did not resolve as a group or a user.", trustee))
+		fmt.Sprintf("%q did not resolve as a group or a user. Last error (from the user lookup): %s",
+			trustee, err))
 	return "", diags
 }
 
@@ -357,15 +395,7 @@ func (r *accessRuleResource) resolveACE(ctx context.Context, m accessRuleModel) 
 	// it is known by the time resolveACE runs even when it was unknown at
 	// plan time for an intermediate step; a null object (or null attribute
 	// within it) falls back to the schema's own defaults ("this"/"").
-	scopeVal, objectClassVal := appliesToAttributes(m.AppliesTo)
-	scope := string(adpwsh.InheritanceThis)
-	if !scopeVal.IsNull() && !scopeVal.IsUnknown() {
-		scope = scopeVal.ValueString()
-	}
-	objectClass := ""
-	if !objectClassVal.IsNull() && !objectClassVal.IsUnknown() {
-		objectClass = objectClassVal.ValueString()
-	}
+	scope, objectClass := effectiveAppliesTo(m.AppliesTo)
 
 	objectClassGUID, d = r.resolveSchemaRef(ctx,
 		adpwsh.SchemaRef{Kind: adpwsh.RefClass, Name: objectClass},
@@ -404,6 +434,10 @@ func (r *accessRuleResource) resolveACE(ctx context.Context, m accessRuleModel) 
 // guid|object_class guid|scope — reversible for import and stable across a
 // target rename/move only insofar as target itself is (ruling: target is used
 // verbatim, so a DN target is not stable across rename/move).
+//
+// This assumes none of target (a DN or GUID), trustee (a SID), or the two
+// schema GUIDs ever contains a literal "|" — true for all four — the same
+// kind of deliberate separator invariant dn.go relies on for commas in a DN.
 func idFor(target string, ace adpwsh.ACE, objectTypeGUID, objectClassGUID string) string {
 	rights := make([]string, len(ace.Rights))
 	for i, right := range ace.Rights {
@@ -421,9 +455,14 @@ func idFor(target string, ace adpwsh.ACE, objectTypeGUID, objectClassGUID string
 	}, "|")
 }
 
-// canonicalACEKey is the semantic identity of an ACE for matching purposes. It
-// mirrors the library's unexported canonicalACEKey (acl.go), which the
-// provider cannot import: case-insensitive, and order-insensitive over Rights.
+// canonicalACEKey is the semantic identity of an ACE for matching purposes
+// (used only for Read drift-matching, never persisted — unlike idFor's ID,
+// changing this needs no state migration). It mirrors the library's
+// unexported canonicalACEKey (acl.go), which the provider cannot import:
+// case-insensitive, and order-insensitive over Rights. Fields join on
+// "\x1f" (US) and rights join on "\x1e" (RS) — control characters that can
+// never appear in a SID, GUID, AD rights name, or enum value — so no field's
+// content can ever be mistaken for a separator.
 func canonicalACEKey(a adpwsh.ACE) string {
 	rights := make([]string, len(a.Rights))
 	for i, right := range a.Rights {
@@ -433,12 +472,12 @@ func canonicalACEKey(a adpwsh.ACE) string {
 	parts := []string{
 		strings.ToLower(a.Trustee),
 		strings.ToLower(string(a.Type)),
-		strings.Join(rights, "+"),
+		strings.Join(rights, "\x1e"),
 		strings.ToLower(a.ObjectType),
 		strings.ToLower(a.InheritedObjectType),
 		strings.ToLower(string(a.Inheritance)),
 	}
-	return strings.Join(parts, "|")
+	return strings.Join(parts, "\x1f")
 }
 
 func (r *accessRuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
