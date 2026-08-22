@@ -256,6 +256,7 @@ func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
 		newUserResource,
 		newGroupMemberResource,
 		newGroupMembershipResource,
+		newAccessRuleResource,
 	}
 }
 
@@ -268,6 +269,7 @@ func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSour
 		newUsersDataSource,
 		newGroupsDataSource,
 		newOUsDataSource,
+		newDelegationTemplateDataSource,
 	}
 }
 

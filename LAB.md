@@ -282,3 +282,48 @@ anything that hops to the other DC fails, and `Sync-ADObject` reports it as
 *"the destination server ... does not have Active Directory Web Services
 running"*. ADWS was running the whole time. Any cross-DC check run over SSH needs
 an explicit `-Credential`, exactly as the provider does under the `ssh` transport.
+
+### ACLs and delegation, 2026-08-22
+
+The new access-control surface — the `activedirectory_access_rule` resource and
+the `activedirectory_delegation_template` data source — had its first
+real-domain run, backed by `go-adpwsh` **v0.5.0** (`ACL.Get/Grant/Revoke` over
+explicit ACEs, `Schema.Resolve` name→GUID, and the pure `Delegation.Template`
+catalog). Validated in two layers.
+
+**Library, direct against the DC (a throwaway `ssh`-transport probe).**
+`Schema.Resolve` answered the well-known names (`Reset Password`, `user`) from
+its in-process table and resolved a non-well-known attribute (`department`) live
+from the schema; `ACL.Grant` → `Get` → `Revoke` of the `reset_user_passwords`
+ACEs round-tripped on a real OU with the rights/objectType/inheritance intact
+(so the `New-PSDrive`-pinned `AD:` path and the rights-mask round-trip both
+hold); a second grant of the same ACEs added no duplicate (idempotent).
+
+**What only a real domain proved — the GUID target.** The `AD:` provider
+addresses objects by distinguished name, so an ACL op given an `objectGUID`
+target must resolve it to a DN first. The fake resolves GUID-or-DN
+interchangeably and hid this; the fix (`Get-ADObject -Identity` → DN, at the top
+of each ACL op) was confirmed on the DC by granting/reading/revoking with the
+OU's GUID as the target.
+
+**Provider.** `TestAccAccessRuleLifecycle` passed (create → no-diff replan →
+import) — the no-diff replan is itself the mask/inheritance round-trip proof,
+since a DACL AD echoed back differently would show drift.
+`TestAccE2EDelegationGrantsCapability` passed as a genuine before/after
+differential: `svc_e2e_limited` could **not** reset a user's password before the
+grant and **could** after it. `TestAccE2EAccessRuleDenied` passed — a Grant
+without `WriteDacl` surfaces `KindDenied`. The full `make lab-acc` run was clean
+(0 failures): every existing OU/group/user, membership, data-source,
+replication, hostile-input and denied-import suite passed again against v0.5.0,
+so the library bump introduced no regression. `s-server2` was up this time, so
+the three `TestAccReplication*` suites passed.
+
+**Two things the lab caught, both fixed and re-validated.** (1) `applies_to`
+sourced from the delegation-template data source arrives as an *unknown* object
+at plan time; the resource model had to become a `types.Object` to hold it (a
+plain struct cannot), or the headline template→`for_each`→`access_rule` pattern
+fails at plan. (2) `terraform-plugin-testing` v1.16.0's legacy state shim rejects
+`for_each` resource instances ("for_each is not supported") — a *test-harness*
+limitation, not a provider one: the apply itself succeeds and the pattern works
+in real Terraform, so the example keeps `for_each`, but the acc/e2e tests were
+rewritten to index the template's `rules[0]`/`rules[1]` explicitly.
