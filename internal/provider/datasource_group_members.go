@@ -85,13 +85,15 @@ func (d *groupMembersDataSource) Read(ctx context.Context, req datasource.ReadRe
 	id := identityFrom(cfg.GUID, cfg.DN, cfg.SID, cfg.SamAccountName)
 	var members []adpwsh.Member
 	var err error
+	op := "Group.Members"
 	if cfg.Recursive.ValueBool() {
+		op = "Group.MembersRecursive"
 		members, err = d.client.Group.MembersRecursive(ctx, id)
 	} else {
 		members, err = d.client.Group.Members(ctx, id)
 	}
 	if err != nil {
-		resp.Diagnostics.Append(errorDiagnostics("Group.Members", groupMembersDataSourceType, err)...)
+		resp.Diagnostics.Append(errorDiagnostics(op, groupMembersDataSourceType, err)...)
 		return
 	}
 	cfg.Members = make([]memberModel, 0, len(members))
