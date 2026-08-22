@@ -75,13 +75,21 @@ try {
             $top  = New-ADGroup -Name "$($p.tag)-top"  -SamAccountName "$($p.tag)-top"  -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
             $flat = New-ADGroup -Name "$($p.tag)-flat" -SamAccountName "$($p.tag)-flat" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
             $buckets = [int]$p.buckets
-            $per = [Math]::Ceiling($p.count / $buckets)
+            # Distribute count users across exactly $buckets child groups: a floor
+            # share each, with the remainder spread one-per-bucket over the first
+            # buckets. Every bucket is created and added to -top regardless of its
+            # share, so the returned bucket count is always truthful. (count must be
+            # >= buckets for every child to be non-empty, which the large-set test is.)
+            $base = [Math]::Floor($p.count / $buckets)
+            $rem  = $p.count - ($base * $buckets)
             $all = New-Object System.Collections.Generic.List[string]
             $made = 0
-            for ($b = 0; $b -lt $buckets -and $made -lt $p.count; $b++) {
+            for ($b = 0; $b -lt $buckets; $b++) {
                 $child = New-ADGroup -Name "$($p.tag)-c$b" -SamAccountName "$($p.tag)-c$b" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+                $share = $base
+                if ($b -lt $rem) { $share++ }
                 $dns = New-Object System.Collections.Generic.List[string]
-                for ($i = 0; $i -lt $per -and $made -lt $p.count; $i++) {
+                for ($i = 0; $i -lt $share; $i++) {
                     $name = "$($p.tag)-m$made"
                     $u = New-ADUser -Name $name -SamAccountName $name -Path $ou -Enabled $false -PassThru @common
                     $dns.Add($u.DistinguishedName); $all.Add($u.DistinguishedName); $made++
