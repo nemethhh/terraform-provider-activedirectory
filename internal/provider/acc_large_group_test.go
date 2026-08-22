@@ -68,6 +68,36 @@ try {
             }
             $data = [ordered]@{ groupGuid = $g.ObjectGUID.ToString(); ou = $ou; count = $dns.Count }
         }
+        'provision_nested' {
+            $ou = "OU=$($p.tag),$($p.base)"
+            Remove-Fixture $ou
+            New-ADOrganizationalUnit -Name $p.tag -Path $p.base -ProtectedFromAccidentalDeletion:$false @common
+            $top  = New-ADGroup -Name "$($p.tag)-top"  -SamAccountName "$($p.tag)-top"  -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+            $flat = New-ADGroup -Name "$($p.tag)-flat" -SamAccountName "$($p.tag)-flat" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+            $buckets = [int]$p.buckets
+            $per = [Math]::Ceiling($p.count / $buckets)
+            $all = New-Object System.Collections.Generic.List[string]
+            $made = 0
+            for ($b = 0; $b -lt $buckets -and $made -lt $p.count; $b++) {
+                $child = New-ADGroup -Name "$($p.tag)-c$b" -SamAccountName "$($p.tag)-c$b" -GroupScope Global -GroupCategory Security -Path $ou -PassThru @common
+                $dns = New-Object System.Collections.Generic.List[string]
+                for ($i = 0; $i -lt $per -and $made -lt $p.count; $i++) {
+                    $name = "$($p.tag)-m$made"
+                    $u = New-ADUser -Name $name -SamAccountName $name -Path $ou -Enabled $false -PassThru @common
+                    $dns.Add($u.DistinguishedName); $all.Add($u.DistinguishedName); $made++
+                }
+                for ($i = 0; $i -lt $dns.Count; $i += 500) {
+                    $hi = [Math]::Min($i + 499, $dns.Count - 1)
+                    Add-ADGroupMember -Identity $child -Members $dns[$i..$hi] -Confirm:$false @common
+                }
+                Add-ADGroupMember -Identity $top -Members $child -Confirm:$false @common
+            }
+            for ($i = 0; $i -lt $all.Count; $i += 500) {
+                $hi = [Math]::Min($i + 499, $all.Count - 1)
+                Add-ADGroupMember -Identity $flat -Members $all[$i..$hi] -Confirm:$false @common
+            }
+            $data = [ordered]@{ topGuid = $top.ObjectGUID.ToString(); flatGuid = $flat.ObjectGUID.ToString(); ou = $ou; count = $made; buckets = $buckets }
+        }
         'teardown' {
             Remove-Fixture $p.ou
             $data = [ordered]@{ removed = $true }
@@ -88,8 +118,11 @@ Write-Output '<<<TFAD:END>>>'
 
 type largeGroupResult struct {
 	GroupGUID string `json:"groupGuid"`
+	TopGUID   string `json:"topGuid"`
+	FlatGUID  string `json:"flatGuid"`
 	OU        string `json:"ou"`
 	Count     int    `json:"count"`
+	Buckets   int    `json:"buckets"`
 	Removed   bool   `json:"removed"`
 }
 
