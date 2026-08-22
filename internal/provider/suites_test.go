@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // accNamePrefix is on every object these suites create. The sweeper matches on
@@ -100,6 +101,32 @@ resource "activedirectory_ou" "staff" {
   description = ""
 }`, parent, e.Container, renamed)
 
+	// Protection toggled off in place, then back on. The objectGUID is stable
+	// throughout: this is an attribute update, not a replace.
+	movedUnprotected := fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "staff" {
+  name                               = %q
+  container                          = activedirectory_ou.parent.dn
+  description                        = ""
+  protected_from_accidental_deletion = false
+}`, parent, e.Container, renamed)
+
+	movedReprotected := fmt.Sprintf(`
+resource "activedirectory_ou" "parent" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_ou" "staff" {
+  name                               = %q
+  container                          = activedirectory_ou.parent.dn
+  description                        = ""
+  protected_from_accidental_deletion = true
+}`, parent, e.Container, renamed)
+
 	return []resource.TestStep{
 		{
 			Config: e.ProviderConfig + create,
@@ -107,7 +134,6 @@ resource "activedirectory_ou" "staff" {
 				resource.TestCheckResourceAttrSet("activedirectory_ou.staff", "id"),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "dn", e.dn("OU="+staff)),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "description", "The staff OU"),
-				// AD's own default, mirrored rather than silently inverted.
 				resource.TestCheckResourceAttr("activedirectory_ou.staff",
 					"protected_from_accidental_deletion", "true"),
 			),
@@ -124,6 +150,16 @@ resource "activedirectory_ou" "staff" {
 					"OU="+renamed+",OU="+parent+","+e.Container),
 				resource.TestCheckResourceAttr("activedirectory_ou.staff", "description", ""),
 			),
+		},
+		{
+			Config: e.ProviderConfig + movedUnprotected,
+			Check: resource.TestCheckResourceAttr("activedirectory_ou.staff",
+				"protected_from_accidental_deletion", "false"),
+		},
+		{
+			Config: e.ProviderConfig + movedReprotected,
+			Check: resource.TestCheckResourceAttr("activedirectory_ou.staff",
+				"protected_from_accidental_deletion", "true"),
 		},
 		{
 			ResourceName:      "activedirectory_ou.staff",
@@ -235,8 +271,22 @@ resource "activedirectory_group" "devs" {
   sam_account_name = %q
   container        = activedirectory_ou.staff.dn
   scope            = "universal"
+  category         = "distribution"
   description      = "Everyone who writes code"
   managed_by       = activedirectory_group.mgr.dn
+}`, renamed, renamed)
+
+	// managed_by and description both carry a load-bearing empty default, so
+	// setting them to "" must clear them rather than retain the prior value.
+	cleared := fmt.Sprintf(`
+resource "activedirectory_group" "devs" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+  scope            = "universal"
+  category         = "distribution"
+  description      = ""
+  managed_by       = ""
 }`, renamed, renamed)
 
 	return []resource.TestStep{
@@ -260,11 +310,19 @@ resource "activedirectory_group" "devs" {
 			Config: base + updated,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "scope", "universal"),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "category", "distribution"),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "sam_account_name", renamed),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "dn",
 					"CN="+renamed+",OU="+ou+","+e.Container),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "managed_by",
 					"CN="+mgr+",OU="+ou+","+e.Container),
+			),
+		},
+		{
+			Config: base + cleared,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "description", ""),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "managed_by", ""),
 			),
 		},
 		{
@@ -328,6 +386,8 @@ func userLifecycleSteps(e suiteEnv, passwordCheck resource.TestCheckFunc) []reso
 	ou := accNamePrefix + "usr-ou"
 	sam := accNamePrefix + "usr"
 	upn := sam + "@" + e.upnSuffix()
+	upn2 := sam + "-renamed@" + e.upnSuffix() // UPN rename target
+	cn := accNamePrefix + "usr-cn"            // explicit CN override, distinct from sam
 
 	base := e.ProviderConfig + fmt.Sprintf(`
 resource "activedirectory_ou" "staff" {
@@ -336,42 +396,81 @@ resource "activedirectory_ou" "staff" {
 }
 `, ou, e.Container)
 
+	// Create with an explicit, AD-legal flag set plus an expiry to clear later.
+	// change_password_at_logon=true is legal only because password_expires=true
+	// (AD cannot require a change of a password that never expires).
 	create := fmt.Sprintf(`
 resource "activedirectory_user" "jdoe" {
-  sam_account_name    = %q
-  container           = activedirectory_ou.staff.dn
-  user_principal_name = %q
-  display_name        = "John Doe"
-  given_name          = "John"
-  surname             = "Doe"
-  enabled             = true
-  password            = "Correct-Horse-Battery-Staple-1"
-  password_version    = 1
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  user_principal_name      = %q
+  display_name             = "John Doe"
+  given_name               = "John"
+  surname                  = "Doe"
+  enabled                  = true
+  description              = "initial"
+  can_change_password      = true
+  password_expires         = true
+  change_password_at_logon = true
+  account_expiration_date  = "2027-06-01T12:00:00Z"
+  password                 = "Correct-Horse-Battery-Staple-1"
+  password_version         = 1
 }`, sam, upn)
 
-	// Bumping the version rotates; the password itself cannot be diffed,
-	// because it is never stored. Clearing surname is the row that catches a
-	// wrong LDAP mapping: its attribute is sn, not surname.
+	// Rotate: bump the version, flip every manageable field in place, and CLEAR
+	// description + account_expiration_date. surname="" catches the sn mapping.
 	rotated := fmt.Sprintf(`
 resource "activedirectory_user" "jdoe" {
-  sam_account_name        = %q
-  container               = activedirectory_ou.staff.dn
-  user_principal_name     = %q
-  display_name            = "John Doe"
-  given_name              = "John"
-  surname                 = ""
-  enabled                 = false
-  password                = "Rotated-P4ssw0rd-2"
-  password_version        = 2
-  account_expiration_date = "2027-01-02T03:04:05Z"
-}`, sam, upn)
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  user_principal_name      = %q
+  display_name             = "Johnathan Doe"
+  given_name               = "John"
+  surname                  = ""
+  enabled                  = false
+  description              = ""
+  can_change_password      = false
+  password_expires         = false
+  change_password_at_logon = false
+  account_expiration_date  = ""
+  password                 = "Rotated-P4ssw0rd-2"
+  password_version         = 2
+}`, sam, upn2)
+
+	// CN override: an explicit name (CN) distinct from the sAMAccountName. A CN
+	// rename is an in-place update; the objectGUID must survive.
+	cnOverride := fmt.Sprintf(`
+resource "activedirectory_user" "jdoe" {
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  name                     = %q
+  user_principal_name      = %q
+  display_name             = "Johnathan Doe"
+  given_name               = "John"
+  surname                  = ""
+  enabled                  = false
+  description              = ""
+  can_change_password      = false
+  password_expires         = false
+  change_password_at_logon = false
+  account_expiration_date  = ""
+  password                 = "Rotated-P4ssw0rd-2"
+  password_version         = 2
+}`, sam, cn, upn2)
+
+	var createID, cnID string
 
 	rotationChecks := []resource.TestCheckFunc{
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "false"),
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "surname", ""),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "user_principal_name", upn2),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "display_name", "Johnathan Doe"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "description", ""),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "can_change_password", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_expires", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "change_password_at_logon", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "account_expiration_date", ""),
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_version", "2"),
-		resource.TestCheckResourceAttr("activedirectory_user.jdoe",
-			"account_expiration_date", "2027-01-02T03:04:05Z"),
 	}
 	if passwordCheck != nil {
 		rotationChecks = append(rotationChecks, passwordCheck)
@@ -385,11 +484,16 @@ resource "activedirectory_user" "jdoe" {
 				resource.TestCheckResourceAttrSet("activedirectory_user.jdoe", "sid"),
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "dn",
 					"CN="+sam+",OU="+ou+","+e.Container),
-				// The CN defaults to the sAMAccountName.
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "name", sam),
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "true"),
-				// The password is never in state: this is the whole point.
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "description", "initial"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "can_change_password", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_expires", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "change_password_at_logon", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe",
+					"account_expiration_date", "2027-06-01T12:00:00Z"),
 				resource.TestCheckNoResourceAttr("activedirectory_user.jdoe", "password"),
+				captureAttr("activedirectory_user.jdoe", "id", &createID),
 			),
 		},
 		{
@@ -401,12 +505,25 @@ resource "activedirectory_user" "jdoe" {
 			Check:  resource.ComposeAggregateTestCheckFunc(rotationChecks...),
 		},
 		{
-			ResourceName:      "activedirectory_user.jdoe",
-			ImportState:       true,
-			ImportStateId:     sam, // by sAMAccountName, the brownfield case
-			ImportStateVerify: true,
-			// A write-only attribute and its version are not readable, so they
-			// cannot round-trip through import.
+			Config: base + cnOverride,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "name", cn),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "dn",
+					"CN="+cn+",OU="+ou+","+e.Container),
+				captureAttr("activedirectory_user.jdoe", "id", &cnID),
+				func(*terraform.State) error {
+					if cnID != createID {
+						return fmt.Errorf("CN override must be in-place: objectGUID changed %q -> %q", createID, cnID)
+					}
+					return nil
+				},
+			),
+		},
+		{
+			ResourceName:            "activedirectory_user.jdoe",
+			ImportState:             true,
+			ImportStateId:           sam, // by sAMAccountName, the brownfield case
+			ImportStateVerify:       true,
 			ImportStateVerifyIgnore: []string{"password", "password_version"},
 		},
 	}
@@ -970,11 +1087,15 @@ resource "activedirectory_group_membership" "s" {
 	}
 }
 
-// accessRuleSteps proves a single access_rule creates one ACE, replans clean,
-// and round-trips through import: the ACE's friendly names (object_type
-// "Reset Password", applies_to.object_class "user") resolve to GUIDs and the
-// trustee resolves to a SID, none of which are echoed back verbatim on import
-// (hence the ImportStateVerifyIgnore below).
+// accessRuleSteps proves depth beyond a single ACE: three independent rules
+// coexist on the same target (single-right + object_type, multi-right, and an
+// independent Deny), a no-diff replan, a replace-as-revoke+grant when an
+// existing rule's Type flips Allow->Deny (access_rule is replace-only — every
+// attribute forces a replace, so Update is unreachable), and round-trip
+// through import. The ACE's friendly names (object_type "Reset Password",
+// applies_to.object_class "user") resolve to GUIDs and the trustee resolves
+// to a SID, none of which are echoed back verbatim on import (hence the
+// ImportStateVerifyIgnore below).
 func accessRuleSteps(e suiteEnv) []resource.TestStep {
 	ou := accNamePrefix + "ar-ou"
 	grp := accNamePrefix + "ar-grp"
@@ -991,7 +1112,8 @@ resource "activedirectory_group" "helpdesk" {
 }
 `, ou, e.Container, grp, grp)
 
-	rule := `
+	// reset: the original single ExtendedRight ACE.
+	reset := `
 resource "activedirectory_access_rule" "reset" {
   target      = activedirectory_ou.t.dn
   trustee     = activedirectory_group.helpdesk.id
@@ -1004,21 +1126,77 @@ resource "activedirectory_access_rule" "reset" {
   type = "Allow"
 }`
 
+	// write: a second, independent ACE on the same target with two rights and no
+	// object_type (all properties). Proves multiple ACEs coexist and multi-right
+	// mapping.
+	write := `
+resource "activedirectory_access_rule" "write" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["ReadProperty", "WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Allow"
+}`
+
+	// writeDeny: the same rule as write but Type flipped Allow->Deny. Because the
+	// resource is replace-only, applying this destroys the Allow ACE and creates
+	// the Deny ACE; the DACL must end with exactly the Deny form.
+	writeDeny := `
+resource "activedirectory_access_rule" "write" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["ReadProperty", "WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Deny"
+}`
+
+	// deny: an independent Deny ACE. Distinct rights set from write, so its
+	// canonical key never collides.
+	deny := `
+resource "activedirectory_access_rule" "deny" {
+  target  = activedirectory_ou.t.dn
+  trustee = activedirectory_group.helpdesk.id
+  rights  = ["WriteProperty"]
+  applies_to = {
+    scope        = "descendants"
+    object_class = "user"
+  }
+  type = "Deny"
+}`
+
 	return []resource.TestStep{
 		{
-			Config: base + rule,
+			Config: base + reset + write + deny,
 			Check: resource.ComposeAggregateTestCheckFunc(
-				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "id"),
 				resource.TestCheckResourceAttrSet("activedirectory_access_rule.reset", "trustee_sid"),
 				resource.TestCheckResourceAttr("activedirectory_access_rule.reset", "type", "Allow"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Allow"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.deny", "type", "Deny"),
 			),
 		},
-		{Config: base + rule, PlanOnly: true},
+		{Config: base + reset + write + deny, PlanOnly: true},
+		{
+			// Replace proof: flip write from Allow to Deny.
+			Config: base + reset + writeDeny + deny,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "type", "Deny"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.write", "rights.#", "2"),
+			),
+		},
+		{Config: base + reset + writeDeny + deny, PlanOnly: true},
 		{
 			ResourceName:            "activedirectory_access_rule.reset",
 			ImportState:             true,
 			ImportStateVerify:       true,
 			ImportStateVerifyIgnore: []string{"target", "trustee", "object_type", "applies_to"},
+			Config:                  base + reset + writeDeny + deny,
 		},
 	}
 }

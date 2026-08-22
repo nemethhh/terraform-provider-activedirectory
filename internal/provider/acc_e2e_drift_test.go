@@ -494,3 +494,121 @@ resource "activedirectory_group_membership" "s" {
 		},
 	})
 }
+
+// A group deleted out of band -> Read not-found -> RemoveResource -> next apply
+// recreates it with a NEW objectGUID and a NEW SID. This is why the never-
+// replace invariant matters: a delete-recreate discards the SID and every ACL
+// naming it.
+func TestAccE2EDriftGroupDeleted(t *testing.T) {
+	user, pass, e := driftAlpha()
+	ou := accNamePrefix + "drift-gdel-ou"
+	grp := accNamePrefix + "drift-gdel"
+	cfg := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}`, ou, e.Container, grp, grp)
+
+	var guid1, sid1, guid2, sid2 string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             e2eCheckDestroy(t, user, pass),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_group.g", "id", &guid1),
+					captureAttr("activedirectory_group.g", "sid", &sid1),
+				),
+			},
+			{
+				PreConfig: func() {
+					cl := e2eClient(t, user, pass)
+					if err := cl.Group.Delete(context.Background(), adpwsh.ByGUID(guid1)); err != nil {
+						t.Fatalf("out-of-band group delete failed: %v", err)
+					}
+				},
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_group.g", "id", &guid2),
+					captureAttr("activedirectory_group.g", "sid", &sid2),
+					func(*terraform.State) error {
+						if guid2 == "" || guid2 == guid1 {
+							return fmt.Errorf("expected a new objectGUID after recreate, got %q (was %q)", guid2, guid1)
+						}
+						if sid2 == "" || sid2 == sid1 {
+							return fmt.Errorf("expected a new SID after recreate, got %q (was %q)", sid2, sid1)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}
+
+// A user deleted out of band -> recreated with a new objectGUID and SID.
+func TestAccE2EDriftUserDeleted(t *testing.T) {
+	user, pass, e := driftAlpha()
+	ou := accNamePrefix + "drift-udel-ou"
+	sam := accNamePrefix + "drift-udel"
+	upn := sam + "@" + e.upnSuffix()
+	cfg := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_user" "u" {
+  sam_account_name    = %q
+  container           = activedirectory_ou.staff.dn
+  user_principal_name = %q
+  password            = "Correct-Horse-Battery-Staple-1"
+  password_version    = 1
+}`, ou, e.Container, sam, upn)
+
+	var guid1, sid1, guid2, sid2 string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             e2eCheckDestroy(t, user, pass),
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_user.u", "id", &guid1),
+					captureAttr("activedirectory_user.u", "sid", &sid1),
+				),
+			},
+			{
+				PreConfig: func() {
+					cl := e2eClient(t, user, pass)
+					if err := cl.User.Delete(context.Background(), adpwsh.ByGUID(guid1)); err != nil {
+						t.Fatalf("out-of-band user delete failed: %v", err)
+					}
+				},
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					captureAttr("activedirectory_user.u", "id", &guid2),
+					captureAttr("activedirectory_user.u", "sid", &sid2),
+					func(*terraform.State) error {
+						if guid2 == "" || guid2 == guid1 {
+							return fmt.Errorf("expected a new objectGUID after recreate, got %q (was %q)", guid2, guid1)
+						}
+						if sid2 == "" || sid2 == sid1 {
+							return fmt.Errorf("expected a new SID after recreate, got %q (was %q)", sid2, sid1)
+						}
+						return nil
+					},
+				),
+			},
+			{Config: cfg, PlanOnly: true},
+		},
+	})
+}

@@ -79,3 +79,54 @@ resource "activedirectory_group" "g" {
 		},
 	})
 }
+
+// A group created global, then asked to convert straight to domainlocal — a
+// conversion AD refuses directly (it must pass through universal). The provider
+// must surface the clean "operation failed" diagnostic, never a panic or a raw
+// cmdlet dump, and must never replace the group to force the change. Real-only:
+// the fake has no opinion on which conversions AD permits.
+func TestAccE2EIllegalScopeConversion(t *testing.T) {
+	user, pass := os.Getenv(envE2EAlphaUser), os.Getenv(envE2EAlphaPass)
+	e := e2eSuiteEnv(user, pass, e2eAlphaDN())
+	ou := accNamePrefix + "scope-ou"
+	grp := accNamePrefix + "scope-grp"
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+`, ou, e.Container)
+	global := base + fmt.Sprintf(`
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+  scope            = "global"
+}`, grp, grp)
+	toDomainLocal := base + fmt.Sprintf(`
+resource "activedirectory_group" "g" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+  scope            = "domainlocal"
+}`, grp, grp)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 e2ePreCheck(t, envE2EAlphaUser, envE2EAlphaPass),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             e2eCheckDestroy(t, user, pass),
+		Steps: []resource.TestStep{
+			{
+				Config: global,
+				Check:  resource.TestCheckResourceAttr("activedirectory_group.g", "scope", "global"),
+			},
+			{
+				Config: toDomainLocal,
+				// The library surfaces AD's own refusal. The exact wording is
+				// AD's; assert on the stable diagnostic frame the provider adds.
+				ExpectError: regexp.MustCompile(`(?s)(Active Directory|Group\.Update|operation failed)`),
+			},
+		},
+	})
+}
