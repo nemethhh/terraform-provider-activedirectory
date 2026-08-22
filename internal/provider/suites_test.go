@@ -270,8 +270,22 @@ resource "activedirectory_group" "devs" {
   sam_account_name = %q
   container        = activedirectory_ou.staff.dn
   scope            = "universal"
+  category         = "distribution"
   description      = "Everyone who writes code"
   managed_by       = activedirectory_group.mgr.dn
+}`, renamed, renamed)
+
+	// managed_by and description both carry a load-bearing empty default, so
+	// setting them to "" must clear them rather than retain the prior value.
+	cleared := fmt.Sprintf(`
+resource "activedirectory_group" "devs" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+  scope            = "universal"
+  category         = "distribution"
+  description      = ""
+  managed_by       = ""
 }`, renamed, renamed)
 
 	return []resource.TestStep{
@@ -295,11 +309,19 @@ resource "activedirectory_group" "devs" {
 			Config: base + updated,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "scope", "universal"),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "category", "distribution"),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "sam_account_name", renamed),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "dn",
 					"CN="+renamed+",OU="+ou+","+e.Container),
 				resource.TestCheckResourceAttr("activedirectory_group.devs", "managed_by",
 					"CN="+mgr+",OU="+ou+","+e.Container),
+			),
+		},
+		{
+			Config: base + cleared,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "description", ""),
+				resource.TestCheckResourceAttr("activedirectory_group.devs", "managed_by", ""),
 			),
 		},
 		{
