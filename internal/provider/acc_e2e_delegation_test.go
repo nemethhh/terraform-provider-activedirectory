@@ -58,21 +58,45 @@ resource "activedirectory_user" "target" {
   password_version    = 1
 }`, ou, e.Container, usr, upn)
 
-	// Feeds the reset_user_passwords template into access_rule with for_each,
-	// exactly as datasource_delegation_template.go's schema doc says to.
+	// Feeds the reset_user_passwords template into access_rule by explicit,
+	// indexed blocks rather than for_each. for_each is documented (and works
+	// fine against a real Terraform apply — datasource_delegation_template.go's
+	// schema doc still recommends it), but terraform-plugin-testing v1.16.0's
+	// legacy post-step state shim (state_shim.go's shimResourceStateKey) cannot
+	// address a string-keyed for_each instance at all: "unexpected index type
+	// (string) for ... for_each is not supported". That is a harness
+	// limitation, not a provider bug — confirmed on the lab, where the apply
+	// itself succeeded. reset_user_passwords expands to exactly two ACE specs
+	// (go-adpwsh's delegation.go), so two indexed resources cover the template
+	// in full while keeping res.Index nil for both (see state_shim.go: the
+	// error path only triggers when Index is non-nil). This still exercises
+	// the applies_to-from-computed-data (unknown-at-plan) path the 6544b45 fix
+	// handles: rules[N] is known at plan (the data source is pure computation
+	// with no unknown inputs), but each rule's applies_to is itself a nested
+	// object read off a data source's Computed attribute, decoded into the
+	// resource's types.Object model field exactly as for_each's
+	// each.value.applies_to was.
 	grant := fmt.Sprintf(`
 data "activedirectory_delegation_template" "reset" {
   task = "reset_user_passwords"
 }
 
-resource "activedirectory_access_rule" "grant" {
-  for_each    = { for idx, r in data.activedirectory_delegation_template.reset.rules : tostring(idx) => r }
+resource "activedirectory_access_rule" "grant0" {
   target      = activedirectory_ou.cap.dn
-  trustee     = %q
-  rights      = each.value.rights
-  object_type = each.value.object_type
-  applies_to  = each.value.applies_to
-  type        = each.value.type
+  trustee     = %[1]q
+  rights      = data.activedirectory_delegation_template.reset.rules[0].rights
+  object_type = data.activedirectory_delegation_template.reset.rules[0].object_type
+  applies_to  = data.activedirectory_delegation_template.reset.rules[0].applies_to
+  type        = data.activedirectory_delegation_template.reset.rules[0].type
+}
+
+resource "activedirectory_access_rule" "grant1" {
+  target      = activedirectory_ou.cap.dn
+  trustee     = %[1]q
+  rights      = data.activedirectory_delegation_template.reset.rules[1].rights
+  object_type = data.activedirectory_delegation_template.reset.rules[1].object_type
+  applies_to  = data.activedirectory_delegation_template.reset.rules[1].applies_to
+  type        = data.activedirectory_delegation_template.reset.rules[1].type
 }`, trustee)
 
 	var userGUID string
@@ -104,8 +128,10 @@ resource "activedirectory_access_rule" "grant" {
 					}
 				},
 				Config: base + grant,
-				Check: resource.TestCheckResourceAttrSet(
-					`activedirectory_access_rule.grant["0"]`, "trustee_sid"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant0", "trustee_sid"),
+					resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant1", "trustee_sid"),
+				),
 			},
 			{
 				// After the grant: the identical call now succeeds, because the

@@ -47,34 +47,35 @@ resource "activedirectory_access_rule" "bad" {
 // TestAccessRuleFromDelegationTemplateAgainstTheFake reproduces the exact
 // failure shape found on the real domain (task B6): the headline usage of
 // fanning a activedirectory_delegation_template data source into
-// activedirectory_access_rule via for_each — see
+// activedirectory_access_rule — see
 // examples/resources/activedirectory_access_rule/resource.tf and
 // acc_e2e_delegation_test.go's TestAccE2EDelegationGrantsCapability. Each
-// access_rule instance's applies_to comes from each.value.applies_to, a
-// nested object read off a data source's Computed attribute; the framework
-// represents that as an UNKNOWN object at the point the config decodes into
-// the resource's model, before the data source itself is evaluated. Decoding
-// an unknown object into a plain Go struct (the previous shape of
+// access_rule's applies_to comes from a rule's applies_to, a nested object
+// read off a data source's Computed attribute; the framework represents that
+// as an UNKNOWN object at the point the config decodes into the resource's
+// model, before the data source itself is evaluated. Decoding an unknown
+// object into a plain Go struct (the previous shape of
 // accessRuleModel.AppliesTo) is exactly what terraform-plugin-framework
 // cannot do. Confirmed by temporarily reverting the fix: this exact config
 // fails "terraform plan" with
 //
 //	Error: Value Conversion Error
-//	  with activedirectory_access_rule.grant, ... applies_to = each.value.applies_to
+//	  with activedirectory_access_rule.grant0, ... applies_to = data.activedirectory_delegation_template.t.rules[0].applies_to
 //	  Received unknown value, however the target type cannot handle unknown values.
 //	  Path: applies_to  Target Type: provider.accessRuleAppliesTo  Suggested Type: basetypes.ObjectValue
 //
-// — byte-for-byte the error from the lab. Step 1 (no Check) is where that
-// failure occurred; it must plan and apply cleanly now. Step 2 tears the
-// for_each'd instances back down before the TestCase ends: resource.Test's
-// own post-test state retrieval (independent of any Check) shims state
-// through a legacy path that cannot address a for_each (string-keyed)
-// resource instance at all ("unexpected index type ... for_each is not
-// supported", state_shim.go) — unrelated to this bug, but it means a
-// for_each'd resource cannot be left in final state when driving this
-// version of terraform-plugin-testing, so this second step (rather than an
-// instance-indexed Check) is how the test proves the two grants existed and
-// then cleans them up without tripping that harness limitation.
+// — byte-for-byte the error from the lab (originally reproduced via
+// for_each's each.value.applies_to; the unknown-object shape is identical
+// however the per-rule value reaches the resource). This version assigns
+// rules[0]/rules[1] to two explicitly-indexed resources instead of fanning
+// out with for_each: terraform-plugin-testing v1.16.0's legacy post-step
+// state shim (state_shim.go's shimResourceStateKey) cannot address a
+// string-keyed for_each instance at all ("unexpected index type (string) ...
+// for_each is not supported") — a harness limitation, not a provider bug
+// (confirmed on the lab, where the real apply succeeded). Two ordinary,
+// non-indexed resource labels never hit that code path (res.Index stays
+// nil), so a single step — plan, apply, and the TestCase's own final
+// destroy — is enough.
 func TestAccessRuleFromDelegationTemplateAgainstTheFake(t *testing.T) {
 	dir := fake.NewDirectory()
 	ou := accNamePrefix + "ar-tmpl-ou"
@@ -96,23 +97,42 @@ data "activedirectory_delegation_template" "t" {
 }
 `, ou, grp, grp)
 
+	// reset_user_passwords expands to exactly two ACE specs (go-adpwsh's
+	// delegation.go), so rules[0] and rules[1] cover the template in full.
 	grant := `
-resource "activedirectory_access_rule" "grant" {
-  for_each    = { for i, x in data.activedirectory_delegation_template.t.rules : tostring(i) => x }
+resource "activedirectory_access_rule" "grant0" {
   target      = activedirectory_ou.t.dn
   trustee     = activedirectory_group.helpdesk.id
-  rights      = each.value.rights
-  object_type = each.value.object_type
-  applies_to  = each.value.applies_to
-  type        = each.value.type
+  rights      = data.activedirectory_delegation_template.t.rules[0].rights
+  object_type = data.activedirectory_delegation_template.t.rules[0].object_type
+  applies_to  = data.activedirectory_delegation_template.t.rules[0].applies_to
+  type        = data.activedirectory_delegation_template.t.rules[0].type
+}
+
+resource "activedirectory_access_rule" "grant1" {
+  target      = activedirectory_ou.t.dn
+  trustee     = activedirectory_group.helpdesk.id
+  rights      = data.activedirectory_delegation_template.t.rules[1].rights
+  object_type = data.activedirectory_delegation_template.t.rules[1].object_type
+  applies_to  = data.activedirectory_delegation_template.t.rules[1].applies_to
+  type        = data.activedirectory_delegation_template.t.rules[1].type
 }`
 
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps: []resource.TestStep{
-			{Config: base + grant},
-			{Config: base},
-		},
+		Steps: []resource.TestStep{{
+			Config: base + grant,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant0", "trustee_sid"),
+				resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant1", "trustee_sid"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "object_type", "Reset Password"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "object_type", "pwdLastSet"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.scope", "descendants"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.object_class", "user"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.scope", "descendants"),
+				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.object_class", "user"),
+			),
+		}},
 	})
 }
 
