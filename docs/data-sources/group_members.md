@@ -3,12 +3,12 @@
 page_title: "activedirectory_group_members Data Source - activedirectory"
 subcategory: ""
 description: |-
-  List a group's direct members. Identify the group by GUID, DN, SID, or sAMAccountName.
+  List a group's members. Identify the group by GUID, DN, SID, or sAMAccountName. By default the group's direct members are returned; set recursive = true for the effective membership resolved through nested groups.
 ---
 
 # activedirectory_group_members (Data Source)
 
-List a group's direct members. Identify the group by GUID, DN, SID, or sAMAccountName.
+List a group's members. Identify the group by GUID, DN, SID, or sAMAccountName. By default the group's direct members are returned; set `recursive = true` for the effective membership resolved through nested groups.
 
 ## Example Usage
 
@@ -31,12 +31,13 @@ output "admin_member_dns" {
 
 - `dn` (String) Look the object up by distinguished name.
 - `guid` (String) Look the object up by objectGUID.
+- `recursive` (Boolean) When `true`, return the group's effective membership: every leaf account (user/computer) reachable through nested groups, with intermediate group objects flattened away, matching `Get-ADGroupMember -Recursive`. When `false` (the default), return only the group's direct members, including any nested group objects. Recursive results do not include primary-group-only membership (for example a user whose primary group is the target, such as Domain Users).
 - `sam_account_name` (String) Look the object up by sAMAccountName.
 - `sid` (String) Look the object up by security identifier.
 
 ### Read-Only
 
-- `members` (Attributes List) The group's direct members. (see [below for nested schema](#nestedatt--members))
+- `members` (Attributes List) The group's members: direct members when `recursive` is false, effective leaf accounts when `recursive` is true. (see [below for nested schema](#nestedatt--members))
 
 <a id="nestedatt--members"></a>
 ### Nested Schema for `members`

@@ -28,6 +28,7 @@ type groupMembersDataSourceModel struct {
 	DN             types.String  `tfsdk:"dn"`
 	SID            types.String  `tfsdk:"sid"`
 	SamAccountName types.String  `tfsdk:"sam_account_name"`
+	Recursive      types.Bool    `tfsdk:"recursive"`
 	Members        []memberModel `tfsdk:"members"`
 }
 
@@ -37,9 +38,20 @@ func (d *groupMembersDataSource) Metadata(_ context.Context, _ datasource.Metada
 
 func (d *groupMembersDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	attrs := identitySelectorSchema(true)
+	attrs["recursive"] = dschema.BoolAttribute{
+		Optional: true,
+		MarkdownDescription: "When `true`, return the group's effective membership: " +
+			"every leaf account (user/computer) reachable through nested groups, with " +
+			"intermediate group objects flattened away, matching " +
+			"`Get-ADGroupMember -Recursive`. When `false` (the default), return only the " +
+			"group's direct members, including any nested group objects. Recursive " +
+			"results do not include primary-group-only membership (for example a user " +
+			"whose primary group is the target, such as Domain Users).",
+	}
 	attrs["members"] = dschema.ListNestedAttribute{
-		Computed:            true,
-		MarkdownDescription: "The group's direct members.",
+		Computed: true,
+		MarkdownDescription: "The group's members: direct members when `recursive` is " +
+			"false, effective leaf accounts when `recursive` is true.",
 		NestedObject: dschema.NestedAttributeObject{Attributes: map[string]dschema.Attribute{
 			"dn":    dschema.StringAttribute{Computed: true, MarkdownDescription: "Member DN."},
 			"guid":  dschema.StringAttribute{Computed: true, MarkdownDescription: "Member objectGUID."},
@@ -48,8 +60,11 @@ func (d *groupMembersDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 		}},
 	}
 	resp.Schema = dschema.Schema{
-		MarkdownDescription: "List a group's direct members. Identify the group by GUID, DN, SID, or sAMAccountName.",
-		Attributes:          attrs,
+		MarkdownDescription: "List a group's members. Identify the group by GUID, DN, " +
+			"SID, or sAMAccountName. By default the group's direct members are returned; " +
+			"set `recursive = true` for the effective membership resolved through nested " +
+			"groups.",
+		Attributes: attrs,
 	}
 }
 
@@ -67,7 +82,14 @@ func (d *groupMembersDataSource) Read(ctx context.Context, req datasource.ReadRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	members, err := d.client.Group.Members(ctx, identityFrom(cfg.GUID, cfg.DN, cfg.SID, cfg.SamAccountName))
+	id := identityFrom(cfg.GUID, cfg.DN, cfg.SID, cfg.SamAccountName)
+	var members []adpwsh.Member
+	var err error
+	if cfg.Recursive.ValueBool() {
+		members, err = d.client.Group.MembersRecursive(ctx, id)
+	} else {
+		members, err = d.client.Group.Members(ctx, id)
+	}
 	if err != nil {
 		resp.Diagnostics.Append(errorDiagnostics("Group.Members", groupMembersDataSourceType, err)...)
 		return

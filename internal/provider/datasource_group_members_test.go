@@ -32,6 +32,23 @@ func TestAccGroupMembersDataSource(t *testing.T) {
 	})
 }
 
+func TestGroupMembersRecursiveDataSourceAgainstTheFake(t *testing.T) {
+	dir := fake.NewDirectory()
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factoriesWith(dir),
+		Steps:                    groupMembersRecursiveDataSourceSteps(fakeSuiteEnv()),
+	})
+}
+
+func TestAccGroupMembersRecursiveDataSource(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    groupMembersRecursiveDataSourceSteps(accSuiteEnv()),
+	})
+}
+
 // TestAccGroupMembersDataSourceLargeSet proves the data source does not truncate
 // a group whose membership exceeds the 1500-entry ranged-retrieval page. It
 // reuses the large-group fixture (provisioned in one PowerShell pass, since

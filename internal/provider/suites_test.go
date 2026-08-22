@@ -1087,6 +1087,49 @@ resource "activedirectory_group_membership" "s" {
 	}
 }
 
+// groupMembersRecursiveDataSourceSteps proves the data source's recursive flag:
+// with user ∈ child ∈ parent, a direct read of parent returns the child group,
+// and a recursive read returns the leaf user (the group flattened away).
+func groupMembersRecursiveDataSourceSteps(e suiteEnv) []resource.TestStep {
+	usr := accNamePrefix + "rec-usr"
+	base := nestedBase(e, accNamePrefix+"rec-ou", accNamePrefix+"rec-parent",
+		accNamePrefix+"rec-child", usr, usr+"@"+e.upnSuffix())
+
+	edges := `
+resource "activedirectory_group_membership" "child" {
+  group_id = activedirectory_group.child.id
+  members  = [activedirectory_user.u.id]
+}
+resource "activedirectory_group_membership" "parent" {
+  group_id = activedirectory_group.parent.id
+  members  = [activedirectory_group.child.id]
+}
+
+data "activedirectory_group_members" "direct" {
+  guid       = activedirectory_group.parent.id
+  depends_on = [activedirectory_group_membership.parent]
+}
+data "activedirectory_group_members" "effective" {
+  guid       = activedirectory_group.parent.id
+  recursive  = true
+  depends_on = [activedirectory_group_membership.parent, activedirectory_group_membership.child]
+}`
+
+	return []resource.TestStep{{
+		Config: base + edges,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_group_members.direct", "members.#", "1"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_group_members.direct", "members.*",
+				map[string]string{"class": "group"}),
+			resource.TestCheckResourceAttr("data.activedirectory_group_members.effective", "members.#", "1"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_group_members.effective", "members.*",
+				map[string]string{"class": "user"}),
+		),
+	}}
+}
+
 // accessRuleSteps proves depth beyond a single ACE: three independent rules
 // coexist on the same target (single-right + object_type, multi-right, and an
 // independent Deny), a no-diff replan, a replace-as-revoke+grant when an
