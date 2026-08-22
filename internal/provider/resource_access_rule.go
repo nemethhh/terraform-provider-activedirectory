@@ -43,21 +43,48 @@ type accessRuleResource struct{ client *adpwsh.Client }
 
 func newAccessRuleResource() resource.Resource { return &accessRuleResource{} }
 
+// accessRuleAppliesTo is a convenience shape for building/reading applies_to
+// values with ObjectValueFrom/As. It is never the state model's field type:
+// see accessRuleModel.AppliesTo for why.
 type accessRuleAppliesTo struct {
 	Scope       types.String `tfsdk:"scope"`
 	ObjectClass types.String `tfsdk:"object_class"`
 }
 
+// accessRuleModel.AppliesTo is a types.Object, not the accessRuleAppliesTo
+// struct, because terraform-plugin-framework cannot decode an UNKNOWN object
+// value into a plain Go struct — only types.Object (basetypes.ObjectValue)
+// can represent "unknown" at the object level. applies_to is unknown at plan
+// time whenever it is sourced from a computed value (e.g.
+// each.value.applies_to fanned out from activedirectory_delegation_template
+// via for_each); decoding that into accessRuleAppliesTo previously failed
+// plan with "Value Conversion Error ... target type cannot handle unknown
+// values". Use appliesToAttributes (below) to read scope/object_class out of
+// it, guarding IsNull()/IsUnknown().
 type accessRuleModel struct {
-	ID         types.String        `tfsdk:"id"`
-	Target     types.String        `tfsdk:"target"`
-	Trustee    types.String        `tfsdk:"trustee"`
-	TrusteeSID types.String        `tfsdk:"trustee_sid"`
-	Rights     types.Set           `tfsdk:"rights"`
-	ObjectType types.String        `tfsdk:"object_type"`
-	AppliesTo  accessRuleAppliesTo `tfsdk:"applies_to"`
-	Type       types.String        `tfsdk:"type"`
-	Timeouts   timeouts.Value      `tfsdk:"timeouts"`
+	ID         types.String   `tfsdk:"id"`
+	Target     types.String   `tfsdk:"target"`
+	Trustee    types.String   `tfsdk:"trustee"`
+	TrusteeSID types.String   `tfsdk:"trustee_sid"`
+	Rights     types.Set      `tfsdk:"rights"`
+	ObjectType types.String   `tfsdk:"object_type"`
+	AppliesTo  types.Object   `tfsdk:"applies_to"`
+	Type       types.String   `tfsdk:"type"`
+	Timeouts   timeouts.Value `tfsdk:"timeouts"`
+}
+
+// appliesToAttributes extracts the scope and object_class attributes out of
+// an applies_to object value. A null or unknown object itself has no
+// attributes to read, so both are returned null in that case — callers apply
+// whatever default or unknown-skip behaviour is appropriate for them.
+func appliesToAttributes(o types.Object) (scope, objectClass types.String) {
+	if o.IsNull() || o.IsUnknown() {
+		return types.StringNull(), types.StringNull()
+	}
+	attrs := o.Attributes()
+	scope, _ = attrs["scope"].(types.String)
+	objectClass, _ = attrs["object_class"].(types.String)
+	return scope, objectClass
 }
 
 func (r *accessRuleResource) Metadata(_ context.Context, _ resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -206,10 +233,14 @@ func (appliesToScopeValidator) ValidateResource(ctx context.Context, req resourc
 		return
 	}
 
-	scope := config.AppliesTo.Scope
-	objectClass := config.AppliesTo.ObjectClass
-	// An unknown value (e.g. interpolated from another resource) cannot be
-	// checked until apply time; let it through here.
+	// An unknown applies_to (e.g. sourced from a computed value such as
+	// each.value.applies_to fanned out from activedirectory_delegation_template)
+	// cannot be checked until apply time; let it through here. Likewise for an
+	// unknown individual attribute within an otherwise-known object.
+	if config.AppliesTo.IsUnknown() {
+		return
+	}
+	scope, objectClass := appliesToAttributes(config.AppliesTo)
 	if scope.IsUnknown() || objectClass.IsUnknown() {
 		return
 	}
@@ -322,8 +353,22 @@ func (r *accessRuleResource) resolveACE(ctx context.Context, m accessRuleModel) 
 		path.Root("object_type"))
 	diags.Append(d...)
 
+	// At Create/Read/Delete, applies_to comes from the plan or from state, so
+	// it is known by the time resolveACE runs even when it was unknown at
+	// plan time for an intermediate step; a null object (or null attribute
+	// within it) falls back to the schema's own defaults ("this"/"").
+	scopeVal, objectClassVal := appliesToAttributes(m.AppliesTo)
+	scope := string(adpwsh.InheritanceThis)
+	if !scopeVal.IsNull() && !scopeVal.IsUnknown() {
+		scope = scopeVal.ValueString()
+	}
+	objectClass := ""
+	if !objectClassVal.IsNull() && !objectClassVal.IsUnknown() {
+		objectClass = objectClassVal.ValueString()
+	}
+
 	objectClassGUID, d = r.resolveSchemaRef(ctx,
-		adpwsh.SchemaRef{Kind: adpwsh.RefClass, Name: m.AppliesTo.ObjectClass.ValueString()},
+		adpwsh.SchemaRef{Kind: adpwsh.RefClass, Name: objectClass},
 		path.Root("applies_to").AtName("object_class"))
 	diags.Append(d...)
 
@@ -350,7 +395,7 @@ func (r *accessRuleResource) resolveACE(ctx context.Context, m accessRuleModel) 
 		Rights:              rights,
 		ObjectType:          objectTypeGUID,
 		InheritedObjectType: objectClassGUID,
-		Inheritance:         adpwsh.Inheritance(m.AppliesTo.Scope.ValueString()),
+		Inheritance:         adpwsh.Inheritance(scope),
 	}
 	return ace, objectTypeGUID, objectClassGUID, diags
 }
