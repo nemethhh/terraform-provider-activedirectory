@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // accNamePrefix is on every object these suites create. The sweeper matches on
@@ -385,6 +386,8 @@ func userLifecycleSteps(e suiteEnv, passwordCheck resource.TestCheckFunc) []reso
 	ou := accNamePrefix + "usr-ou"
 	sam := accNamePrefix + "usr"
 	upn := sam + "@" + e.upnSuffix()
+	upn2 := sam + "-renamed@" + e.upnSuffix() // UPN rename target
+	cn := accNamePrefix + "usr-cn"            // explicit CN override, distinct from sam
 
 	base := e.ProviderConfig + fmt.Sprintf(`
 resource "activedirectory_ou" "staff" {
@@ -393,42 +396,81 @@ resource "activedirectory_ou" "staff" {
 }
 `, ou, e.Container)
 
+	// Create with an explicit, AD-legal flag set plus an expiry to clear later.
+	// change_password_at_logon=true is legal only because password_expires=true
+	// (AD cannot require a change of a password that never expires).
 	create := fmt.Sprintf(`
 resource "activedirectory_user" "jdoe" {
-  sam_account_name    = %q
-  container           = activedirectory_ou.staff.dn
-  user_principal_name = %q
-  display_name        = "John Doe"
-  given_name          = "John"
-  surname             = "Doe"
-  enabled             = true
-  password            = "Correct-Horse-Battery-Staple-1"
-  password_version    = 1
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  user_principal_name      = %q
+  display_name             = "John Doe"
+  given_name               = "John"
+  surname                  = "Doe"
+  enabled                  = true
+  description              = "initial"
+  can_change_password      = true
+  password_expires         = true
+  change_password_at_logon = true
+  account_expiration_date  = "2027-06-01T12:00:00Z"
+  password                 = "Correct-Horse-Battery-Staple-1"
+  password_version         = 1
 }`, sam, upn)
 
-	// Bumping the version rotates; the password itself cannot be diffed,
-	// because it is never stored. Clearing surname is the row that catches a
-	// wrong LDAP mapping: its attribute is sn, not surname.
+	// Rotate: bump the version, flip every manageable field in place, and CLEAR
+	// description + account_expiration_date. surname="" catches the sn mapping.
 	rotated := fmt.Sprintf(`
 resource "activedirectory_user" "jdoe" {
-  sam_account_name        = %q
-  container               = activedirectory_ou.staff.dn
-  user_principal_name     = %q
-  display_name            = "John Doe"
-  given_name              = "John"
-  surname                 = ""
-  enabled                 = false
-  password                = "Rotated-P4ssw0rd-2"
-  password_version        = 2
-  account_expiration_date = "2027-01-02T03:04:05Z"
-}`, sam, upn)
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  user_principal_name      = %q
+  display_name             = "Johnathan Doe"
+  given_name               = "John"
+  surname                  = ""
+  enabled                  = false
+  description              = ""
+  can_change_password      = false
+  password_expires         = false
+  change_password_at_logon = false
+  account_expiration_date  = ""
+  password                 = "Rotated-P4ssw0rd-2"
+  password_version         = 2
+}`, sam, upn2)
+
+	// CN override: an explicit name (CN) distinct from the sAMAccountName. A CN
+	// rename is an in-place update; the objectGUID must survive.
+	cnOverride := fmt.Sprintf(`
+resource "activedirectory_user" "jdoe" {
+  sam_account_name         = %q
+  container                = activedirectory_ou.staff.dn
+  name                     = %q
+  user_principal_name      = %q
+  display_name             = "Johnathan Doe"
+  given_name               = "John"
+  surname                  = ""
+  enabled                  = false
+  description              = ""
+  can_change_password      = false
+  password_expires         = false
+  change_password_at_logon = false
+  account_expiration_date  = ""
+  password                 = "Rotated-P4ssw0rd-2"
+  password_version         = 2
+}`, sam, cn, upn2)
+
+	var createID, cnID string
 
 	rotationChecks := []resource.TestCheckFunc{
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "false"),
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "surname", ""),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "user_principal_name", upn2),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "display_name", "Johnathan Doe"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "description", ""),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "can_change_password", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_expires", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "change_password_at_logon", "false"),
+		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "account_expiration_date", ""),
 		resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_version", "2"),
-		resource.TestCheckResourceAttr("activedirectory_user.jdoe",
-			"account_expiration_date", "2027-01-02T03:04:05Z"),
 	}
 	if passwordCheck != nil {
 		rotationChecks = append(rotationChecks, passwordCheck)
@@ -442,11 +484,16 @@ resource "activedirectory_user" "jdoe" {
 				resource.TestCheckResourceAttrSet("activedirectory_user.jdoe", "sid"),
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "dn",
 					"CN="+sam+",OU="+ou+","+e.Container),
-				// The CN defaults to the sAMAccountName.
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "name", sam),
 				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "enabled", "true"),
-				// The password is never in state: this is the whole point.
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "description", "initial"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "can_change_password", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "password_expires", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "change_password_at_logon", "true"),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe",
+					"account_expiration_date", "2027-06-01T12:00:00Z"),
 				resource.TestCheckNoResourceAttr("activedirectory_user.jdoe", "password"),
+				captureAttr("activedirectory_user.jdoe", "id", &createID),
 			),
 		},
 		{
@@ -458,12 +505,25 @@ resource "activedirectory_user" "jdoe" {
 			Check:  resource.ComposeAggregateTestCheckFunc(rotationChecks...),
 		},
 		{
-			ResourceName:      "activedirectory_user.jdoe",
-			ImportState:       true,
-			ImportStateId:     sam, // by sAMAccountName, the brownfield case
-			ImportStateVerify: true,
-			// A write-only attribute and its version are not readable, so they
-			// cannot round-trip through import.
+			Config: base + cnOverride,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "name", cn),
+				resource.TestCheckResourceAttr("activedirectory_user.jdoe", "dn",
+					"CN="+cn+",OU="+ou+","+e.Container),
+				captureAttr("activedirectory_user.jdoe", "id", &cnID),
+				func(*terraform.State) error {
+					if cnID != createID {
+						return fmt.Errorf("CN override must be in-place: objectGUID changed %q -> %q", createID, cnID)
+					}
+					return nil
+				},
+			),
+		},
+		{
+			ResourceName:            "activedirectory_user.jdoe",
+			ImportState:             true,
+			ImportStateId:           sam, // by sAMAccountName, the brownfield case
+			ImportStateVerify:       true,
 			ImportStateVerifyIgnore: []string{"password", "password_version"},
 		},
 	}
