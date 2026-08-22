@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -46,6 +47,26 @@ func TestAccGroupMembersRecursiveDataSource(t *testing.T) {
 		ProtoV6ProviderFactories: accFactories(),
 		CheckDestroy:             accCheckDestroy(t),
 		Steps:                    groupMembersRecursiveDataSourceSteps(accSuiteEnv()),
+	})
+}
+
+// TestGroupMembersRecursiveDataSourceErrorOpAgainstTheFake pins that a failing
+// recursive read is attributed to Group.MembersRecursive in the diagnostic, not
+// the direct Group.Members op it shares an error path with. A GUID that resolves
+// to nothing drives the recursive branch to a not-found error; the rendered op
+// name must name the recursive call.
+func TestGroupMembersRecursiveDataSourceErrorOpAgainstTheFake(t *testing.T) {
+	dir := fake.NewDirectory()
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factoriesWith(dir),
+		Steps: []resource.TestStep{{
+			Config: providerConfig + `
+data "activedirectory_group_members" "missing" {
+  guid      = "00000000-0000-4000-8000-0000000000ff"
+  recursive = true
+}`,
+			ExpectError: regexp.MustCompile(`Group\.MembersRecursive`),
+		}},
 	})
 }
 
