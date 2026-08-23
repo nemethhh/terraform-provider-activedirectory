@@ -56,8 +56,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
 			"PowerShell module. `pwsh` runs either on the Windows host Terraform itself runs on " +
-			"(the `local` block) or on a Windows jump box reached over SSH (the `ssh` block). " +
-			"Exactly one of the two is required.",
+			"(the `local` block), on a Windows jump box reached over SSH (the `ssh` block), or " +
+			"on a Windows host reached over PSRP/WinRM (the `psrp` block). Exactly one of the " +
+			"three is required.",
 		Attributes: map[string]schema.Attribute{
 			"pwsh_path": schema.StringAttribute{
 				Optional: true,
@@ -160,7 +161,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 						Validators:          []validator.Int64{int64validator.AtLeast(1)},
 						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default."},
 					"timeout": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "Per-operation transport timeout. Environment: `AD_PSRP_TIMEOUT`. Defaults to `60s`."},
+						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
 				},
 			},
 			"domain": schema.SingleNestedBlock{

@@ -36,3 +36,21 @@ provider "activedirectory" {
 # Over SSH, a public-key session gets a network logon token with no delegatable
 # credentials, so onward authentication to AD Web Services fails — the classic
 # double hop. Add a domain.credential block to work around it.
+
+# Alternatively, reach a domain controller over PSRP/WinRM with Kerberos:
+# provider "activedirectory" {
+#   psrp {
+#     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local
+#   }
+# }
+#
+# From a member/management host, add domain.credential to cross the double hop:
+# provider "activedirectory" {
+#   psrp { host = "mgmt.corp.local" }
+#   domain {
+#     credential {
+#       username = "CORP\\svc_tf"
+#       password = var.svc_password
+#     }
+#   }
+# }

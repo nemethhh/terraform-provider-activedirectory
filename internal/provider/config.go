@@ -362,7 +362,7 @@ func resolveReplication(ctx context.Context, m providerModel) (adpwsh.Replicatio
 	return cfg, diags
 }
 
-// transportKind is which of the two mutually exclusive transport blocks the
+// transportKind is which of the three mutually exclusive transport blocks the
 // configuration selects.
 type transportKind int
 
