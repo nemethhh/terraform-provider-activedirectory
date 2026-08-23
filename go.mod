@@ -9,8 +9,10 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-log v0.11.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
-	github.com/nemethhh/go-adpwsh v0.7.0
+	github.com/nemethhh/go-adpwsh v0.9.0
 )
+
+replace github.com/go-krb5/krb5 => github.com/smnsjas/krb5 v0.0.0-20260129173902-49e50274bc95
 
 require (
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
