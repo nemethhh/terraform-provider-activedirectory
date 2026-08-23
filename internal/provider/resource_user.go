@@ -71,12 +71,16 @@ func (r *userResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 				MarkdownDescription: "The security identifier."},
 			"sam_account_name": schema.StringAttribute{Required: true,
-				MarkdownDescription: "The logon name. Changing it updates the account in place."},
+				Validators: samAccountNameValidators(),
+				MarkdownDescription: "The logon name. Changing it updates the account in place." +
+					" At most 20 characters; it may not contain \" [ ] : ; | = + * ? < > / \\ , or end with a period or space."},
 			"container": schema.StringAttribute{Required: true,
 				PlanModifiers:       []planmodifier.String{keepEquivalentDN{}},
 				MarkdownDescription: "Distinguished name of the parent. Changing it moves the account in place."},
 			"name": schema.StringAttribute{Optional: true, Computed: true,
-				MarkdownDescription: "The CN. Defaults to `sam_account_name`. Changing it renames the account in place."},
+				Validators: cnLengthValidators(),
+				MarkdownDescription: "The CN. Defaults to `sam_account_name`. Changing it renames the account in place." +
+					" At most 64 characters."},
 			// Every optional string carries an empty default. Optional+Computed
 			// alone retains the prior state value when the line is removed
 			// from configuration, which would make removal a silent no-op

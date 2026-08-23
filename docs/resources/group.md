@@ -29,8 +29,8 @@ resource "activedirectory_group" "developers" {
 ### Required
 
 - `container` (String) Distinguished name of the parent. Changing it moves the group in place.
-- `name` (String) The group's CN. Changing it renames the group in place.
-- `sam_account_name` (String) The pre-Windows 2000 name. Changing it updates the group in place.
+- `name` (String) The group's CN. Changing it renames the group in place. At most 64 characters.
+- `sam_account_name` (String) The pre-Windows 2000 name. Changing it updates the group in place. At most 256 characters; it may not contain " [ ] : ; | = + * ? < > / \ , or end with a period or space.
 
 ### Optional
 

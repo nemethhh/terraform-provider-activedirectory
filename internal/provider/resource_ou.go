@@ -57,7 +57,9 @@ func (r *ouResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp 
 				Required: true,
 				// No RequiresReplace: a rename is Rename-ADObject. Replacing
 				// would destroy the object and everything referencing it.
-				MarkdownDescription: "The OU's name (its RDN). Changing it renames the OU in place.",
+				Validators: cnLengthValidators(),
+				MarkdownDescription: "The OU's name (its RDN). Changing it renames the OU in place." +
+					" At most 64 characters.",
 			},
 			"container": schema.StringAttribute{
 				Required: true,

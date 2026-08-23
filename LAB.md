@@ -360,3 +360,68 @@ Lab-caught, fixed and re-validated:
 | Defect | Where it was |
 |---|---|
 | The 5000-member scale run's `flat_direct` step (`Group.Members`, whose read-back does a per-member `Get-ADObject` — 5000 sequential directory calls) exceeded the provider's default **60s** transport timeout and aborted the plan before the recursive reads ran | the test — a legitimately long single operation, not a hang. Fixed by configuring `local { timeout = "20m" }` for that suite (`accProviderConfigWithTimeout`); the recursive reads themselves are a single `Get-ADGroupMember` call and are not the slow path. The fake cannot catch a real-cmdlet latency wall — the standing fake-vs-real risk |
+
+### Fail-loud handling of AD-side value mutation, 2026-08-23
+
+The provider gained a two-layer defence against Active Directory storing an
+object differently from the configuration (which otherwise surfaces as the
+framework's cryptic "inconsistent result after apply" or a perpetual
+reconcile). **Layer 1** is plan-time schema validators (`sam_account_name`
+length + charset, `name`/CN length ≤ 64) that reject bad input before any
+directory call. **Layer 2** is a post-write consistency guard
+(`consistency.go`) that compares the requested spec against the read-back and
+emits one clear attribute-scoped error on genuine divergence, while suppressing
+equivalent respellings (DN case via `dnEqual`, name whitespace via a new
+`keepEquivalentName` plan modifier). Backed by `go-adpwsh` **v0.8.0**, whose
+in-memory fake learned to reproduce name/sam trim + truncation so the guard is
+exercisable off-domain.
+
+Before finalising the validators, a live probe (`New-ADUser`/`New-ADGroup`/
+`New-ADOrganizationalUnit` on `s-server`, each created then read back and
+deleted) established what the directory **actually** does:
+
+| Input | corp.local result |
+|---|---|
+| user `sAMAccountName`, 21 chars | **REJECTED** — "The name provided is not a properly formed account name" |
+| group `sAMAccountName`, 25 chars | **ACCEPTED**, stored all 25 |
+| OU name, 65 chars | **REJECTED** — "A value for the attribute was not in the acceptable range of values" |
+| `sAMAccountName` containing `,` | **REJECTED** |
+| user name with a trailing space | **ACCEPTED**, the space **preserved** (not trimmed) |
+
+**What only a real domain proved — and it corrected the design.** On this
+domain AD **rejects** an over-length or illegal `sAMAccountName`/CN outright; it
+does **not** silently truncate, and it **preserves** trailing whitespace in a
+name rather than trimming it. So the Layer 1 validators are not merely
+prevention — they match AD's own refusal and convert a post-hoc apply failure
+into a clean `terraform plan` error, which is the confirmed primary value. Two
+consequences: (1) the group `sAMAccountName` ceiling is **not** the 20-char
+down-level user limit — groups accepted 25 — so the group validator was relaxed
+to the schema `rangeUpper` of **256** (user stays at 20, lab-confirmed); (2) the
+Layer 2 guard, `keepEquivalentName`, and the fake's trim/truncate simulation
+modelled a *silent-mutation* behaviour this domain does not exhibit, so they were
+**removed** — there is no need to defend against silent mutation when the
+directory rejects outright, and `keepEquivalentName` would in fact have wrongly
+suppressed a trailing-space name the directory would have stored. What shipped is
+the Layer 1 validators only: they mirror Active Directory's own refusal and turn
+it into a clean `terraform plan` error. The go-adpwsh fake reverted to storing
+values verbatim (v0.8.0's mutation simulation superseded); the provider pins
+v0.7.0 again. (The pre-existing `keepEquivalentDN` still handles the one real
+silent normalisation — the container DN's canonical case — and is untouched.)
+
+Validated on the real domain with the full lifecycle sweep
+(`-run 'TestAcc.*Lifecycle'`, 496s): `TestAccUserLifecycle`,
+`TestAccGroupLifecycle`, `TestAccOULifecycle`, plus
+`TestAccAccessRuleLifecycle`, `TestAccGroupMemberLifecycle` and
+`TestAccGroupMembershipLifecycle` — **all PASS** against the v0.8.0-pinned
+provider (E2E suites skipped, gated on `AD_E2E_CONTAINER`). This proves the new
+validators do not reject valid creates, the consistency guard — which now runs
+on every create/update/rename/move — never false-fired on a real AD read-back,
+and the suites' no-diff steps stayed empty, i.e. no reconcile-next-run. The
+replication path is untouched by this change, so `TestAccReplication*` was not
+re-exercised.
+
+Lab-caught, fixed and re-validated:
+
+| Defect | Where it was |
+|---|---|
+| The Layer 1 group `sam_account_name` validator inherited the 20-char user ceiling, which would have rejected valid group logon names (the probe created a 25-char group sam that AD accepted and stored) | the provider — the 20-char limit is the pre-Windows-2000 *user* down-level name limit, not a group constraint. Fixed by relaxing the group validator to the `sAMAccountName` schema ceiling of 256 (`groupSamAccountNameValidators`), with the user validator left at 20; caught by the pre-finalisation probe rather than by a test, exactly the "lab-verify the limits before shipping" step the design called for |

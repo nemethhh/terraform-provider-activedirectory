@@ -44,7 +44,7 @@ resource "activedirectory_user" "jdoe" {
 ### Required
 
 - `container` (String) Distinguished name of the parent. Changing it moves the account in place.
-- `sam_account_name` (String) The logon name. Changing it updates the account in place.
+- `sam_account_name` (String) The logon name. Changing it updates the account in place. At most 20 characters; it may not contain " [ ] : ; | = + * ? < > / \ , or end with a period or space.
 
 ### Optional
 
@@ -57,7 +57,7 @@ resource "activedirectory_user" "jdoe" {
 - `display_name` (String) The name shown in address lists. Often written by a sync engine as well, in which case put it in `ignore_changes`. `""` or removal clears the attribute.
 - `enabled` (Boolean) Whether the account is enabled. Active Directory refuses to enable an account without a password satisfying domain policy, so supply `password` alongside `enabled = true`, or set `enabled = false` and let another system establish the password. The provider does not paper over this by silently creating a disabled account.
 - `given_name` (String) The first name. `""` or removal clears the attribute.
-- `name` (String) The CN. Defaults to `sam_account_name`. Changing it renames the account in place.
+- `name` (String) The CN. Defaults to `sam_account_name`. Changing it renames the account in place. At most 64 characters.
 - `password` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The account's password. **Write-only**: it is sent on create and on rotation and is never written to state or to a plan file, so `terraform import` cannot reset an existing user's password. Requires Terraform 1.11 or later. Rotate by changing `password_version`.
 - `password_expires` (Boolean) Whether the password expires. Stated positively.
 - `password_version` (Number) Increment to rotate the password. A write-only value cannot itself be diffed, so this ordinary integer is what makes a rotation visible in a plan. If `password` is set and this never changes, the password is applied at create only.

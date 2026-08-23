@@ -33,7 +33,7 @@ resource "activedirectory_ou" "contractors" {
 ### Required
 
 - `container` (String) Distinguished name of the parent. Changing it moves the OU in place.
-- `name` (String) The OU's name (its RDN). Changing it renames the OU in place.
+- `name` (String) The OU's name (its RDN). Changing it renames the OU in place. At most 64 characters.
 
 ### Optional
 

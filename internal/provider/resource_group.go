@@ -61,9 +61,13 @@ func (r *groupResource) Schema(ctx context.Context, _ resource.SchemaRequest, re
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 				MarkdownDescription: "The security identifier."},
 			"name": schema.StringAttribute{Required: true,
-				MarkdownDescription: "The group's CN. Changing it renames the group in place."},
+				Validators: cnLengthValidators(),
+				MarkdownDescription: "The group's CN. Changing it renames the group in place." +
+					" At most 64 characters."},
 			"sam_account_name": schema.StringAttribute{Required: true,
-				MarkdownDescription: "The pre-Windows 2000 name. Changing it updates the group in place."},
+				Validators: groupSamAccountNameValidators(),
+				MarkdownDescription: "The pre-Windows 2000 name. Changing it updates the group in place." +
+					" At most 256 characters; it may not contain \" [ ] : ; | = + * ? < > / \\ , or end with a period or space."},
 			"container": schema.StringAttribute{Required: true,
 				PlanModifiers:       []planmodifier.String{keepEquivalentDN{}},
 				MarkdownDescription: "Distinguished name of the parent. Changing it moves the group in place."},

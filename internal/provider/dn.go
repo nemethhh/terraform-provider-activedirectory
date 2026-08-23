@@ -136,6 +136,10 @@ func (dnFollowsNameAndContainer) PlanModifyString(ctx context.Context, req planm
 	if planName.IsUnknown() || planContainer.IsUnknown() {
 		return
 	}
+	// An exact name match, not equivalence: a rename is any change to the
+	// configured name, and the distinguished name must agree — otherwise a
+	// config edit that never renames anything would still plan `dn` as
+	// "known after apply".
 	if planName.Equal(stateName) && dnEqual(planContainer.ValueString(), stateContainer.ValueString()) {
 		resp.PlanValue = stateDN
 	}

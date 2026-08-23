@@ -1,6 +1,8 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDNEqual(t *testing.T) {
 	tests := []struct {
