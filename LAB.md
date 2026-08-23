@@ -460,4 +460,6 @@ A real `terraform apply`/`destroy` of an `activedirectory_ou` exercised the
 delete each independently verified on the DC. Member-host (`s-client` +
 `domain.credential`): create verified on the DC, destroy clean — confirming
 the double hop is crossed by explicit credentials exactly as it is for `ssh`.
-The full OU create/update/delete lifecycle passed on both topologies.
+DC-direct exercised the full create/update/delete lifecycle; the member-host
+topology was validated for create and delete, confirming the double-hop
+credential path (update was not exercised on that topology).
