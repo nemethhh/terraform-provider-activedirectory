@@ -23,8 +23,8 @@ provider "activedirectory" {
 }
 
 # To run Terraform anywhere and reach a Windows jump box over SSH instead,
-# replace the local block with an ssh block. Exactly one of the two is required,
-# and there is no implicit default:
+# replace the local block with an ssh block. Exactly one of the three
+# (local/ssh/psrp) is required, and there is no implicit default:
 #
 #   ssh {
 #     host             = "jump.corp.local"

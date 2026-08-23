@@ -73,7 +73,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"domain-joined Windows host. The spawned process inherits that machine's " +
 					"logon token, so Active Directory operations authenticate as whoever launched " +
 					"Terraform unless `domain.credential` says otherwise. Mutually exclusive with " +
-					"`ssh`; exactly one of the two is required.",
+					"`ssh` and `psrp`; exactly one of the three is required.",
 				Attributes: map[string]schema.Attribute{
 					"pwsh_path": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Path to PowerShell 7 on this machine. Overrides the " +
@@ -140,7 +140,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"insecure_skip_verify": schema.BoolAttribute{Optional: true,
 						MarkdownDescription: "Skip TLS certificate verification (testing only; requires `use_tls`). Environment: `AD_PSRP_INSECURE_SKIP_VERIFY`."},
 					"user": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "WinRM auth user in `DOMAIN\\user` or UPN form. Optional when a ticket cache supplies the identity. Environment: `AD_PSRP_USER`."},
+						MarkdownDescription: "WinRM auth user in `DOMAIN\\user` or UPN form. Required: go-psrp needs the principal name even when an ambient Kerberos ticket cache supplies the credentials, because Linux has no SSPI single sign-on. Only on Windows, authenticating via SSPI SSO, can this be omitted. Environment: `AD_PSRP_USER`."},
 					"password": schema.StringAttribute{Optional: true, Sensitive: true,
 						MarkdownDescription: "WinRM auth password. Environment: `AD_PSRP_PASSWORD`. Never written to state or a log line."},
 					"domain": schema.StringAttribute{Optional: true,

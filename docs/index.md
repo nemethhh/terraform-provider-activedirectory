@@ -37,8 +37,8 @@ provider "activedirectory" {
 }
 
 # To run Terraform anywhere and reach a Windows jump box over SSH instead,
-# replace the local block with an ssh block. Exactly one of the two is required,
-# and there is no implicit default:
+# replace the local block with an ssh block. Exactly one of the three
+# (local/ssh/psrp) is required, and there is no implicit default:
 #
 #   ssh {
 #     host             = "jump.corp.local"
@@ -76,7 +76,7 @@ provider "activedirectory" {
 ### Optional
 
 - `domain` (Block, Optional) Domain targeting. (see [below for nested schema](#nestedblock--domain))
-- `local` (Block, Optional) Run `pwsh` on the machine Terraform itself runs on — a domain-joined Windows host. The spawned process inherits that machine's logon token, so Active Directory operations authenticate as whoever launched Terraform unless `domain.credential` says otherwise. Mutually exclusive with `ssh`; exactly one of the two is required. (see [below for nested schema](#nestedblock--local))
+- `local` (Block, Optional) Run `pwsh` on the machine Terraform itself runs on — a domain-joined Windows host. The spawned process inherits that machine's logon token, so Active Directory operations authenticate as whoever launched Terraform unless `domain.credential` says otherwise. Mutually exclusive with `ssh` and `psrp`; exactly one of the three is required. (see [below for nested schema](#nestedblock--local))
 - `psrp` (Block, Optional) Run the AD cmdlets on a Windows host reached over PSRP/WinRM. Kerberos over HTTP (5985) by default, using the runner's ambient Kerberos ticket; set `use_tls` for HTTPS (5986). Target a domain controller, or a member/management host together with `domain.credential`. Mutually exclusive with `local` and `ssh`; exactly one of the three is required. (see [below for nested schema](#nestedblock--psrp))
 - `pwsh_path` (String) Path to PowerShell 7 on whichever machine runs it. `local.pwsh_path` overrides it when the `local` block is used. Environment: `AD_PWSH_PATH`. Defaults to `pwsh`.
 - `replication` (Block, Optional) Wait for a write to reach other domain controllers. (see [below for nested schema](#nestedblock--replication))
@@ -129,7 +129,7 @@ Optional:
 - `spn` (String) Kerberos service principal name. Defaults to `HTTP/<host>` (AD's sPNMappings alias it to the host's HOST SPN). Environment: `AD_PSRP_SPN`.
 - `timeout` (String) Per-operation transport timeout. Defaults to `60s`.
 - `use_tls` (Boolean) Use HTTPS/WinRM-over-TLS. Environment: `AD_PSRP_USE_TLS`. Required for NTLM auth; Kerberos encrypts over plain HTTP without it.
-- `user` (String) WinRM auth user in `DOMAIN\user` or UPN form. Optional when a ticket cache supplies the identity. Environment: `AD_PSRP_USER`.
+- `user` (String) WinRM auth user in `DOMAIN\user` or UPN form. Required: go-psrp needs the principal name even when an ambient Kerberos ticket cache supplies the credentials, because Linux has no SSPI single sign-on. Only on Windows, authenticating via SSPI SSO, can this be omitted. Environment: `AD_PSRP_USER`.
 
 
 <a id="nestedblock--replication"></a>
