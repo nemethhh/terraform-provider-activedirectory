@@ -23,6 +23,7 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -260,6 +261,22 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 				resp.Diagnostics.AddAttributeError(path.Root("ssh"),
 					"Cannot reach the jump box",
 					"The provider could not open an SSH connection. This is a transport problem, "+
+						"not an Active Directory one.\n\n"+err.Error())
+				return
+			}
+			transport = tr
+
+		case transportPSRP:
+			psrpCfg, diags := resolvePSRP(cfg, os.Getenv)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			tr, err := adpsrp.New(psrpCfg)
+			if err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("psrp"),
+					"Cannot reach the Windows host over WinRM",
+					"The provider could not open a PSRP session. This is a transport problem, "+
 						"not an Active Directory one.\n\n"+err.Error())
 				return
 			}
