@@ -370,6 +370,7 @@ const (
 	transportUnset transportKind = iota
 	transportLocal
 	transportSSH
+	transportPSRP
 )
 
 func (k transportKind) String() string {
@@ -378,6 +379,8 @@ func (k transportKind) String() string {
 		return "local"
 	case transportSSH:
 		return "ssh"
+	case transportPSRP:
+		return "psrp"
 	default:
 		return "unset"
 	}
@@ -386,30 +389,49 @@ func (k transportKind) String() string {
 // chooseTransport enforces the exactly-one rule. There is deliberately no
 // implicit default: defaulting to local when the block is absent turns a typo'd
 // `ssh` block into silent local execution against the wrong identity, and
-// defaulting to ssh turns a typo'd `local` block into a dial to nowhere.
+// defaulting to ssh or psrp turns a typo'd `local` block into a dial to
+// nowhere.
 func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	const summary = "Exactly one transport block is required"
-	const detail = "Set either a `local` block, to run pwsh on the machine Terraform runs on, " +
-		"or an `ssh` block, to run it on a Windows jump box — not both, and not neither.\n\n" +
+	const detail = "Set exactly one of `local` (run pwsh where Terraform runs), " +
+		"`ssh` (a Windows jump box), or `psrp` (WinRM/PSRP) — not more than one, and not none.\n\n" +
 		"There is no implicit default. Guessing one would let a mistyped block run against the " +
-		"wrong identity: a typo in `ssh` would silently execute locally as whoever launched " +
-		"Terraform."
+		"wrong identity."
 
-	switch {
-	case m.Local != nil && m.SSH != nil:
-		// One diagnostic per block, so Terraform underlines both lines.
-		diags.AddAttributeError(path.Root("local"), summary, detail)
-		diags.AddAttributeError(path.Root("ssh"), summary, detail)
-		return transportUnset, diags
-	case m.Local != nil:
-		return transportLocal, diags
-	case m.SSH != nil:
-		return transportSSH, diags
-	default:
-		// Nothing was written, so there is no attribute to point at.
+	blocks := []struct {
+		present bool
+		name    string
+		kind    transportKind
+	}{
+		{m.Local != nil, "local", transportLocal},
+		{m.SSH != nil, "ssh", transportSSH},
+		{m.PSRP != nil, "psrp", transportPSRP},
+	}
+
+	chosen := transportUnset
+	count := 0
+	for _, b := range blocks {
+		if b.present {
+			count++
+			chosen = b.kind
+		}
+	}
+
+	switch count {
+	case 1:
+		return chosen, diags
+	case 0:
 		diags.AddError(summary, detail)
+		return transportUnset, diags
+	default:
+		// One diagnostic per offending block, so Terraform underlines each.
+		for _, b := range blocks {
+			if b.present {
+				diags.AddAttributeError(path.Root(b.name), summary, detail)
+			}
+		}
 		return transportUnset, diags
 	}
 }

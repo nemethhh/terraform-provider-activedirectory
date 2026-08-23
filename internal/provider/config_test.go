@@ -404,3 +404,24 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestChooseTransportPSRP(t *testing.T) {
+	k, d := chooseTransport(providerModel{PSRP: &psrpModel{}})
+	if d.HasError() || k != transportPSRP {
+		t.Fatalf("psrp-only: kind=%v diags=%v", k, d)
+	}
+}
+
+func TestChooseTransportThreeWayConflict(t *testing.T) {
+	_, d := chooseTransport(providerModel{Local: &localModel{}, PSRP: &psrpModel{}})
+	if !d.HasError() {
+		t.Error("local+psrp: want a conflict diagnostic")
+	}
+}
+
+func TestChooseTransportNone(t *testing.T) {
+	_, d := chooseTransport(providerModel{})
+	if !d.HasError() {
+		t.Error("no block: want a diagnostic")
+	}
+}
