@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -12,6 +13,7 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -160,6 +162,84 @@ func resolveSSH(m providerModel, getenv func(string) string) (adssh.Config, diag
 	if cfg.Host == "" {
 		diags.AddAttributeError(root.AtName("host"), "Missing SSH host",
 			"Set ssh.host or the AD_SSH_HOST environment variable.")
+	}
+	return cfg, diags
+}
+
+// boolWithEnv resolves a bool attribute with an environment fallback.
+// Configuration wins; the environment is the fallback.
+func boolWithEnv(v types.Bool, getenv func(string) string, envVar string, def bool) bool {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueBool()
+	}
+	switch strings.ToLower(getenv(envVar)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+// resolvePSRP turns the psrp block plus the environment into a transport
+// configuration, mirroring resolveSSH: configuration always wins, and the
+// refusal is rendered against the attribute the user can change.
+func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	root := path.Root("psrp")
+	s := psrpModel{}
+	if m.PSRP != nil {
+		s = *m.PSRP
+	}
+
+	cfg := adpsrp.Config{
+		Host:               str(s.Host, getenv, "AD_PSRP_HOST"),
+		UseTLS:             boolWithEnv(s.UseTLS, getenv, "AD_PSRP_USE_TLS", false),
+		InsecureSkipVerify: boolWithEnv(s.InsecureSkipVerify, getenv, "AD_PSRP_INSECURE_SKIP_VERIFY", false),
+		Username:           str(s.User, getenv, "AD_PSRP_USER"),
+		Password:           str(s.Password, getenv, "AD_PSRP_PASSWORD"),
+		Domain:             str(s.Domain, getenv, "AD_PSRP_DOMAIN"),
+		SPN:                str(s.SPN, getenv, "AD_PSRP_SPN"),
+		Realm:              str(s.Realm, getenv, "AD_PSRP_REALM"),
+		Krb5ConfPath:       firstNonEmpty(str(s.Krb5ConfPath, getenv, "AD_PSRP_KRB5_CONF"), getenv("KRB5_CONFIG")),
+		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_PSRP_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
+		KeytabPath:         str(s.KeytabPath, getenv, "AD_PSRP_KEYTAB"),
+		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_PSRP_CONFIGURATION_NAME"),
+		Timeout:            duration(s.Timeout, root.AtName("timeout"), 60*time.Second, &diags),
+	}
+
+	if !s.Port.IsNull() && !s.Port.IsUnknown() {
+		cfg.Port = int(s.Port.ValueInt64())
+	} else if p := getenv("AD_PSRP_PORT"); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("port"), "Invalid AD_PSRP_PORT",
+				fmt.Sprintf("%q is not a port number: %s", p, err))
+		}
+		cfg.Port = n
+	}
+
+	if !s.MaxConcurrency.IsNull() && !s.MaxConcurrency.IsUnknown() {
+		cfg.Concurrency = int(s.MaxConcurrency.ValueInt64())
+	} else if v := getenv("AD_PSRP_MAX_CONCURRENCY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("max_concurrency"), "Invalid AD_PSRP_MAX_CONCURRENCY",
+				fmt.Sprintf("%q is not a whole number: %s", v, err))
+		}
+		cfg.Concurrency = n
+	}
+
+	// Validate the raw config (catches a negative concurrency) before defaults.
+	if err := cfg.Validate(); err != nil {
+		diags.AddAttributeError(root, "Invalid PSRP configuration", err.Error())
+	}
+	cfg = cfg.WithDefaults()
+
+	if cfg.Host == "" {
+		diags.AddAttributeError(root.AtName("host"), "Missing PSRP host",
+			"Set psrp.host or the AD_PSRP_HOST environment variable.")
 	}
 	return cfg, diags
 }

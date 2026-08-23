@@ -15,13 +15,20 @@ require (
 replace github.com/go-krb5/krb5 => github.com/smnsjas/krb5 v0.0.0-20260129173902-49e50274bc95
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.0 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
+	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/fatih/color v1.18.0 // indirect
+	github.com/go-crypt/x v0.4.10 // indirect
+	github.com/go-krb5/krb5 v0.0.0-20251226122733-d0288459fc25 // indirect
+	github.com/go-krb5/x v0.3.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-checkpoint v0.5.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
@@ -51,6 +58,9 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/pkg/sftp v1.13.11 // indirect
+	github.com/smnsjas/go-ntlm-cbt v0.0.0-20260107203125-46149984fac0 // indirect
+	github.com/smnsjas/go-psrp v0.0.0-20260213132037-0477762379b5 // indirect
+	github.com/smnsjas/go-psrpcore v0.0.0-20260209151518-449d513eeaf0 // indirect
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect

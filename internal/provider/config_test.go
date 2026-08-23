@@ -151,6 +151,56 @@ func TestResolveDomainRejectsAHalfCredential(t *testing.T) {
 	}
 }
 
+func TestResolvePSRPDefaultsAndEnv(t *testing.T) {
+	env := map[string]string{
+		"AD_PSRP_HOST": "dc.corp.local",
+		"KRB5CCNAME":   "FILE:/tmp/krb5cc",
+	}
+	getenv := func(k string) string { return env[k] }
+
+	cfg, diags := resolvePSRP(providerModel{}, getenv)
+	if diags.HasError() {
+		t.Fatalf("unexpected diags: %v", diags)
+	}
+	if cfg.Host != "dc.corp.local" {
+		t.Errorf("Host = %q, want from AD_PSRP_HOST", cfg.Host)
+	}
+	if cfg.SPN != "HTTP/dc.corp.local" {
+		t.Errorf("SPN = %q, want HTTP/dc.corp.local", cfg.SPN)
+	}
+	if cfg.Port != 5985 {
+		t.Errorf("Port = %d, want 5985", cfg.Port)
+	}
+	if cfg.ConfigurationName != "PowerShell.7" {
+		t.Errorf("ConfigurationName = %q", cfg.ConfigurationName)
+	}
+	if cfg.CCachePath != "/tmp/krb5cc" {
+		t.Errorf("CCachePath = %q, want ambient KRB5CCNAME stripped of FILE:", cfg.CCachePath)
+	}
+}
+
+func TestResolvePSRPConfigWinsOverEnv(t *testing.T) {
+	getenv := func(k string) string {
+		if k == "AD_PSRP_HOST" {
+			return "env-host"
+		}
+		return ""
+	}
+	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("cfg-host")}}
+	cfg, _ := resolvePSRP(m, getenv)
+	if cfg.Host != "cfg-host" {
+		t.Errorf("Host = %q, want cfg-host (config beats env)", cfg.Host)
+	}
+}
+
+func TestResolvePSRPMissingHost(t *testing.T) {
+	cfg, diags := resolvePSRP(providerModel{}, func(string) string { return "" })
+	if !diags.HasError() {
+		t.Error("missing host: want a diagnostic")
+	}
+	_ = cfg
+}
+
 func localOnly(l localModel) providerModel { return providerModel{Local: &l} }
 
 func TestResolveLocalDefaults(t *testing.T) {
