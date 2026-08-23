@@ -19,6 +19,7 @@ type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
+	PSRP        *psrpModel        `tfsdk:"psrp"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
 }
@@ -42,6 +43,24 @@ type sshModel struct {
 	InsecureIgnoreHostKey types.Bool   `tfsdk:"insecure_ignore_host_key"`
 	MaxConcurrency        types.Int64  `tfsdk:"max_concurrency"`
 	Timeout               types.String `tfsdk:"timeout"`
+}
+
+type psrpModel struct {
+	Host               types.String `tfsdk:"host"`
+	Port               types.Int64  `tfsdk:"port"`
+	UseTLS             types.Bool   `tfsdk:"use_tls"`
+	InsecureSkipVerify types.Bool   `tfsdk:"insecure_skip_verify"`
+	User               types.String `tfsdk:"user"`
+	Password           types.String `tfsdk:"password"`
+	Domain             types.String `tfsdk:"domain"`
+	SPN                types.String `tfsdk:"spn"`
+	Realm              types.String `tfsdk:"realm"`
+	Krb5ConfPath       types.String `tfsdk:"krb5_conf_path"`
+	CCachePath         types.String `tfsdk:"ccache_path"`
+	KeytabPath         types.String `tfsdk:"keytab_path"`
+	ConfigurationName  types.String `tfsdk:"configuration_name"`
+	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
+	Timeout            types.String `tfsdk:"timeout"`
 }
 
 type domainModel struct {
