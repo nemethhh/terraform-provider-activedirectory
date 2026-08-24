@@ -177,6 +177,8 @@ func accCheckDestroy(t *testing.T) resource.TestCheckFunc {
 				_, err = client.Group.Get(ctx, adpwsh.ByGUID(id))
 			case "activedirectory_user":
 				_, err = client.User.Get(ctx, adpwsh.ByGUID(id))
+			case "activedirectory_gmsa":
+				_, err = client.ServiceAccount.Get(ctx, adpwsh.ByGUID(id))
 			default:
 				continue
 			}
