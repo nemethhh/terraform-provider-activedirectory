@@ -31,6 +31,12 @@ builds:
         goarch: '386'
       - goos: windows
         goarch: arm
+      # windows/386 does not compile: go-psrp's SSPI backend has a uint32
+      # constant that overflows a 32-bit int on this one target. Upstream fix:
+      # https://github.com/smnsjas/go-psrp/pull/5 — drop this ignore once it is
+      # merged and the dependency is bumped past it.
+      - goos: windows
+        goarch: '386'
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 archives:
   - formats:
