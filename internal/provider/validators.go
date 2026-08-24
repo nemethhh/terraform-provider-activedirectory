@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"context"
+	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -75,6 +78,13 @@ func groupSamAccountNameValidators() []validator.String {
 // limit applies to the name as configured here (before that suffix).
 const gmsaSamAccountNameMaxLen = 15
 
+// computerSamAccountNameWarnLen is the 15-character NetBIOS computer-name
+// limit past which the provider warns (never errors — Active Directory does
+// not enforce it for computer accounts, so the provider must not out-strict
+// the directory). Shared with the effective-sam ConfigValidator in
+// resource_computer.go so the two warnings measure the same ceiling.
+const computerSamAccountNameWarnLen = 15
+
 // gmsaSamAccountNameValidators is the GMSA sam_account_name validator set:
 // the 15-character computer-name ceiling plus the same illegal-character/
 // no-trailer rule every other sAMAccountName validator enforces.
@@ -82,6 +92,51 @@ func gmsaSamAccountNameValidators() []validator.String {
 	return append([]validator.String{
 		stringvalidator.LengthAtMost(gmsaSamAccountNameMaxLen),
 	}, samIllegalCharsValidators()...)
+}
+
+// warnLongSamValidator backs warnLongSam: a length check that only ever
+// warns. Unlike every other sAMAccountName ceiling in this file, AD does
+// *not* enforce the 15-character NetBIOS limit for computer accounts
+// (lab-confirmed) — so the provider must not out-strict the directory by
+// rejecting a value AD itself accepts. A trailing "$" (the down-level logon
+// name suffix AD stores) is stripped before measuring length, since the
+// caller configures the name without it.
+type warnLongSamValidator struct{ maxLen int }
+
+func (v warnLongSamValidator) Description(context.Context) string {
+	return fmt.Sprintf("warns when the sAMAccountName exceeds %d characters", v.maxLen)
+}
+
+func (v warnLongSamValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v warnLongSamValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	s := strings.TrimSuffix(req.ConfigValue.ValueString(), "$")
+	if len(s) > v.maxLen {
+		resp.Diagnostics.AddAttributeWarning(req.Path,
+			"Computer name longer than NetBIOS limit",
+			fmt.Sprintf("sAMAccountName %q is %d characters. AD allows this, but computers with names longer than %d characters can hit NetBIOS/domain-join problems.", s, len(s), v.maxLen))
+	}
+}
+
+// warnLongSam returns a warning-only length validator: it never blocks a
+// plan, it only surfaces a diagnostic so the practitioner can make an
+// informed choice. This is the first warning-only validator in the repo —
+// every other sAMAccountName ceiling here is a hard error because the lab
+// proved AD itself rejects (or silently alters) the value.
+func warnLongSam(maxLen int) validator.String { return warnLongSamValidator{maxLen: maxLen} }
+
+// computerSamAccountNameValidators is the COMPUTER sam_account_name
+// validator set: the same illegal-character/no-trailer rule every other
+// sAMAccountName validator enforces, plus a *warning* (not an error) past
+// the 15-character NetBIOS computer-name limit — the lab proved AD does not
+// enforce that ceiling for computer accounts the way it does for gMSAs.
+func computerSamAccountNameValidators() []validator.String {
+	return append(samIllegalCharsValidators(), warnLongSam(computerSamAccountNameWarnLen))
 }
 
 // kerberosEncryptionTypeValues is the set of values Active Directory accepts

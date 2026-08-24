@@ -54,6 +54,28 @@ func TestGMSASamValidator(t *testing.T) {
 	}
 }
 
+// TestWarnLongSam pins warnLongSam's warning-not-error behavior: AD does not
+// enforce the 15-character NetBIOS limit for computers (lab-confirmed), so a
+// value past the ceiling must produce a warning diagnostic, never an error,
+// and a value at or under the ceiling must be silent.
+func TestWarnLongSam(t *testing.T) {
+	v := warnLongSam(15)
+	// > 15 -> exactly one warning, zero errors
+	req := validator.StringRequest{Path: path.Root("sam_account_name"), ConfigValue: types.StringValue("SIXTEENCHARS_XXX")}
+	var resp validator.StringResponse
+	v.ValidateString(context.Background(), req, &resp)
+	if resp.Diagnostics.WarningsCount() != 1 || resp.Diagnostics.ErrorsCount() != 0 {
+		t.Fatalf("want 1 warning/0 errors, got %d/%d", resp.Diagnostics.WarningsCount(), resp.Diagnostics.ErrorsCount())
+	}
+	// <= 15 -> silent
+	req2 := validator.StringRequest{Path: path.Root("sam_account_name"), ConfigValue: types.StringValue("FIFTEENCHARSXXX")}
+	var resp2 validator.StringResponse
+	v.ValidateString(context.Background(), req2, &resp2)
+	if resp2.Diagnostics.WarningsCount() != 0 || resp2.Diagnostics.ErrorsCount() != 0 {
+		t.Fatalf("15 chars must be silent, got %d/%d", resp2.Diagnostics.WarningsCount(), resp2.Diagnostics.ErrorsCount())
+	}
+}
+
 // TestKerberosEncryptionTypeValues pins the exact set and order the gMSA
 // resource's kerberos_encryption_type validator (Task 8) is built from.
 func TestKerberosEncryptionTypeValues(t *testing.T) {

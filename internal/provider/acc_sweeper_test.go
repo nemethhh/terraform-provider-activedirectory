@@ -172,6 +172,8 @@ func sweepBeneath(container string) error {
 			derr = client.User.Delete(ctx, adpwsh.ByGUID(o.GUID))
 		case "msds-groupmanagedserviceaccount":
 			derr = client.ServiceAccount.Delete(ctx, adpwsh.ByGUID(o.GUID))
+		case "computer":
+			derr = client.Computer.Delete(ctx, adpwsh.ByGUID(o.GUID))
 		default:
 			log.Printf("[WARN] sweep: leaving %s alone; class %q is not one this suite creates",
 				o.DN, o.Class)
@@ -197,8 +199,8 @@ func sweepDiscover(ctx context.Context, tr *adlocal.Transport, container string)
 	payload := map[string]any{
 		"searchBase": container,
 		// name matches every class the suite creates: an OU's name is its ou
-		// attribute, a group's, a user's and a gMSA's is its cn, and Active
-		// Directory surfaces all four as name.
+		// attribute, a group's, a user's, a gMSA's and a computer's is its cn,
+		// and Active Directory surfaces all five as name.
 		"filter": "(name=" + accNamePrefix + "*)",
 	}
 	if v := os.Getenv(envServer); v != "" {
