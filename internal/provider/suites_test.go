@@ -1103,6 +1103,63 @@ resource "activedirectory_computer" "long" {
 	}
 }
 
+// computerDataSourceSteps creates a computer with an SPN and a delegation
+// attribute set, then reads it back through the activedirectory_computer data
+// source, keyed by sam_account_name. It asserts the data source resolves the
+// account and projects both an OS field (operating_system, read-only and
+// empty against the fake and a freshly created account — the joined machine
+// owns it, nothing joins in this suite) and a delegation field
+// (trusted_for_delegation) alongside the identity and core metadata fields.
+func computerDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-cpu-ou"
+	name := accNamePrefix + "ds-cpu"
+	host := name + "01." + e.upnSuffix()
+	spn := "HOST/" + host
+
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_computer" "src" {
+  name                     = %q
+  container                = activedirectory_ou.src.dn
+  dns_hostname             = %q
+  description              = "data source read-back"
+  service_principal_names  = [%q]
+  trusted_for_delegation   = true
+}
+
+data "activedirectory_computer" "src" {
+  sam_account_name = activedirectory_computer.src.sam_account_name
+}`, ou, e.Container, name, host, spn)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_computer.src", "id", "activedirectory_computer.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_computer.src", "sid", "activedirectory_computer.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "sam_account_name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "dns_hostname", host),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src",
+				"description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "container", e.dn("OU="+ou)),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "trusted_for_delegation", "true"),
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src",
+				"service_principal_names.#", "1"),
+			resource.TestCheckTypeSetElemAttr("data.activedirectory_computer.src",
+				"service_principal_names.*", spn),
+			// operating_system is read-only and machine-owned; a freshly created,
+			// never-joined account reports "" against both backends. The check
+			// still proves the field is present (not null) in the projection.
+			resource.TestCheckResourceAttr("data.activedirectory_computer.src", "operating_system", ""),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Plural search data sources
 // ---------------------------------------------------------------------------
