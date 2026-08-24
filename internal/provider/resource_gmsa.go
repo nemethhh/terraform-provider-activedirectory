@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -299,7 +300,15 @@ func (r *gmsaResource) apply(ctx context.Context, g *adpwsh.GMSA, m *gmsaModel, 
 	m.DN = types.StringValue(g.DN)
 	m.SID = types.StringValue(g.SID)
 	m.Name = types.StringValue(g.Name)
-	m.SamAccountName = types.StringValue(g.SamAccountName)
+	// Active Directory appends "$" to a gMSA's sAMAccountName on read; the
+	// sam_account_name attribute holds the un-suffixed base the user
+	// configured (or that was derived from name), matching what specFrom
+	// sends and what its own MarkdownDescription documents. Storing the
+	// suffixed form verbatim would both fail Terraform's plan-consistency
+	// check whenever sam_account_name is set explicitly (planned "svc01" vs
+	// applied "svc01$") and make every Update a spurious rewrite, since the
+	// library's own update path compares against the un-suffixed value too.
+	m.SamAccountName = types.StringValue(strings.TrimSuffix(g.SamAccountName, "$"))
 	m.Container = types.StringValue(g.Container)
 	m.DNSHostName = types.StringValue(g.DNSHostName)
 	m.Description = types.StringValue(g.Description)
