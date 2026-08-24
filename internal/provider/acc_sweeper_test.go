@@ -172,6 +172,8 @@ func sweepBeneath(container string) error {
 			derr = client.User.Delete(ctx, adpwsh.ByGUID(o.GUID))
 		case "msds-groupmanagedserviceaccount":
 			derr = client.ServiceAccount.Delete(ctx, adpwsh.ByGUID(o.GUID))
+		case "computer":
+			derr = client.Computer.Delete(ctx, adpwsh.ByGUID(o.GUID))
 		default:
 			log.Printf("[WARN] sweep: leaving %s alone; class %q is not one this suite creates",
 				o.DN, o.Class)

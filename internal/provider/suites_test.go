@@ -861,6 +861,249 @@ data "activedirectory_gmsa" "src" {
 }
 
 // ---------------------------------------------------------------------------
+// Computer accounts
+// ---------------------------------------------------------------------------
+
+// computerLifecycleSteps covers create with SPNs and a description, a no-diff
+// replan, an attribute update that touches every mutable field including the
+// two delegation forms (constrained via allowed_to_delegate_to and RBCD via
+// principals_allowed_to_delegate_to_account) and clearing description, rename
+// plus move in one step, a name past the 15-character NetBIOS warn threshold
+// (warning, not error — Active Directory does not enforce the limit on
+// computer accounts), and import by objectGUID.
+//
+// RBCD needs an existing objectGUID to point at: a second computer ("helper")
+// is created alongside "svc" and referenced by
+// principals_allowed_to_delegate_to_account from the update step onward, kept
+// unchanged on every subsequent config so the set never churns — the same
+// pattern gmsaLifecycleSteps uses for
+// principals_allowed_to_retrieve_managed_password.
+func computerLifecycleSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "cpu-ou"
+	movedOU := accNamePrefix + "cpu-ou2"
+	name := accNamePrefix + "cpu"
+	renamed := accNamePrefix + "cpu2"
+	mgr := accNamePrefix + "cpu-mgr"
+	helper := accNamePrefix + "cpu-helper"
+	// 16 characters total (accNamePrefix is 6): past computerNameWarnLen (15),
+	// so sam_account_name — left to default from name — trips the warn-only
+	// NetBIOS-length validator. Active Directory itself accepts it; the apply
+	// below must succeed, not error.
+	longName := accNamePrefix + "1234567890"
+	host1 := name + "01." + e.upnSuffix()
+	host2 := name + "02." + e.upnSuffix()
+	spn1 := "HOST/" + host1
+	spn2a := "HOST/" + host2
+	spn2b := "WSMAN/" + host2
+	atd := "HTTP/" + host2
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_group" "mgr" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+resource "activedirectory_computer" "helper" {
+  name      = %q
+  container = activedirectory_ou.staff.dn
+}
+`, ou, e.Container, mgr, mgr, helper)
+
+	create := fmt.Sprintf(`
+resource "activedirectory_computer" "svc" {
+  name                     = %q
+  container                = activedirectory_ou.staff.dn
+  description              = "initial"
+  enabled                  = true
+  dns_hostname             = %q
+  service_principal_names  = [%q]
+}`, name, host1, spn1)
+
+	// Every mutable attribute touched in one apply: dns_hostname and the SPN
+	// set changed, plus every field create left at its default — display_name,
+	// location, managed_by (pointed at a group the suite creates, the same
+	// reasoning groupLifecycleSteps documents for its own managed_by),
+	// trusted_for_delegation, kerberos_encryption_type, account_expiration_date,
+	// constrained delegation (allowed_to_delegate_to) and RBCD
+	// (principals_allowed_to_delegate_to_account, pointed at the helper
+	// computer's objectGUID).
+	updated := fmt.Sprintf(`
+resource "activedirectory_computer" "svc" {
+  name                                       = %q
+  container                                  = activedirectory_ou.staff.dn
+  description                                = "initial"
+  enabled                                    = true
+  dns_hostname                               = %q
+  service_principal_names                    = [%q, %q]
+  display_name                               = "Service Computer"
+  location                                   = "DC1/Rack1"
+  managed_by                                 = activedirectory_group.mgr.dn
+  trusted_for_delegation                     = true
+  kerberos_encryption_type                   = ["AES128", "AES256"]
+  account_expiration_date                    = "2027-06-01T12:00:00Z"
+  allowed_to_delegate_to                     = [%q]
+  principals_allowed_to_delegate_to_account  = [activedirectory_computer.helper.id]
+}`, name, host2, spn2a, spn2b, atd)
+
+	// description carries a load-bearing empty default, so setting it to ""
+	// must clear it rather than retain the prior value. Every other field is
+	// held at the value updated set, so the set never churns.
+	cleared := fmt.Sprintf(`
+resource "activedirectory_computer" "svc" {
+  name                                       = %q
+  container                                  = activedirectory_ou.staff.dn
+  description                                = ""
+  enabled                                    = true
+  dns_hostname                               = %q
+  service_principal_names                    = [%q, %q]
+  display_name                               = "Service Computer"
+  location                                   = "DC1/Rack1"
+  managed_by                                 = activedirectory_group.mgr.dn
+  trusted_for_delegation                     = true
+  kerberos_encryption_type                   = ["AES128", "AES256"]
+  account_expiration_date                    = "2027-06-01T12:00:00Z"
+  allowed_to_delegate_to                     = [%q]
+  principals_allowed_to_delegate_to_account  = [activedirectory_computer.helper.id]
+}`, name, host2, spn2a, spn2b, atd)
+
+	// Rename and move in one step, into a freshly introduced OU. The objectGUID
+	// must survive: this is an attribute update, not a replace.
+	moved := fmt.Sprintf(`
+resource "activedirectory_ou" "moved" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_computer" "svc" {
+  name                                       = %q
+  container                                  = activedirectory_ou.moved.dn
+  description                                = ""
+  enabled                                    = true
+  dns_hostname                               = %q
+  service_principal_names                    = [%q, %q]
+  display_name                               = "Service Computer"
+  location                                   = "DC1/Rack1"
+  managed_by                                 = activedirectory_group.mgr.dn
+  trusted_for_delegation                     = true
+  kerberos_encryption_type                   = ["AES128", "AES256"]
+  account_expiration_date                    = "2027-06-01T12:00:00Z"
+  allowed_to_delegate_to                     = [%q]
+  principals_allowed_to_delegate_to_account  = [activedirectory_computer.helper.id]
+}`, movedOU, e.Container, renamed, host2, spn2a, spn2b, atd)
+
+	// A second, independent computer whose name is past the 15-character
+	// NetBIOS warn threshold. The point of this step is that the apply
+	// succeeds — computerEffectiveSamValidator only warns, it must never
+	// error, because Active Directory itself accepts the name.
+	long := moved + fmt.Sprintf(`
+resource "activedirectory_computer" "long" {
+  name      = %q
+  container = activedirectory_ou.staff.dn
+}`, longName)
+
+	var createID, movedID string
+
+	return []resource.TestStep{
+		{
+			Config: base + create,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_computer.svc", "id"),
+				resource.TestCheckResourceAttrSet("activedirectory_computer.svc", "sid"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "dn",
+					"CN="+name+",OU="+ou+","+e.Container),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "sam_account_name", name),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "description", "initial"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "enabled", "true"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "dns_hostname", host1),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "service_principal_names.#", "1"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"service_principal_names.*", spn1),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "trusted_for_delegation", "false"),
+				captureAttr("activedirectory_computer.svc", "id", &createID),
+			),
+		},
+		{Config: base + create, PlanOnly: true},
+		{
+			Config: base + updated,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "dns_hostname", host2),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "service_principal_names.#", "2"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"service_principal_names.*", spn2a),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"service_principal_names.*", spn2b),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "display_name", "Service Computer"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "location", "DC1/Rack1"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "managed_by",
+					"CN="+mgr+",OU="+ou+","+e.Container),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "trusted_for_delegation", "true"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "kerberos_encryption_type.#", "2"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"kerberos_encryption_type.*", "AES128"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"kerberos_encryption_type.*", "AES256"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc",
+					"account_expiration_date", "2027-06-01T12:00:00Z"),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "allowed_to_delegate_to.#", "1"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_computer.svc",
+					"allowed_to_delegate_to.*", atd),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc",
+					"principals_allowed_to_delegate_to_account.#", "1"),
+				resource.TestCheckTypeSetElemAttrPair("activedirectory_computer.svc",
+					"principals_allowed_to_delegate_to_account.*",
+					"activedirectory_computer.helper", "id"),
+			),
+		},
+		{
+			Config: base + cleared,
+			Check:  resource.TestCheckResourceAttr("activedirectory_computer.svc", "description", ""),
+		},
+		{
+			Config: base + moved,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "name", renamed),
+				resource.TestCheckResourceAttr("activedirectory_computer.svc", "dn",
+					"CN="+renamed+",OU="+movedOU+","+e.Container),
+				captureAttr("activedirectory_computer.svc", "id", &movedID),
+				func(*terraform.State) error {
+					if movedID != createID {
+						return fmt.Errorf("rename+move must be in-place: objectGUID changed %q -> %q",
+							createID, movedID)
+					}
+					return nil
+				},
+			),
+		},
+		{
+			Config: base + long,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttrSet("activedirectory_computer.long", "id"),
+				resource.TestCheckResourceAttr("activedirectory_computer.long", "sam_account_name", longName),
+			),
+		},
+		{
+			ResourceName: "activedirectory_computer.svc",
+			ImportState:  true,
+			// service_principal_names, allowed_to_delegate_to and
+			// principals_allowed_to_delegate_to_account are Optional but not
+			// Computed. Import starts from a skeleton state holding only "id";
+			// apply() (resource_computer.go) only refreshes any of the three
+			// from Active Directory's actual value when the model already
+			// holds a non-null value for it, so the freshly imported state
+			// always reads them back null — the same behavior
+			// gmsaLifecycleSteps documents for its own two such attributes.
+			ImportStateVerify: true,
+			ImportStateVerifyIgnore: []string{
+				"service_principal_names", "allowed_to_delegate_to", "principals_allowed_to_delegate_to_account",
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Plural search data sources
 // ---------------------------------------------------------------------------
 
