@@ -762,6 +762,62 @@ resource "activedirectory_gmsa" "svc" {
 	}
 }
 
+// gmsaDataSourceSteps creates a managed gMSA and reads it back through the
+// activedirectory_gmsa data source, keyed by objectGUID. It asserts the data
+// source resolves the account and projects sam_account_name un-suffixed (the
+// same controller ruling apply() enforces on the resource) plus both sets
+// (kerberos_encryption_type, service_principal_names).
+func gmsaDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "ds-gmsa-ou"
+	name := accNamePrefix + "ds-gmsa"
+	host := name + "01." + e.upnSuffix()
+	spn := "HTTP/" + host
+
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_gmsa" "src" {
+  name                     = %q
+  container                = activedirectory_ou.src.dn
+  dns_hostname             = %q
+  description              = "data source read-back"
+  service_principal_names  = [%q]
+  kerberos_encryption_type = ["AES256"]
+}
+
+data "activedirectory_gmsa" "src" {
+  guid = activedirectory_gmsa.src.id
+}`, ou, e.Container, name, host, spn)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_gmsa.src", "id", "activedirectory_gmsa.src", "id"),
+			resource.TestCheckResourceAttrPair(
+				"data.activedirectory_gmsa.src", "sid", "activedirectory_gmsa.src", "sid"),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src", "name", name),
+			// Controller ruling mirrored from the resource: the un-suffixed base,
+			// not Active Directory's own trailing "$".
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src", "sam_account_name", name),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src", "dns_hostname", host),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src",
+				"description", "data source read-back"),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src", "container", e.dn("OU="+ou)),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src",
+				"kerberos_encryption_type.#", "1"),
+			resource.TestCheckTypeSetElemAttr("data.activedirectory_gmsa.src",
+				"kerberos_encryption_type.*", "AES256"),
+			resource.TestCheckResourceAttr("data.activedirectory_gmsa.src",
+				"service_principal_names.#", "1"),
+			resource.TestCheckTypeSetElemAttr("data.activedirectory_gmsa.src",
+				"service_principal_names.*", spn),
+		),
+	}}
+}
+
 // ---------------------------------------------------------------------------
 // Plural search data sources
 // ---------------------------------------------------------------------------
