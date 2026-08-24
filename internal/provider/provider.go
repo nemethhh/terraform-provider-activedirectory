@@ -313,6 +313,7 @@ func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
 		newOUResource,
 		newGroupResource,
 		newUserResource,
+		newGMSAResource,
 		newGroupMemberResource,
 		newGroupMembershipResource,
 		newAccessRuleResource,
