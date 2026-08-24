@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -578,6 +579,187 @@ data "activedirectory_user" "src" {
 			resource.TestCheckResourceAttr("data.activedirectory_user.src", "container", e.dn("OU="+ou)),
 		),
 	}}
+}
+
+// ---------------------------------------------------------------------------
+// Group Managed Service Accounts (gMSA)
+// ---------------------------------------------------------------------------
+
+// gmsaGUIDPattern is what activedirectory_gmsa's id always holds: an
+// objectGUID. Every other lifecycle builder in this file asserts "id" only
+// with TestCheckResourceAttrSet; gMSA additionally pins the shape, because the
+// controller ruling on sam_account_name (below) turns on exactly this
+// resource minting real identity values rather than echoing configuration.
+var gmsaGUIDPattern = regexp.MustCompile(
+	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// gmsaLifecycleSteps covers create with a non-default Kerberos encryption set
+// and a non-default password-rotation interval, an attribute update that
+// touches every mutable field including clearing description, rename plus
+// move in one step, and import by objectGUID.
+//
+// sam_account_name is never set in configuration: leaving it to default from
+// name is what exercises the controller ruling that the attribute holds the
+// un-suffixed base ("name", not "name$") — Active Directory appends "$" to a
+// gMSA's sAMAccountName on every read, but apply() (resource_gmsa.go) strips
+// it before the value ever reaches state, so the Terraform-visible attribute
+// and name agree exactly.
+func gmsaLifecycleSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "gmsa-ou"
+	movedOU := accNamePrefix + "gmsa-ou2"
+	name := accNamePrefix + "gmsa"
+	renamed := accNamePrefix + "gmsa2"
+	host1 := name + "01." + e.upnSuffix()
+	host2 := name + "02." + e.upnSuffix()
+	spn1 := "HTTP/" + host1
+	spn2a := "HTTP/" + host2
+	spn2b := "WSMAN/" + host2
+
+	base := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "staff" {
+  name      = %q
+  container = %q
+}
+`, ou, e.Container)
+
+	create := fmt.Sprintf(`
+resource "activedirectory_gmsa" "svc" {
+  name                               = %q
+  container                          = activedirectory_ou.staff.dn
+  dns_hostname                       = %q
+  description                        = "initial"
+  service_principal_names            = [%q]
+  kerberos_encryption_type           = ["AES256"]
+  managed_password_interval_in_days  = 45
+}`, name, host1, spn1)
+
+	// Every mutable attribute changed in one apply: description, dns_hostname,
+	// the Kerberos set grown from one value to two, and a full SPN replacement
+	// (both new values, not an addition to the old ones).
+	updated := fmt.Sprintf(`
+resource "activedirectory_gmsa" "svc" {
+  name                               = %q
+  container                          = activedirectory_ou.staff.dn
+  dns_hostname                       = %q
+  description                        = "updated"
+  service_principal_names            = [%q, %q]
+  kerberos_encryption_type           = ["AES128", "AES256"]
+  managed_password_interval_in_days  = 45
+}`, name, host2, spn2a, spn2b)
+
+	// description carries a load-bearing empty default, so setting it to ""
+	// must clear it rather than retain the prior value.
+	cleared := fmt.Sprintf(`
+resource "activedirectory_gmsa" "svc" {
+  name                               = %q
+  container                          = activedirectory_ou.staff.dn
+  dns_hostname                       = %q
+  description                        = ""
+  service_principal_names            = [%q, %q]
+  kerberos_encryption_type           = ["AES128", "AES256"]
+  managed_password_interval_in_days  = 45
+}`, name, host2, spn2a, spn2b)
+
+	// Rename and move in one step, into a freshly introduced OU. The original
+	// fixture OU stays declared (and still protected_from_accidental_deletion
+	// by default), so this apply is never also asked to destroy it.
+	moved := fmt.Sprintf(`
+resource "activedirectory_ou" "moved" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_gmsa" "svc" {
+  name                               = %q
+  container                          = activedirectory_ou.moved.dn
+  dns_hostname                       = %q
+  description                        = ""
+  service_principal_names            = [%q, %q]
+  kerberos_encryption_type           = ["AES128", "AES256"]
+  managed_password_interval_in_days  = 45
+}`, movedOU, e.Container, renamed, host2, spn2a, spn2b)
+
+	var createID, movedID string
+
+	return []resource.TestStep{
+		{
+			Config: base + create,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestMatchResourceAttr("activedirectory_gmsa.svc", "id", gmsaGUIDPattern),
+				resource.TestCheckResourceAttrSet("activedirectory_gmsa.svc", "sid"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "dn",
+					"CN="+name+",OU="+ou+","+e.Container),
+				// Controller ruling: the Terraform attribute holds the
+				// un-suffixed base; Active Directory's own trailing "$" is
+				// stripped by apply() before it ever reaches state.
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "sam_account_name", name),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "description", "initial"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "dns_hostname", host1),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc",
+					"managed_password_interval_in_days", "45"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "kerberos_encryption_type.#", "1"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"kerberos_encryption_type.*", "AES256"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "service_principal_names.#", "1"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"service_principal_names.*", spn1),
+				captureAttr("activedirectory_gmsa.svc", "id", &createID),
+			),
+		},
+		{Config: base + create, PlanOnly: true},
+		{
+			Config: base + updated,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "description", "updated"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "dns_hostname", host2),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "kerberos_encryption_type.#", "2"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"kerberos_encryption_type.*", "AES128"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"kerberos_encryption_type.*", "AES256"),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "service_principal_names.#", "2"),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"service_principal_names.*", spn2a),
+				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
+					"service_principal_names.*", spn2b),
+			),
+		},
+		{
+			Config: base + cleared,
+			Check:  resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "description", ""),
+		},
+		{
+			Config: base + moved,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "name", renamed),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "dn",
+					"CN="+renamed+",OU="+movedOU+","+e.Container),
+				captureAttr("activedirectory_gmsa.svc", "id", &movedID),
+				func(*terraform.State) error {
+					if movedID != createID {
+						return fmt.Errorf("rename+move must be in-place: objectGUID changed %q -> %q",
+							createID, movedID)
+					}
+					return nil
+				},
+			),
+		},
+		{
+			ResourceName: "activedirectory_gmsa.svc",
+			ImportState:  true,
+			// principals_allowed_to_retrieve_managed_password and
+			// service_principal_names are Optional but not Computed. Import
+			// starts from a skeleton state holding only "id"; apply()
+			// (resource_gmsa.go) only refreshes either set from Active
+			// Directory's actual value when the model already holds a
+			// non-null value for it, so the freshly imported state always
+			// reads them back null — even though service_principal_names
+			// genuinely holds two SPNs in the pre-import state above.
+			// Verifying them here would fail on that null-on-a-skeleton
+			// behavior, not on a bug, so both are excluded.
+			ImportStateVerify:       true,
+			ImportStateVerifyIgnore: []string{"principals_allowed_to_retrieve_managed_password", "service_principal_names"},
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
