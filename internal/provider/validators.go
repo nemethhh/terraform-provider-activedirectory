@@ -32,17 +32,26 @@ var (
 	samAccountNameNoTrailer = regexp.MustCompile(`[^. ]$`)
 )
 
-// samAccountNameValidatorsMax builds the shared charset/no-trailer rules
-// against a caller-supplied length ceiling, so user and group can each pin
-// their own maximum without duplicating the character-set validation.
-func samAccountNameValidatorsMax(maxLen int) []validator.String {
+// samIllegalCharsValidators is the character-set and no-trailing-period/space
+// rule every sAMAccountName validator set shares (user, group, gMSA) — only
+// the length ceiling differs per object class, so this is the one place the
+// illegal-character check itself is written.
+func samIllegalCharsValidators() []validator.String {
 	return []validator.String{
-		stringvalidator.LengthBetween(1, maxLen),
 		stringvalidator.RegexMatches(samAccountNameCharset,
 			`must not contain any of " [ ] : ; | = + * ? < > / \ ,`),
 		stringvalidator.RegexMatches(samAccountNameNoTrailer,
 			"must not end with a period or space"),
 	}
+}
+
+// samAccountNameValidatorsMax builds the shared charset/no-trailer rules
+// against a caller-supplied length ceiling, so user and group can each pin
+// their own maximum without duplicating the character-set validation.
+func samAccountNameValidatorsMax(maxLen int) []validator.String {
+	return append([]validator.String{
+		stringvalidator.LengthBetween(1, maxLen),
+	}, samIllegalCharsValidators()...)
 }
 
 // samAccountNameValidators is the USER sam_account_name validator set: the
@@ -58,6 +67,28 @@ func samAccountNameValidators() []validator.String {
 // ceiling.
 func groupSamAccountNameValidators() []validator.String {
 	return samAccountNameValidatorsMax(groupSamAccountNameMaxLen)
+}
+
+// gmsaSamAccountNameMaxLen is the gMSA sam_account_name ceiling: a gMSA is a
+// computer-like account, and Active Directory appends a trailing "$" to the
+// down-level logon name it stores, so the 15-character NetBIOS computer-name
+// limit applies to the name as configured here (before that suffix).
+const gmsaSamAccountNameMaxLen = 15
+
+// gmsaSamAccountNameValidators is the GMSA sam_account_name validator set:
+// the 15-character computer-name ceiling plus the same illegal-character/
+// no-trailer rule every other sAMAccountName validator enforces.
+func gmsaSamAccountNameValidators() []validator.String {
+	return append([]validator.String{
+		stringvalidator.LengthAtMost(gmsaSamAccountNameMaxLen),
+	}, samIllegalCharsValidators()...)
+}
+
+// kerberosEncryptionTypeValues is the set of values Active Directory accepts
+// for a gMSA's KerberosEncryptionType, in the order the schema's
+// kerberos_encryption_type set validator (Task 8) enumerates them.
+func kerberosEncryptionTypeValues() []string {
+	return []string{"None", "DES", "RC4", "AES128", "AES256"}
 }
 
 // cnMaxLen is the schema ceiling on cn; a longer name is truncated by the
