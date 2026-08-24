@@ -33,7 +33,7 @@ LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
 labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CREDS))
 
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
-        lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-verify-repl \
+        lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-sweep \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
@@ -49,6 +49,7 @@ lab-help:
 	@echo '    lab-promote-dc2 HOST=<alias>  promote an additional DC (needs LAB_ADMIN_PW)'
 	@echo '    lab-open-ssh HOST=<ip>     re-open SSH after a firewall-profile change'
 	@echo '    lab-acceptance-fixtures    containers, service account and delegation'
+	@echo '    lab-grant-deleg            grant svc SeEnableDelegationPrivilege (computer delegation; reboot the DC after)'
 	@echo ''
 	@echo '  Using the lab:'
 	@echo '    lab-status                 reachability and role health of all three hosts'
@@ -103,6 +104,12 @@ lab-open-ssh:
 lab-acceptance-fixtures:
 	$(PSRUN) $(LAB_DC) $(LAB_DIR)/08-provision-acceptance.ps1 300 -- \
 	  -SvcPassword "$(call labcred,svc.password)"
+
+# Grant the svc account SeEnableDelegationPrivilege so the computer suite can set
+# trusted_for_delegation / allowed_to_delegate_to. One-time; the DC must be
+# rebooted afterwards for the privilege to take effect (see the script header).
+lab-grant-deleg:
+	$(PSRUN) $(LAB_DC) $(LAB_DIR)/grant-svc-deleg-priv.ps1 200
 
 # --- using the lab ----------------------------------------------------------
 
