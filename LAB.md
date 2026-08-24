@@ -463,3 +463,43 @@ the double hop is crossed by explicit credentials exactly as it is for `ssh`.
 DC-direct exercised the full create/update/delete lifecycle; the member-host
 topology was validated for create and delete, confirming the double-hop
 credential path (update was not exercised on that topology).
+
+### gMSA — group Managed Service Accounts, 2026-08-24
+
+`TestAccGMSALifecycle` and `TestAccGMSADataSource` (the `activedirectory_gmsa`
+resource and data source, backed by go-adpwsh's new `ServiceAccount` sub-client
+driving `*-ADServiceAccount`) both passed against `corp.local`. The lifecycle
+suite exercised, end to end on the DC: create (with
+`principals_allowed_to_retrieve_managed_password`, `service_principal_names`,
+`kerberos_encryption_type = ["AES256"]`, `managed_password_interval_in_days =
+45`); update (including clearing `description` via `""` → `-Clear`, changing
+`dns_hostname`, growing kerberos to `["AES128","AES256"]`, and replacing the
+SPN set); rename **and** move in one step (objectGUID stable, `dn` reflecting
+both); and import (with `ImportStateVerifyIgnore` for the two Optional,
+non-Computed sets, which read back null on a skeleton import state). Destroy was
+verified by `accCheckDestroy` (a real `ServiceAccount.Get` → not-found), and the
+sweeper's gMSA path was validated separately by planting a stray `tfacc-`
+service account and confirming `make lab-sweep` removed it
+(`msDS-GroupManagedServiceAccount` dispatches to `ServiceAccount.Delete`).
+The `principals_allowed_to_retrieve_managed_password` write→read-back is a real
+round-trip: the config sets it to an in-config `activedirectory_group`'s
+objectGUID and the suite asserts the gMSA reads that GUID back (the library
+resolves the DN AD returns to a GUID). A dedicated plan-only step also omits
+`managed_password_interval_in_days` after it was set to 45 and asserts an empty
+plan — confirming the create-only attribute carries state forward on omission
+rather than erroring (it is `Optional`+`Computed` with `UseStateForUnknown`, no
+static default, so Active Directory owns the default of 30).
+
+**KDS root key:** none was created manually. Windows Server 2025 auto-provisions
+the forest KDS root key on the first `New-ADServiceAccount`, backdated so it is
+immediately effective — the classic "`Add-KdsRootKey` then wait 10 hours"
+prerequisite does not bite on 2025 (older DCs still require it).
+
+Lab-caught, fixed and re-validated — both in the go-adpwsh `Convert-AdServiceAccount`
+read-back converter, and both invisible to the in-memory fake (which returns
+plain JSON scalars/arrays), so only a real DC surfaced them:
+
+| Bug | Fix |
+|---|---|
+| Every `GMSA.Create`/`Get` failed with `ConvertToFinalInvalidCastException`: `Get-ADServiceAccount` returns `ManagedPasswordIntervalInDays` as an `ADPropertyValueCollection`, and `[int]` on that collection throws | unwrap the single element before the cast — `[int](@($o.ManagedPasswordIntervalInDays)[0])`. go-adpwsh **v0.10.1** |
+| `kerberos_encryption_type` came back as `["Microsoft.ActiveDirectory.Management.ADPropertyValueCollection"]` (Terraform then rejected the apply: "planned set element AES256 does not correlate"): the converter called `.ToString()` on the whole collection, which yields the type name; the property is also a flags enum, so `AES128,AES256` returns as one element `"AES128, AES256"` | enumerate the collection and split each element on the comma — `foreach ($k in $o.KerberosEncryptionType) { foreach ($part in ("$k" -split ',\s*')) {...} }`. go-adpwsh **v0.10.2** |
