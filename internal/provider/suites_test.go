@@ -885,7 +885,7 @@ func computerLifecycleSteps(e suiteEnv) []resource.TestStep {
 	renamed := accNamePrefix + "cpu2"
 	mgr := accNamePrefix + "cpu-mgr"
 	helper := accNamePrefix + "cpu-helper"
-	// 16 characters total (accNamePrefix is 6): past computerNameWarnLen (15),
+	// 16 characters total (accNamePrefix is 6): past computerSamAccountNameWarnLen (15),
 	// so sam_account_name — left to default from name — trips the warn-only
 	// NetBIOS-length validator. Active Directory itself accepts it; the apply
 	// below must succeed, not error.
