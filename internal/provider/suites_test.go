@@ -1261,6 +1261,57 @@ data "activedirectory_groups" "src" {
 	}}
 }
 
+// computersDataSourceSteps creates two computers under a dedicated OU sharing
+// a description, then searches for them through activedirectory_computers
+// with a one_level scope and a filter_by equality term. depends_on defers the
+// search until both computers exist. Scoping under a freshly created OU keeps
+// the result set to exactly the suite's own objects on a shared domain, so the
+// count assertion is stable against both backends.
+func computersDataSourceSteps(e suiteEnv) []resource.TestStep {
+	ou := accNamePrefix + "dss-cpu-ou"
+	a := accNamePrefix + "dss-cpu-a"
+	b := accNamePrefix + "dss-cpu-b"
+	hostA := a + "01." + e.upnSuffix()
+	hostB := b + "01." + e.upnSuffix()
+	config := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "src" {
+  name      = %q
+  container = %q
+}
+resource "activedirectory_computer" "a" {
+  name         = %q
+  container    = activedirectory_ou.src.dn
+  dns_hostname = %q
+  description  = "tfacc-search-target"
+}
+resource "activedirectory_computer" "b" {
+  name         = %q
+  container    = activedirectory_ou.src.dn
+  dns_hostname = %q
+  description  = "tfacc-search-target"
+}
+
+data "activedirectory_computers" "src" {
+  container  = activedirectory_ou.src.dn
+  scope      = "one_level"
+  filter_by  = { description = "tfacc-search-target" }
+  depends_on = [activedirectory_computer.a, activedirectory_computer.b]
+}`, ou, e.Container, a, hostA, b, hostB)
+
+	return []resource.TestStep{{
+		Config: config,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttr("data.activedirectory_computers.src", "computers.#", "2"),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_computers.src", "computers.*",
+				map[string]string{"sam_account_name": a}),
+			resource.TestCheckTypeSetElemNestedAttrs(
+				"data.activedirectory_computers.src", "computers.*",
+				map[string]string{"sam_account_name": b, "description": "tfacc-search-target"}),
+		),
+	}}
+}
+
 // ousDataSourceSteps creates two child OUs under a dedicated parent OU, then
 // searches for them through activedirectory_ous with a one_level scope. The
 // parent is the search base, so the two children are exactly the result set.
