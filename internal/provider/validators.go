@@ -78,6 +78,13 @@ func groupSamAccountNameValidators() []validator.String {
 // limit applies to the name as configured here (before that suffix).
 const gmsaSamAccountNameMaxLen = 15
 
+// computerSamAccountNameWarnLen is the 15-character NetBIOS computer-name
+// limit past which the provider warns (never errors — Active Directory does
+// not enforce it for computer accounts, so the provider must not out-strict
+// the directory). Shared with the effective-sam ConfigValidator in
+// resource_computer.go so the two warnings measure the same ceiling.
+const computerSamAccountNameWarnLen = 15
+
 // gmsaSamAccountNameValidators is the GMSA sam_account_name validator set:
 // the 15-character computer-name ceiling plus the same illegal-character/
 // no-trailer rule every other sAMAccountName validator enforces.
@@ -129,7 +136,7 @@ func warnLongSam(maxLen int) validator.String { return warnLongSamValidator{maxL
 // the 15-character NetBIOS computer-name limit — the lab proved AD does not
 // enforce that ceiling for computer accounts the way it does for gMSAs.
 func computerSamAccountNameValidators() []validator.String {
-	return append(samIllegalCharsValidators(), warnLongSam(15))
+	return append(samIllegalCharsValidators(), warnLongSam(computerSamAccountNameWarnLen))
 }
 
 // kerberosEncryptionTypeValues is the set of values Active Directory accepts

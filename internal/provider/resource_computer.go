@@ -25,12 +25,6 @@ import (
 
 const computerResourceType = "activedirectory_computer"
 
-// computerNameWarnLen is the 15-character NetBIOS computer-name limit past
-// which the provider warns (never errors — Active Directory does not enforce
-// it for computer accounts, so the provider must not out-strict the
-// directory). It matches the ceiling warnLongSam applies on the attribute.
-const computerNameWarnLen = 15
-
 type computerResource struct {
 	client *adpwsh.Client
 }
@@ -231,8 +225,11 @@ func (computerEffectiveSamValidator) ValidateResource(ctx context.Context, req r
 	if !config.SamAccountName.IsNull() && config.SamAccountName.ValueString() != "" {
 		return
 	}
+	// A CN never actually carries a trailing "$" — this trim is a defensive
+	// no-op that keeps this length check measuring the same thing as
+	// warnLongSam's own "$"-trim on the attribute-level validator.
 	name := strings.TrimSuffix(config.Name.ValueString(), "$")
-	if len(name) <= computerNameWarnLen {
+	if len(name) <= computerSamAccountNameWarnLen {
 		return
 	}
 	resp.Diagnostics.AddAttributeWarning(path.Root("name"),
@@ -240,7 +237,7 @@ func (computerEffectiveSamValidator) ValidateResource(ctx context.Context, req r
 		fmt.Sprintf("sam_account_name is not set, so it defaults to name (%q), which is %d characters. "+
 			"Active Directory allows this, but computers with names longer than %d characters can hit "+
 			"NetBIOS/domain-join problems. Shorten name, or set sam_account_name explicitly.",
-			name, len(name), computerNameWarnLen))
+			name, len(name), computerSamAccountNameWarnLen))
 }
 
 // computerDelegationConflictValidator warns when both trusted_for_delegation
