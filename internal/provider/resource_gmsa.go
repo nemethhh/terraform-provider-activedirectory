@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -146,14 +146,18 @@ func (r *gmsaResource) Schema(ctx context.Context, _ resource.SchemaRequest, res
 					"expires. Removing the line clears any expiry. The underlying FILETIME " +
 					"integer is never part of this surface."},
 			"managed_password_interval_in_days": schema.Int64Attribute{
-				Optional: true, Computed: true, Default: int64default.StaticInt64(30),
+				Optional: true, Computed: true,
 				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
 					immutableAfterCreate{attr: "managed_password_interval_in_days"},
 				},
 				MarkdownDescription: "How often Active Directory rotates the managed password, in " +
 					"days. Set only at creation: Set-ADServiceAccount exposes no update for it, so " +
 					"changing this attribute in place is refused rather than silently discarded or " +
-					"forcing a replace (which would mint a new SID).",
+					"forcing a replace (which would mint a new SID). Omitted on create, Active " +
+					"Directory assigns its own default (30) and that value is read back into state; " +
+					"omitted thereafter, the prior state value carries forward untouched rather than " +
+					"resetting to a default.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -221,7 +225,13 @@ func (r *gmsaResource) ConfigValidators(context.Context) []resource.ConfigValida
 // value. forCreate gates ManagedPasswordIntervalInDays, which the library
 // only reads on Create: Set-ADServiceAccount has no such parameter, and the
 // managed_password_interval_in_days plan modifier already refuses any
-// attempt to change it after creation, so Update never needs to send it.
+// attempt to change it after creation, so Update never needs to send it. On
+// Create, the interval is only sent when the plan value is known and
+// non-null: an omitted interval leaves the plan value unknown (the schema
+// carries no static Default), and sending nil lets Active Directory assign
+// its own default, which apply() then reads back into state — rather than
+// racing a client-side default against whatever value a prior create or
+// import already left in state.
 func (r *gmsaResource) specFrom(ctx context.Context, m gmsaModel, forCreate bool, diags *diag.Diagnostics) adpwsh.GMSASpec {
 	sam := m.SamAccountName.ValueString()
 	if sam == "" {
@@ -260,7 +270,7 @@ func (r *gmsaResource) specFrom(ctx context.Context, m gmsaModel, forCreate bool
 		diags.Append(m.KerberosEncryption.ElementsAs(ctx, &kerb, false)...)
 		spec.KerberosEncryptionType = &kerb
 	}
-	if forCreate {
+	if forCreate && !m.Interval.IsNull() && !m.Interval.IsUnknown() {
 		spec.ManagedPasswordIntervalInDays = adpwsh.Int(int(m.Interval.ValueInt64()))
 	}
 

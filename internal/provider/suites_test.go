@@ -604,11 +604,18 @@ var gmsaGUIDPattern = regexp.MustCompile(
 // gMSA's sAMAccountName on every read, but apply() (resource_gmsa.go) strips
 // it before the value ever reaches state, so the Terraform-visible attribute
 // and name agree exactly.
+//
+// A group is created alongside the gMSA and referenced by
+// principals_allowed_to_retrieve_managed_password on every step from create
+// onward, so the attribute is never left untested (previously it appeared
+// nowhere but an ImportStateVerifyIgnore). The same group is kept across
+// every subsequent config so the set never churns.
 func gmsaLifecycleSteps(e suiteEnv) []resource.TestStep {
 	ou := accNamePrefix + "gmsa-ou"
 	movedOU := accNamePrefix + "gmsa-ou2"
 	name := accNamePrefix + "gmsa"
 	renamed := accNamePrefix + "gmsa2"
+	principal := accNamePrefix + "gmsa-principal"
 	host1 := name + "01." + e.upnSuffix()
 	host2 := name + "02." + e.upnSuffix()
 	spn1 := "HTTP/" + host1
@@ -620,17 +627,40 @@ resource "activedirectory_ou" "staff" {
   name      = %q
   container = %q
 }
-`, ou, e.Container)
+resource "activedirectory_group" "principal" {
+  name             = %q
+  sam_account_name = %q
+  container        = activedirectory_ou.staff.dn
+}
+`, ou, e.Container, principal, principal)
 
 	create := fmt.Sprintf(`
 resource "activedirectory_gmsa" "svc" {
-  name                               = %q
-  container                          = activedirectory_ou.staff.dn
-  dns_hostname                       = %q
-  description                        = "initial"
-  service_principal_names            = [%q]
-  kerberos_encryption_type           = ["AES256"]
-  managed_password_interval_in_days  = 45
+  name                                             = %q
+  container                                        = activedirectory_ou.staff.dn
+  dns_hostname                                     = %q
+  description                                      = "initial"
+  service_principal_names                          = [%q]
+  kerberos_encryption_type                         = ["AES256"]
+  managed_password_interval_in_days                = 45
+  principals_allowed_to_retrieve_managed_password  = [activedirectory_group.principal.id]
+}`, name, host1, spn1)
+
+	// Identical to create except managed_password_interval_in_days is omitted
+	// entirely. UseStateForUnknown (resource_gmsa.go) resolves the omitted
+	// plan value to the prior state (45), so immutableAfterCreate sees plan
+	// == state and this must produce an empty plan: omission carries the
+	// existing value forward rather than resetting to a client-side default
+	// and erroring against it.
+	createOmitInterval := fmt.Sprintf(`
+resource "activedirectory_gmsa" "svc" {
+  name                                             = %q
+  container                                        = activedirectory_ou.staff.dn
+  dns_hostname                                     = %q
+  description                                      = "initial"
+  service_principal_names                          = [%q]
+  kerberos_encryption_type                         = ["AES256"]
+  principals_allowed_to_retrieve_managed_password  = [activedirectory_group.principal.id]
 }`, name, host1, spn1)
 
 	// Every mutable attribute changed in one apply: description, dns_hostname,
@@ -638,26 +668,28 @@ resource "activedirectory_gmsa" "svc" {
 	// (both new values, not an addition to the old ones).
 	updated := fmt.Sprintf(`
 resource "activedirectory_gmsa" "svc" {
-  name                               = %q
-  container                          = activedirectory_ou.staff.dn
-  dns_hostname                       = %q
-  description                        = "updated"
-  service_principal_names            = [%q, %q]
-  kerberos_encryption_type           = ["AES128", "AES256"]
-  managed_password_interval_in_days  = 45
+  name                                             = %q
+  container                                        = activedirectory_ou.staff.dn
+  dns_hostname                                     = %q
+  description                                      = "updated"
+  service_principal_names                          = [%q, %q]
+  kerberos_encryption_type                         = ["AES128", "AES256"]
+  managed_password_interval_in_days                = 45
+  principals_allowed_to_retrieve_managed_password  = [activedirectory_group.principal.id]
 }`, name, host2, spn2a, spn2b)
 
 	// description carries a load-bearing empty default, so setting it to ""
 	// must clear it rather than retain the prior value.
 	cleared := fmt.Sprintf(`
 resource "activedirectory_gmsa" "svc" {
-  name                               = %q
-  container                          = activedirectory_ou.staff.dn
-  dns_hostname                       = %q
-  description                        = ""
-  service_principal_names            = [%q, %q]
-  kerberos_encryption_type           = ["AES128", "AES256"]
-  managed_password_interval_in_days  = 45
+  name                                             = %q
+  container                                        = activedirectory_ou.staff.dn
+  dns_hostname                                     = %q
+  description                                      = ""
+  service_principal_names                          = [%q, %q]
+  kerberos_encryption_type                         = ["AES128", "AES256"]
+  managed_password_interval_in_days                = 45
+  principals_allowed_to_retrieve_managed_password  = [activedirectory_group.principal.id]
 }`, name, host2, spn2a, spn2b)
 
 	// Rename and move in one step, into a freshly introduced OU. The original
@@ -669,13 +701,14 @@ resource "activedirectory_ou" "moved" {
   container = %q
 }
 resource "activedirectory_gmsa" "svc" {
-  name                               = %q
-  container                          = activedirectory_ou.moved.dn
-  dns_hostname                       = %q
-  description                        = ""
-  service_principal_names            = [%q, %q]
-  kerberos_encryption_type           = ["AES128", "AES256"]
-  managed_password_interval_in_days  = 45
+  name                                             = %q
+  container                                        = activedirectory_ou.moved.dn
+  dns_hostname                                     = %q
+  description                                      = ""
+  service_principal_names                          = [%q, %q]
+  kerberos_encryption_type                         = ["AES128", "AES256"]
+  managed_password_interval_in_days                = 45
+  principals_allowed_to_retrieve_managed_password  = [activedirectory_group.principal.id]
 }`, movedOU, e.Container, renamed, host2, spn2a, spn2b)
 
 	var createID, movedID string
@@ -702,10 +735,19 @@ resource "activedirectory_gmsa" "svc" {
 				resource.TestCheckResourceAttr("activedirectory_gmsa.svc", "service_principal_names.#", "1"),
 				resource.TestCheckTypeSetElemAttr("activedirectory_gmsa.svc",
 					"service_principal_names.*", spn1),
+				resource.TestCheckResourceAttr("activedirectory_gmsa.svc",
+					"principals_allowed_to_retrieve_managed_password.#", "1"),
+				resource.TestCheckTypeSetElemAttrPair("activedirectory_gmsa.svc",
+					"principals_allowed_to_retrieve_managed_password.*",
+					"activedirectory_group.principal", "id"),
 				captureAttr("activedirectory_gmsa.svc", "id", &createID),
 			),
 		},
 		{Config: base + create, PlanOnly: true},
+		// Fix for the spurious-error regression: omitting a non-default
+		// managed_password_interval_in_days (45, set above) after create must
+		// carry the value forward, not error and not diff.
+		{Config: base + createOmitInterval, PlanOnly: true},
 		{
 			Config: base + updated,
 			Check: resource.ComposeAggregateTestCheckFunc(
