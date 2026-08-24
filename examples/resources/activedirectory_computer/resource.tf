@@ -28,7 +28,8 @@ resource "activedirectory_computer" "web01" {
   #
   # Constrained delegation: the service principal names this account may
   # delegate to (msDS-AllowedToDelegateTo). Full-replace, the same as
-  # service_principal_names.
+  # service_principal_names. Setting this (like trusted_for_delegation)
+  # requires the Terraform-running account to hold SeEnableDelegationPrivilege.
   # allowed_to_delegate_to = [
   #   "HTTP/backend01.corp.local",
   # ]

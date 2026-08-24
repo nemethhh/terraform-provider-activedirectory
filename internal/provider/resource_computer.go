@@ -126,7 +126,10 @@ func (r *computerResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				MarkdownDescription: "**Unconstrained Kerberos delegation.** Security-sensitive: a host " +
 					"trusted for unconstrained delegation, if compromised, can impersonate any user that " +
 					"authenticates to it. Prefer `principals_allowed_to_delegate_to_account` (RBCD) or " +
-					"`allowed_to_delegate_to` (constrained delegation)."},
+					"`allowed_to_delegate_to` (constrained delegation). Setting this requires the account " +
+					"running Terraform to hold the *Enable computer and user accounts to be trusted for " +
+					"delegation* right (`SeEnableDelegationPrivilege`); without it Active Directory refuses " +
+					"the write with \"A required privilege is not held by the client\"."},
 			"service_principal_names": schema.SetAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
@@ -140,7 +143,11 @@ func (r *computerResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				MarkdownDescription: "Constrained-delegation target service principal names " +
 					"(msDS-AllowedToDelegateTo). Full-replace, the same as `service_principal_names`: " +
 					"omitting the attribute leaves Active Directory's existing value untouched, and " +
-					"setting it — including to `[]` — replaces the entire set.",
+					"setting it — including to `[]` — replaces the entire set. Setting this requires " +
+					"the account running Terraform to hold the *Enable computer and user accounts to " +
+					"be trusted for delegation* right (`SeEnableDelegationPrivilege`); without it " +
+					"Active Directory refuses the write with \"A required privilege is not held by " +
+					"the client\".",
 			},
 			"principals_allowed_to_delegate_to_account": schema.SetAttribute{
 				Optional:    true,

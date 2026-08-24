@@ -43,7 +43,8 @@ resource "activedirectory_computer" "web01" {
   #
   # Constrained delegation: the service principal names this account may
   # delegate to (msDS-AllowedToDelegateTo). Full-replace, the same as
-  # service_principal_names.
+  # service_principal_names. Setting this (like trusted_for_delegation)
+  # requires the Terraform-running account to hold SeEnableDelegationPrivilege.
   # allowed_to_delegate_to = [
   #   "HTTP/backend01.corp.local",
   # ]
@@ -65,7 +66,7 @@ resource "activedirectory_computer" "web01" {
 ### Optional
 
 - `account_expiration_date` (String) An RFC 3339 timestamp, or `""` for an account that never expires. Removing the line clears any expiry. The underlying FILETIME integer is never part of this surface.
-- `allowed_to_delegate_to` (Set of String) Constrained-delegation target service principal names (msDS-AllowedToDelegateTo). Full-replace, the same as `service_principal_names`: omitting the attribute leaves Active Directory's existing value untouched, and setting it — including to `[]` — replaces the entire set.
+- `allowed_to_delegate_to` (Set of String) Constrained-delegation target service principal names (msDS-AllowedToDelegateTo). Full-replace, the same as `service_principal_names`: omitting the attribute leaves Active Directory's existing value untouched, and setting it — including to `[]` — replaces the entire set. Setting this requires the account running Terraform to hold the *Enable computer and user accounts to be trusted for delegation* right (`SeEnableDelegationPrivilege`); without it Active Directory refuses the write with "A required privilege is not held by the client".
 - `description` (String) Free-text description. `""` or removal clears the attribute.
 - `display_name` (String) The name shown in address lists. `""` or removal clears the attribute.
 - `dns_hostname` (String) The DNS host name (dNSHostName). `""` or removal clears it.
@@ -77,7 +78,7 @@ resource "activedirectory_computer" "web01" {
 - `sam_account_name` (String) The pre-Windows-2000 logon name (sAMAccountName), without the trailing `$`. Defaults to `name`. Active Directory stores computers with a trailing `$`; the provider strips it. Names longer than 15 characters are allowed but warned about (NetBIOS limit).
 - `service_principal_names` (Set of String) The account's service principal names (servicePrincipalName). Full-replace: omitting the attribute leaves whatever Active Directory already holds untouched, while setting it — including to `[]` — replaces the entire set.
 - `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
-- `trusted_for_delegation` (Boolean) **Unconstrained Kerberos delegation.** Security-sensitive: a host trusted for unconstrained delegation, if compromised, can impersonate any user that authenticates to it. Prefer `principals_allowed_to_delegate_to_account` (RBCD) or `allowed_to_delegate_to` (constrained delegation).
+- `trusted_for_delegation` (Boolean) **Unconstrained Kerberos delegation.** Security-sensitive: a host trusted for unconstrained delegation, if compromised, can impersonate any user that authenticates to it. Prefer `principals_allowed_to_delegate_to_account` (RBCD) or `allowed_to_delegate_to` (constrained delegation). Setting this requires the account running Terraform to hold the *Enable computer and user accounts to be trusted for delegation* right (`SeEnableDelegationPrivilege`); without it Active Directory refuses the write with "A required privilege is not held by the client".
 
 ### Read-Only
 
