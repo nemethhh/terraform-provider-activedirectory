@@ -425,3 +425,41 @@ Lab-caught, fixed and re-validated:
 | Defect | Where it was |
 |---|---|
 | The Layer 1 group `sam_account_name` validator inherited the 20-char user ceiling, which would have rejected valid group logon names (the probe created a 25-char group sam that AD accepted and stored) | the provider — the 20-char limit is the pre-Windows-2000 *user* down-level name limit, not a group constraint. Fixed by relaxing the group validator to the `sAMAccountName` schema ceiling of 256 (`groupSamAccountNameValidators`), with the user validator left at 20; caught by the pre-finalisation probe rather than by a test, exactly the "lab-verify the limits before shipping" step the design called for |
+
+## WinRM/PSRP
+
+The new `psrp` transport block (Kerberos over WinRM, no jump box or spawned
+`pwsh` required) needs the following on the target host, beyond what the
+`local`/`ssh` transports already require:
+
+- The `PowerShell.7` WinRM session configuration, registered by running
+  `Enable-PSRemoting` from PowerShell 7 itself (the default `Microsoft.PowerShell`
+  endpoint is Windows PowerShell 5.1 and cannot run the module's scripts).
+- RSAT-AD (the ActiveDirectory module) present on that host.
+- A non-admin connecting account must be a member of local group **Remote
+  Management Users**, or WinRM refuses the session.
+- ADWS (9389) reachable from the target host, exactly as for `local`/`ssh`.
+- On the runner: a valid Kerberos ticket (`krb5.conf` plus `kinit`). Unlike a
+  Windows caller using SSPI, **go-psrp always requires an explicit username** —
+  even with an ambient ticket cache, Linux has no SSPI single sign-on to infer
+  the principal from.
+
+Two topologies are supported and were both exercised:
+
+- **DC-direct**: `psrp.host` is a domain controller itself, authenticating as
+  the runner's own Kerberos session identity (no `domain.credential` needed).
+- **Member-host**: `psrp.host` is a domain-joined member (`s-client`), with
+  `domain.credential` supplying `DOMAIN\user`/password — required to cross the
+  Kerberos double hop from the member to the directory, the same constraint
+  already documented above for `ssh`/`local`.
+
+### PSRP transport, 2026-08-24
+
+A real `terraform apply`/`destroy` of an `activedirectory_ou` exercised the
+`psrp` transport end-to-end on both topologies. DC-direct: create, update and
+delete each independently verified on the DC. Member-host (`s-client` +
+`domain.credential`): create verified on the DC, destroy clean — confirming
+the double hop is crossed by explicit credentials exactly as it is for `ssh`.
+DC-direct exercised the full create/update/delete lifecycle; the member-host
+topology was validated for create and delete, confirming the double-hop
+credential path (update was not exercised on that topology).

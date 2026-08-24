@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -12,6 +13,7 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -19,6 +21,7 @@ type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
+	PSRP        *psrpModel        `tfsdk:"psrp"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
 }
@@ -42,6 +45,24 @@ type sshModel struct {
 	InsecureIgnoreHostKey types.Bool   `tfsdk:"insecure_ignore_host_key"`
 	MaxConcurrency        types.Int64  `tfsdk:"max_concurrency"`
 	Timeout               types.String `tfsdk:"timeout"`
+}
+
+type psrpModel struct {
+	Host               types.String `tfsdk:"host"`
+	Port               types.Int64  `tfsdk:"port"`
+	UseTLS             types.Bool   `tfsdk:"use_tls"`
+	InsecureSkipVerify types.Bool   `tfsdk:"insecure_skip_verify"`
+	User               types.String `tfsdk:"user"`
+	Password           types.String `tfsdk:"password"`
+	Domain             types.String `tfsdk:"domain"`
+	SPN                types.String `tfsdk:"spn"`
+	Realm              types.String `tfsdk:"realm"`
+	Krb5ConfPath       types.String `tfsdk:"krb5_conf_path"`
+	CCachePath         types.String `tfsdk:"ccache_path"`
+	KeytabPath         types.String `tfsdk:"keytab_path"`
+	ConfigurationName  types.String `tfsdk:"configuration_name"`
+	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
+	Timeout            types.String `tfsdk:"timeout"`
 }
 
 type domainModel struct {
@@ -141,6 +162,84 @@ func resolveSSH(m providerModel, getenv func(string) string) (adssh.Config, diag
 	if cfg.Host == "" {
 		diags.AddAttributeError(root.AtName("host"), "Missing SSH host",
 			"Set ssh.host or the AD_SSH_HOST environment variable.")
+	}
+	return cfg, diags
+}
+
+// boolWithEnv resolves a bool attribute with an environment fallback.
+// Configuration wins; the environment is the fallback.
+func boolWithEnv(v types.Bool, getenv func(string) string, envVar string, def bool) bool {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueBool()
+	}
+	switch strings.ToLower(getenv(envVar)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+// resolvePSRP turns the psrp block plus the environment into a transport
+// configuration, mirroring resolveSSH: configuration always wins, and the
+// refusal is rendered against the attribute the user can change.
+func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	root := path.Root("psrp")
+	s := psrpModel{}
+	if m.PSRP != nil {
+		s = *m.PSRP
+	}
+
+	cfg := adpsrp.Config{
+		Host:               str(s.Host, getenv, "AD_PSRP_HOST"),
+		UseTLS:             boolWithEnv(s.UseTLS, getenv, "AD_PSRP_USE_TLS", false),
+		InsecureSkipVerify: boolWithEnv(s.InsecureSkipVerify, getenv, "AD_PSRP_INSECURE_SKIP_VERIFY", false),
+		Username:           str(s.User, getenv, "AD_PSRP_USER"),
+		Password:           str(s.Password, getenv, "AD_PSRP_PASSWORD"),
+		Domain:             str(s.Domain, getenv, "AD_PSRP_DOMAIN"),
+		SPN:                str(s.SPN, getenv, "AD_PSRP_SPN"),
+		Realm:              str(s.Realm, getenv, "AD_PSRP_REALM"),
+		Krb5ConfPath:       firstNonEmpty(str(s.Krb5ConfPath, getenv, "AD_PSRP_KRB5_CONF"), getenv("KRB5_CONFIG")),
+		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_PSRP_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
+		KeytabPath:         str(s.KeytabPath, getenv, "AD_PSRP_KEYTAB"),
+		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_PSRP_CONFIGURATION_NAME"),
+		Timeout:            duration(s.Timeout, root.AtName("timeout"), 60*time.Second, &diags),
+	}
+
+	if !s.Port.IsNull() && !s.Port.IsUnknown() {
+		cfg.Port = int(s.Port.ValueInt64())
+	} else if p := getenv("AD_PSRP_PORT"); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("port"), "Invalid AD_PSRP_PORT",
+				fmt.Sprintf("%q is not a port number: %s", p, err))
+		}
+		cfg.Port = n
+	}
+
+	if !s.MaxConcurrency.IsNull() && !s.MaxConcurrency.IsUnknown() {
+		cfg.Concurrency = int(s.MaxConcurrency.ValueInt64())
+	} else if v := getenv("AD_PSRP_MAX_CONCURRENCY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			diags.AddAttributeError(root.AtName("max_concurrency"), "Invalid AD_PSRP_MAX_CONCURRENCY",
+				fmt.Sprintf("%q is not a whole number: %s", v, err))
+		}
+		cfg.Concurrency = n
+	}
+
+	// Validate the raw config (catches a negative concurrency) before defaults.
+	if err := cfg.Validate(); err != nil {
+		diags.AddAttributeError(root, "Invalid PSRP configuration", err.Error())
+	}
+	cfg = cfg.WithDefaults()
+
+	if cfg.Host == "" {
+		diags.AddAttributeError(root.AtName("host"), "Missing PSRP host",
+			"Set psrp.host or the AD_PSRP_HOST environment variable.")
 	}
 	return cfg, diags
 }
@@ -263,7 +362,7 @@ func resolveReplication(ctx context.Context, m providerModel) (adpwsh.Replicatio
 	return cfg, diags
 }
 
-// transportKind is which of the two mutually exclusive transport blocks the
+// transportKind is which of the three mutually exclusive transport blocks the
 // configuration selects.
 type transportKind int
 
@@ -271,6 +370,7 @@ const (
 	transportUnset transportKind = iota
 	transportLocal
 	transportSSH
+	transportPSRP
 )
 
 func (k transportKind) String() string {
@@ -279,6 +379,8 @@ func (k transportKind) String() string {
 		return "local"
 	case transportSSH:
 		return "ssh"
+	case transportPSRP:
+		return "psrp"
 	default:
 		return "unset"
 	}
@@ -287,30 +389,49 @@ func (k transportKind) String() string {
 // chooseTransport enforces the exactly-one rule. There is deliberately no
 // implicit default: defaulting to local when the block is absent turns a typo'd
 // `ssh` block into silent local execution against the wrong identity, and
-// defaulting to ssh turns a typo'd `local` block into a dial to nowhere.
+// defaulting to ssh or psrp turns a typo'd `local` block into a dial to
+// nowhere.
 func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	const summary = "Exactly one transport block is required"
-	const detail = "Set either a `local` block, to run pwsh on the machine Terraform runs on, " +
-		"or an `ssh` block, to run it on a Windows jump box — not both, and not neither.\n\n" +
+	const detail = "Set exactly one of `local` (run pwsh where Terraform runs), " +
+		"`ssh` (a Windows jump box), or `psrp` (WinRM/PSRP) — not more than one, and not none.\n\n" +
 		"There is no implicit default. Guessing one would let a mistyped block run against the " +
-		"wrong identity: a typo in `ssh` would silently execute locally as whoever launched " +
-		"Terraform."
+		"wrong identity."
 
-	switch {
-	case m.Local != nil && m.SSH != nil:
-		// One diagnostic per block, so Terraform underlines both lines.
-		diags.AddAttributeError(path.Root("local"), summary, detail)
-		diags.AddAttributeError(path.Root("ssh"), summary, detail)
-		return transportUnset, diags
-	case m.Local != nil:
-		return transportLocal, diags
-	case m.SSH != nil:
-		return transportSSH, diags
-	default:
-		// Nothing was written, so there is no attribute to point at.
+	blocks := []struct {
+		present bool
+		name    string
+		kind    transportKind
+	}{
+		{m.Local != nil, "local", transportLocal},
+		{m.SSH != nil, "ssh", transportSSH},
+		{m.PSRP != nil, "psrp", transportPSRP},
+	}
+
+	chosen := transportUnset
+	count := 0
+	for _, b := range blocks {
+		if b.present {
+			count++
+			chosen = b.kind
+		}
+	}
+
+	switch count {
+	case 1:
+		return chosen, diags
+	case 0:
 		diags.AddError(summary, detail)
+		return transportUnset, diags
+	default:
+		// One diagnostic per offending block, so Terraform underlines each.
+		for _, b := range blocks {
+			if b.present {
+				diags.AddAttributeError(path.Root(b.name), summary, detail)
+			}
+		}
 		return transportUnset, diags
 	}
 }

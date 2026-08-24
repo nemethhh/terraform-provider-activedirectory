@@ -23,6 +23,7 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -55,8 +56,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
 			"PowerShell module. `pwsh` runs either on the Windows host Terraform itself runs on " +
-			"(the `local` block) or on a Windows jump box reached over SSH (the `ssh` block). " +
-			"Exactly one of the two is required.",
+			"(the `local` block), on a Windows jump box reached over SSH (the `ssh` block), or " +
+			"on a Windows host reached over PSRP/WinRM (the `psrp` block). Exactly one of the " +
+			"three is required.",
 		Attributes: map[string]schema.Attribute{
 			"pwsh_path": schema.StringAttribute{
 				Optional: true,
@@ -71,7 +73,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"domain-joined Windows host. The spawned process inherits that machine's " +
 					"logon token, so Active Directory operations authenticate as whoever launched " +
 					"Terraform unless `domain.credential` says otherwise. Mutually exclusive with " +
-					"`ssh`; exactly one of the two is required.",
+					"`ssh` and `psrp`; exactly one of the three is required.",
 				Attributes: map[string]schema.Attribute{
 					"pwsh_path": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Path to PowerShell 7 on this machine. Overrides the " +
@@ -117,6 +119,47 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"max_concurrency": schema.Int64Attribute{Optional: true,
 						MarkdownDescription: "Simultaneous SSH channels. Defaults to `4`, because " +
 							"Windows sshd defaults to `MaxSessions 10`."},
+					"timeout": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
+				},
+			},
+			"psrp": schema.SingleNestedBlock{
+				MarkdownDescription: "Run the AD cmdlets on a Windows host reached over " +
+					"PSRP/WinRM. Kerberos over HTTP (5985) by default, using the runner's " +
+					"ambient Kerberos ticket; set `use_tls` for HTTPS (5986). Target a " +
+					"domain controller, or a member/management host together with " +
+					"`domain.credential`. Mutually exclusive with `local` and `ssh`; " +
+					"exactly one of the three is required.",
+				Attributes: map[string]schema.Attribute{
+					"host": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`). Environment: `AD_PSRP_HOST`."},
+					"port": schema.Int64Attribute{Optional: true,
+						MarkdownDescription: "WinRM port. Environment: `AD_PSRP_PORT`. Defaults to `5985` (HTTP) or `5986` when `use_tls` is set."},
+					"use_tls": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Use HTTPS/WinRM-over-TLS. Environment: `AD_PSRP_USE_TLS`. Required for NTLM auth; Kerberos encrypts over plain HTTP without it."},
+					"insecure_skip_verify": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Skip TLS certificate verification (testing only; requires `use_tls`). Environment: `AD_PSRP_INSECURE_SKIP_VERIFY`."},
+					"user": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "WinRM auth user in `DOMAIN\\user` or UPN form. Required: go-psrp needs the principal name even when an ambient Kerberos ticket cache supplies the credentials, because Linux has no SSPI single sign-on. Only on Windows, authenticating via SSPI SSO, can this be omitted. Environment: `AD_PSRP_USER`."},
+					"password": schema.StringAttribute{Optional: true, Sensitive: true,
+						MarkdownDescription: "WinRM auth password. Environment: `AD_PSRP_PASSWORD`. Never written to state or a log line."},
+					"domain": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "NTLM domain. Environment: `AD_PSRP_DOMAIN`."},
+					"spn": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Kerberos service principal name. Defaults to `HTTP/<host>` (AD's sPNMappings alias it to the host's HOST SPN). Environment: `AD_PSRP_SPN`."},
+					"realm": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Kerberos realm; defaults to krb5.conf's `default_realm`. Environment: `AD_PSRP_REALM`."},
+					"krb5_conf_path": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Path to krb5.conf. Environment: `AD_PSRP_KRB5_CONF`, else ambient `KRB5_CONFIG`, else `/etc/krb5.conf`."},
+					"ccache_path": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Path to the Kerberos ticket cache. Environment: `AD_PSRP_CCACHE`, else ambient `KRB5CCNAME`."},
+					"keytab_path": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Path to a keytab for headless runners. Environment: `AD_PSRP_KEYTAB`."},
+					"configuration_name": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7` (the module's scripts require PowerShell 7)."},
+					"max_concurrency": schema.Int64Attribute{Optional: true,
+						Validators:          []validator.Int64{int64validator.AtLeast(1)},
+						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default."},
 					"timeout": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
 				},
@@ -219,6 +262,22 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 				resp.Diagnostics.AddAttributeError(path.Root("ssh"),
 					"Cannot reach the jump box",
 					"The provider could not open an SSH connection. This is a transport problem, "+
+						"not an Active Directory one.\n\n"+err.Error())
+				return
+			}
+			transport = tr
+
+		case transportPSRP:
+			psrpCfg, diags := resolvePSRP(cfg, os.Getenv)
+			resp.Diagnostics.Append(diags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			tr, err := adpsrp.New(psrpCfg)
+			if err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("psrp"),
+					"Cannot reach the Windows host over WinRM",
+					"The provider could not open a PSRP session. This is a transport problem, "+
 						"not an Active Directory one.\n\n"+err.Error())
 				return
 			}
