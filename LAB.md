@@ -481,6 +481,14 @@ verified by `accCheckDestroy` (a real `ServiceAccount.Get` → not-found), and t
 sweeper's gMSA path was validated separately by planting a stray `tfacc-`
 service account and confirming `make lab-sweep` removed it
 (`msDS-GroupManagedServiceAccount` dispatches to `ServiceAccount.Delete`).
+The `principals_allowed_to_retrieve_managed_password` write→read-back is a real
+round-trip: the config sets it to an in-config `activedirectory_group`'s
+objectGUID and the suite asserts the gMSA reads that GUID back (the library
+resolves the DN AD returns to a GUID). A dedicated plan-only step also omits
+`managed_password_interval_in_days` after it was set to 45 and asserts an empty
+plan — confirming the create-only attribute carries state forward on omission
+rather than erroring (it is `Optional`+`Computed` with `UseStateForUnknown`, no
+static default, so Active Directory owns the default of 30).
 
 **KDS root key:** none was created manually. Windows Server 2025 auto-provisions
 the forest KDS root key on the first `New-ADServiceAccount`, backdated so it is
