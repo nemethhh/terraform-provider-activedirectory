@@ -75,6 +75,64 @@ Write-Output ($out | ConvertTo-Json -Depth 6 -Compress)
 Write-Output '<<<TFAD:END>>>'
 `
 
+// sweepServiceAccountScript removes gMSAs directly with Get-ADServiceAccount /
+// Remove-ADServiceAccount, the idiomatic pair for this AD object type, rather
+// than folding it into sweepScript's generic Get-ADObject search: the library's
+// ServiceAccount client is get-by-identity only (no search of its own), which is
+// the same gap that gives the OU/group/user sweep its own PowerShell discovery.
+// Same contract as sweepScript: the script is a constant, every value arrives as
+// JSON on stdin, and no value is ever formatted into script text.
+const sweepServiceAccountScript = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+Import-Module ActiveDirectory -ErrorAction Stop
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json -AsHashtable
+
+$common = @{}
+if ($p.server) { $common['Server'] = $p.server }
+if ($p.credential) {
+    $secpw = ConvertTo-SecureString $p.credential.password -AsPlainText -Force
+    $common['Credential'] = [System.Management.Automation.PSCredential]::new($p.credential.username, $secpw)
+}
+
+$removed = New-Object System.Collections.Generic.List[object]
+$failed  = New-Object System.Collections.Generic.List[object]
+
+try {
+    $found = @(Get-ADServiceAccount -SearchBase $p.searchBase -SearchScope Subtree -LDAPFilter $p.filter @common)
+    foreach ($a in $found) {
+        if (-not $a.DistinguishedName.ToUpper().EndsWith($p.searchBase.ToUpper())) {
+            continue # belt and braces: outside the subtree the search asked for
+        }
+        try {
+            Remove-ADServiceAccount -Identity $a.ObjectGUID -Confirm:$false @common
+            $removed.Add([ordered]@{
+                objectGUID        = $a.ObjectGUID.ToString()
+                distinguishedName = $a.DistinguishedName
+            })
+        } catch {
+            if ($_.Exception.GetType().FullName -like '*IdentityNotFoundException*') {
+                continue # already gone: a previous sweep or a cascading delete took it
+            }
+            $failed.Add([ordered]@{
+                distinguishedName = $a.DistinguishedName
+                message           = $_.Exception.Message
+            })
+        }
+    }
+    $data = [ordered]@{ removed = @($removed); failed = @($failed) }
+    $out = @{ ok = $true; data = $data }
+} catch {
+    $out = @{ ok = $false; error = @{
+        type    = $_.Exception.GetType().FullName
+        message = $_.Exception.Message
+    } }
+}
+Write-Output '<<<TFAD:BEGIN>>>'
+Write-Output ($out | ConvertTo-Json -Depth 6 -Compress)
+Write-Output '<<<TFAD:END>>>'
+`
+
 const (
 	sweepSentinelBegin = "<<<TFAD:BEGIN>>>"
 	sweepSentinelEnd   = "<<<TFAD:END>>>"
@@ -123,6 +181,14 @@ func sweepBeneath(container string) error {
 		return fmt.Errorf("sweep: cannot start PowerShell: %w", err)
 	}
 	defer func() { _ = tr.Close() }()
+
+	// Service accounts first: like users and groups, a gMSA lives beneath the
+	// OUs the pass below deletes, and it is not one of the classes that pass's
+	// switch handles (a gMSA's ObjectClass is msDS-GroupManagedServiceAccount,
+	// not one Get-ADObject would let this repo dispatch on generically).
+	if err := sweepServiceAccounts(ctx, tr, container); err != nil {
+		return err
+	}
 
 	objects, err := sweepDiscover(ctx, tr, container)
 	if err != nil {
@@ -186,6 +252,71 @@ func sweepBeneath(container string) error {
 	if len(failures) > 0 {
 		return fmt.Errorf("sweep left %d object(s) behind:\n  %s",
 			len(failures), strings.Join(failures, "\n  "))
+	}
+	return nil
+}
+
+// sweepServiceAccounts removes gMSAs beneath container whose name begins with
+// accNamePrefix. Unlike sweepDiscover+sweepBeneath's per-object loop, discovery
+// and deletion happen in one round trip inside sweepServiceAccountScript, since
+// Get-ADServiceAccount/Remove-ADServiceAccount is the pair this AD object type
+// wants; a not-found on removal (already gone: a previous sweep or a cascading
+// delete took it) is handled inside the script and never reaches Go as a failure.
+func sweepServiceAccounts(ctx context.Context, tr *adlocal.Transport, container string) error {
+	payload := map[string]any{
+		"searchBase": container,
+		// Matches the same tfacc- prefix as the generic sweep; a gMSA's name is
+		// its cn, exactly like a group's or a user's.
+		"filter": "(name=" + accNamePrefix + "*)",
+	}
+	if v := os.Getenv(envServer); v != "" {
+		payload["server"] = v
+	}
+	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
+		payload["credential"] = map[string]any{"username": u, "password": p}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("sweep: cannot encode the service account search payload: %w", err)
+	}
+
+	res, err := tr.Run(ctx, sweepEncodeCommand(sweepServiceAccountScript), body)
+	if err != nil {
+		return fmt.Errorf("sweep: cannot run the service account cleanup: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("sweep: pwsh exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	data, err := sweepEnvelopeData(res.Stdout)
+	if err != nil {
+		return err
+	}
+
+	var out struct {
+		Removed []sweepObject `json:"removed"`
+		Failed  []struct {
+			DN      string `json:"distinguishedName"`
+			Message string `json:"message"`
+		} `json:"failed"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return fmt.Errorf("sweep: cannot decode the service account cleanup result: %w", err)
+	}
+
+	if len(out.Removed) == 0 && len(out.Failed) == 0 {
+		log.Printf("[INFO] sweep: nothing beneath %s is a service account named %s*", container, accNamePrefix)
+		return nil
+	}
+	for _, o := range out.Removed {
+		log.Printf("[INFO] sweep: deleted %s", o.DN)
+	}
+	if len(out.Failed) > 0 {
+		msgs := make([]string, len(out.Failed))
+		for i, f := range out.Failed {
+			msgs[i] = fmt.Sprintf("%s: %s", f.DN, f.Message)
+		}
+		return fmt.Errorf("sweep left %d service account(s) behind:\n  %s",
+			len(out.Failed), strings.Join(msgs, "\n  "))
 	}
 	return nil
 }
