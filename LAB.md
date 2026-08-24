@@ -503,3 +503,72 @@ plain JSON scalars/arrays), so only a real DC surfaced them:
 |---|---|
 | Every `GMSA.Create`/`Get` failed with `ConvertToFinalInvalidCastException`: `Get-ADServiceAccount` returns `ManagedPasswordIntervalInDays` as an `ADPropertyValueCollection`, and `[int]` on that collection throws | unwrap the single element before the cast — `[int](@($o.ManagedPasswordIntervalInDays)[0])`. go-adpwsh **v0.10.1** |
 | `kerberos_encryption_type` came back as `["Microsoft.ActiveDirectory.Management.ADPropertyValueCollection"]` (Terraform then rejected the apply: "planned set element AES256 does not correlate"): the converter called `.ToString()` on the whole collection, which yields the type name; the property is also a flags enum, so `AES128,AES256` returns as one element `"AES128, AES256"` | enumerate the collection and split each element on the comma — `foreach ($k in $o.KerberosEncryptionType) { foreach ($part in ("$k" -split ',\s*')) {...} }`. go-adpwsh **v0.10.2** |
+
+### Computer — activedirectory_computer, 2026-08-24
+
+`TestAccComputerLifecycle`, `TestAccComputerDataSource` and
+`TestAccComputersDataSource` (the `activedirectory_computer` resource plus its
+singular and plural data sources, backed by go-adpwsh **v0.11.0**'s new
+`Computer` sub-client driving `*-ADComputer`) all passed against `corp.local`.
+The whole acceptance suite (every non-e2e `TestAcc*`) and the whole e2e suite
+(every `TestAccE2E*`, re-shipped from the final tree) were then re-run green —
+no regressions from the new resource or its registration.
+
+The lifecycle suite exercised, end to end on the DC: create (description,
+`enabled`, `dns_hostname`, `service_principal_names`); a plan-only no-op
+re-apply (proving the read-back maps cleanly with no spurious diff); update
+every mutable attribute in one apply (`display_name`, `location`, `managed_by`,
+`trusted_for_delegation = true`, `kerberos_encryption_type =
+["AES128","AES256"]`, `account_expiration_date`, constrained delegation via
+`allowed_to_delegate_to`, and RBCD via `principals_allowed_to_delegate_to_account`
+pointed at an in-config helper computer's objectGUID); clearing `description`
+(`""` → `-Clear`); rename **and** move in one step (objectGUID stable, `dn`
+reflecting both); a 16-character name that applies successfully (the
+warn-not-error length path); and import (with `ImportStateVerifyIgnore` for the
+three Optional, non-Computed sets — `service_principal_names`,
+`allowed_to_delegate_to`, `principals_allowed_to_delegate_to_account` — which
+read back null on a skeleton import state). Destroy was verified by
+`accCheckDestroy` (a real `Computer.Get` → not-found), and the sweeper's
+computer path was validated when `make lab-sweep` removed a stray `tfacc-`
+computer left under a dangling OU (`objectClass computer` dispatches to
+`Computer.Delete`).
+
+The `principals_allowed_to_delegate_to_account` (RBCD) write→read-back is a real
+round-trip: the config sets it to an in-config `activedirectory_computer`'s
+objectGUID and the suite asserts the computer reads that GUID back — go-adpwsh's
+`Convert-AdComputer` resolves the DN AD returns to a GUID, exactly as the gMSA
+principals path does. `allowed_to_delegate_to` (classic constrained delegation,
+`msDS-AllowedToDelegateTo`) round-trips through the generic
+`-OtherAttributes`/`-Replace`/`-Clear` path — there is no friendly
+`-AllowedToDelegateTo` cmdlet parameter (see below).
+
+**Lab reconfiguration — SeEnableDelegationPrivilege.** The non-admin `svc_tfacc`
+account has Full Control over the `tfacc` subtree, which covers create, rename,
+move, `dns_hostname` and `servicePrincipalName` writes — but setting
+`trusted_for_delegation` or `allowed_to_delegate_to` is a *privileged*
+operation. Active Directory refuses those two attributes with `0x522` — "A
+required privilege is not held by the client" (Win32 1314) — unless the caller
+holds **SeEnableDelegationPrivilege** ("Enable computer and user accounts to be
+trusted for delegation"). Granted to `svc` via the Default Domain Controllers
+Policy (`make lab-grant-deleg` → `grant-svc-deleg-priv.ps1`). **Gotcha:** the
+privilege takes effect only after the DC is **rebooted** — `gpupdate` updates
+the policy database but LSASS keeps the privilege set it built at boot, so a
+fresh network logon still lacks the right until restart. `svc` stays a non
+Domain Admin, so the denial suite still proves what it did. This is a genuine
+operator requirement, now documented on both attributes' schema descriptions.
+
+**Lab-caught before the v0.11.0 tag** — surfaced by review and hands-on DC
+probes (running the cmdlets as `svc` via `-Credential`), all invisible to the
+in-memory fake, all fixed in go-adpwsh before the tag:
+
+| Bug | Fix |
+|---|---|
+| `Convert-AdComputer` read `$c.ServicePrincipalName` (singular) — a property `Get-ADComputer` does not expose; it returned `$null` → serialized `[null]` → decoded to `[""]`, so `service_principal_names` was wrong on every read | read the friendly plural `@($c.ServicePrincipalNames)` and request it by that name in `computerProject` (mirrors `Convert-AdServiceAccount`). go-adpwsh **v0.11.0** |
+| `Convert-AdComputer` read the raw `msDS-SupportedEncryptionTypes` integer bitmask (e.g. `24`) instead of the decoded flag names, so `kerberos_encryption_type` came back as `["24"]` — the same class as the gMSA v0.10.2 bug, in a new spot | read the friendly `@($c.KerberosEncryptionType)` and request it by that name. go-adpwsh **v0.11.0** |
+| The `allowed_to_delegate_to` write used a `-AllowedToDelegateTo` splat key, but no such parameter exists on `New-`/`Set-ADComputer` — it would fail on a real DC with "a parameter cannot be found" | route `msDS-AllowedToDelegateTo` through the generic `-OtherAttributes` (create) and `-Replace`/`-Clear` (update) on the raw attribute name. go-adpwsh **v0.11.0** |
+
+**One transient (did not recur):** the first plural-data-source run failed with
+`0x203b` "A local error occurred" on one of two computers Terraform created
+concurrently (writes are serialized per-identity, not globally, so `computer.a`
+and `computer.b` race). It passed on re-run — a concurrent-create transient, not
+a systematic fault, and not specific to computers.
