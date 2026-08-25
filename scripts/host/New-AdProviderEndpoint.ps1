@@ -22,10 +22,16 @@
     capability tier, e.g. AdObjects or AdReadOnly.
 
 .PARAMETER GrantTo
-    The AD group (recommended) or single account allowed to open this endpoint.
-    A group means new teams need no change here. Kerberos carries group membership
-    in the ticket, so an account added to the group needs a FRESH ticket -- which
-    a CI agent gets anyway, since it runs kinit per build.
+    The AD group this endpoint is granted to. Use a group: adding a team's
+    service account to it is then the entire onboarding step, with no change
+    to this host. Kerberos carries group membership in the ticket, so an
+    account added to the group needs a FRESH ticket -- which a CI agent gets
+    anyway, since it runs kinit per build.
+
+    A single account is also accepted -- Translate() resolves either a group
+    or a user SID -- but a per-account grant forfeits that property: onboard
+    the next team and you are back here re-running this script instead of
+    just adding an account to a group.
 
 .PARAMETER RestrictCmdlets
     Limit the session to the cmdlets these capabilities need.
