@@ -13,6 +13,8 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
+	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
 // The acceptance suite's environment. TF_ACC is Terraform's own gate and is
@@ -35,6 +37,24 @@ const (
 	envUsername = "AD_ACC_USERNAME" // omit to run as the account that launched the test
 	envPassword = "AD_ACC_PASSWORD"
 	envPwshPath = "AD_ACC_PWSH_PATH" // omit to use pwsh on PATH
+
+	// envTransport selects the deployment under test: "local" (the default, and
+	// the only one that can run on the host itself), "ssh", or "psrp". A 5.1
+	// endpoint is reached over psrp from wherever the suite runs.
+	envTransport = "AD_ACC_TRANSPORT"
+
+	// The ssh transport's own settings.
+	envSSHHost    = "AD_ACC_SSH_HOST"
+	envSSHUser    = "AD_ACC_SSH_USER"
+	envSSHKeyPath = "AD_ACC_SSH_KEY_PATH"
+
+	// The psrp transport's own settings. Kerberos files come from the ambient
+	// KRB5_CONFIG and KRB5CCNAME, which the library already reads.
+	envPSRPHost       = "AD_ACC_PSRP_HOST"
+	envPSRPUser       = "AD_ACC_PSRP_USER"
+	envPSRPPassword   = "AD_ACC_PSRP_PASSWORD"
+	envPSRPSPN        = "AD_ACC_PSRP_SPN"
+	envPSRPConfigName = "AD_ACC_PSRP_CONFIGURATION_NAME"
 )
 
 // accPreCheck fails the test when a required variable is missing. t.Fatal, not
@@ -58,14 +78,92 @@ func accPreCheck(t *testing.T, alsoRequired ...string) func() {
 			t.Fatalf("set both %s and %s, or neither (neither means the suite runs as the "+
 				"account that launched it)", envUsername, envPassword)
 		}
+		// A remote transport with no host authenticates against nothing and
+		// fails at the first cmdlet with an opaque message, so refuse here.
+		switch accTransportName() {
+		case "ssh":
+			if os.Getenv(envSSHHost) == "" {
+				t.Fatalf("%s=ssh requires %s", envTransport, envSSHHost)
+			}
+		case "psrp":
+			if os.Getenv(envPSRPHost) == "" {
+				t.Fatalf("%s=psrp requires %s", envTransport, envPSRPHost)
+			}
+			// go-psrp needs the principal name even with an ambient ticket
+			// cache: Linux has no SSPI single sign-on to infer it from.
+			if os.Getenv(envPSRPUser) == "" {
+				t.Fatalf("%s=psrp requires %s", envTransport, envPSRPUser)
+			}
+		}
 	}
+}
+
+// accTransportName is the deployment the suite exercises. Empty means local, so
+// every existing invocation behaves exactly as it did before.
+func accTransportName() string {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envTransport))); v {
+	case "", "local":
+		return "local"
+	case "ssh", "psrp":
+		return v
+	default:
+		panic(fmt.Sprintf("%s=%q: want local, ssh or psrp", envTransport, v))
+	}
+}
+
+// accTransportBlock renders the selected transport literally. Every branch emits
+// the line "    max_concurrency = 4" verbatim, because
+// accProviderConfigWithConcurrency and accProviderConfigWithTimeout rewrite it.
+func accTransportBlock() string {
+	var b strings.Builder
+	switch accTransportName() {
+	case "ssh":
+		b.WriteString("  ssh {\n")
+		fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envSSHHost))
+		if v := os.Getenv(envSSHUser); v != "" {
+			fmt.Fprintf(&b, "    user = %q\n", v)
+		}
+		if v := os.Getenv(envSSHKeyPath); v != "" {
+			fmt.Fprintf(&b, "    private_key_path = %q\n", v)
+		}
+		// A lab jump box has no host key in a known_hosts file on a throwaway
+		// CI agent. This is a test harness, not a deployment recommendation.
+		b.WriteString("    insecure_ignore_host_key = true\n")
+		b.WriteString("    max_concurrency = 4\n")
+		b.WriteString("  }\n")
+	case "psrp":
+		b.WriteString("  psrp {\n")
+		fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envPSRPHost))
+		if v := os.Getenv(envPSRPUser); v != "" {
+			fmt.Fprintf(&b, "    user = %q\n", v)
+		}
+		if v := os.Getenv(envPSRPPassword); v != "" {
+			fmt.Fprintf(&b, "    password = %q\n", v)
+		}
+		if v := os.Getenv(envPSRPSPN); v != "" {
+			fmt.Fprintf(&b, "    spn = %q\n", v)
+		}
+		if v := os.Getenv(envPSRPConfigName); v != "" {
+			fmt.Fprintf(&b, "    configuration_name = %q\n", v)
+		}
+		b.WriteString("    max_concurrency = 4\n")
+		b.WriteString("  }\n")
+	default:
+		b.WriteString("  local {\n")
+		if v := os.Getenv(envPwshPath); v != "" {
+			fmt.Fprintf(&b, "    pwsh_path = %q\n", v)
+		}
+		b.WriteString("    max_concurrency = 4\n")
+		b.WriteString("  }\n")
+	}
+	return b.String()
 }
 
 // accProviderConfig is the provider block the acceptance suite runs against.
 //
-// The local block is written literally: it is the deployment being tested, and
-// selecting it by environment variable would leave the suite able to pass
-// without ever exercising the local transport. Everything inside it, and the
+// The transport block is written literally: it is the deployment being tested,
+// and selecting it inside the provider from the environment would leave the
+// suite able to pass without ever exercising it. Everything inside it, and the
 // optional credential, comes from the AD_ACC_ variables, so the provider is
 // configured exactly the way an operator would configure it.
 //
@@ -74,12 +172,8 @@ func accPreCheck(t *testing.T, alsoRequired ...string) func() {
 func accProviderConfig(extraBlocks ...string) string {
 	var b strings.Builder
 	b.WriteString("provider \"activedirectory\" {\n")
-	b.WriteString("  local {\n")
-	if v := os.Getenv(envPwshPath); v != "" {
-		fmt.Fprintf(&b, "    pwsh_path = %q\n", v)
-	}
-	b.WriteString("    max_concurrency = 4\n")
-	b.WriteString("  }\n\n")
+	b.WriteString(accTransportBlock())
+	b.WriteString("\n")
 
 	b.WriteString("  domain {\n")
 	if v := os.Getenv(envServer); v != "" {
@@ -131,15 +225,54 @@ func accSuiteEnv() suiteEnv {
 	return suiteEnv{ProviderConfig: accProviderConfig(), Container: os.Getenv(envContainer)}
 }
 
-// accClient builds a library client over the local transport, configured from
-// the same environment the provider reads. CheckDestroy and the sweeper both
-// need to ask the directory questions that Terraform state cannot answer.
+// accTransport builds the transport the suite's own verification client uses.
+// CheckDestroy asks the directory questions Terraform state cannot answer, so it
+// must reach AD the same way the provider under test does.
+func accTransport(t *testing.T) adpwsh.Transport {
+	t.Helper()
+	switch accTransportName() {
+	case "ssh":
+		tr, err := adssh.New(adssh.Config{
+			Host:                  os.Getenv(envSSHHost),
+			User:                  os.Getenv(envSSHUser),
+			PrivateKeyPath:        os.Getenv(envSSHKeyPath),
+			InsecureIgnoreHostKey: true,
+			PwshPath:              os.Getenv(envPwshPath),
+		})
+		if err != nil {
+			t.Fatalf("acceptance: cannot open the ssh transport: %v", err)
+		}
+		return tr
+	case "psrp":
+		tr, err := adpsrp.New(adpsrp.Config{
+			Host:              os.Getenv(envPSRPHost),
+			Username:          os.Getenv(envPSRPUser),
+			Password:          os.Getenv(envPSRPPassword),
+			SPN:               os.Getenv(envPSRPSPN),
+			ConfigurationName: os.Getenv(envPSRPConfigName),
+			Krb5ConfPath:      os.Getenv("KRB5_CONFIG"),
+			CCachePath:        strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
+			Concurrency:       1,
+		})
+		if err != nil {
+			t.Fatalf("acceptance: cannot open the psrp transport: %v", err)
+		}
+		return tr
+	default:
+		tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath)})
+		if err != nil {
+			t.Fatalf("acceptance: cannot start PowerShell: %v", err)
+		}
+		return tr
+	}
+}
+
+// accClient builds a library client over the transport under test, configured
+// from the same environment the provider reads. CheckDestroy and the sweeper
+// both need to ask the directory questions that Terraform state cannot answer.
 func accClient(t *testing.T) *adpwsh.Client {
 	t.Helper()
-	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath)})
-	if err != nil {
-		t.Fatalf("acceptance: cannot start PowerShell: %v", err)
-	}
+	tr := accTransport(t)
 	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer)}
 	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
 		cfg.Credential = &adpwsh.Credential{Username: u, Password: adpwsh.NewSecret(p)}
@@ -195,33 +328,55 @@ func accCheckDestroy(t *testing.T) resource.TestCheckFunc {
 	}
 }
 
-// accProviderConfig composes a provider block from parts, and the replication
-// suite is the only caller that passes extra blocks. A malformed composition
-// would present as a Terraform syntax error inside an acceptance run nobody can
-// execute yet, so the shape is asserted here instead.
-func TestAccProviderConfigComposition(t *testing.T) {
-	plain := accProviderConfig()
-	if !strings.Contains(plain, "local {") || !strings.Contains(plain, "max_concurrency = 4") {
-		t.Errorf("the local block must be written literally:\n%s", plain)
-	}
-	if strings.Contains(plain, "ssh {") {
-		t.Errorf("the acceptance provider block must not configure ssh:\n%s", plain)
-	}
-	if got := strings.Count(plain, "provider \"activedirectory\""); got != 1 {
-		t.Errorf("%d provider blocks, want exactly 1", got)
+func TestProviderConfigComposition(t *testing.T) {
+	// The transport block is written literally, because it is the deployment
+	// under test: selecting it inside the provider from the environment would
+	// let the suite pass without ever exercising the block.
+	for _, tc := range []struct {
+		transport string
+		wants     []string
+		rejects   []string
+	}{
+		{"", []string{"local {"}, []string{"ssh {", "psrp {"}},
+		{"local", []string{"local {"}, []string{"ssh {", "psrp {"}},
+		{"ssh", []string{"ssh {", `host = "jump.example.com"`}, []string{"local {", "psrp {"}},
+		{"psrp", []string{"psrp {", `configuration_name = "AdObjects51"`}, []string{"local {", "ssh {"}},
+	} {
+		t.Run("transport="+tc.transport, func(t *testing.T) {
+			t.Setenv(envTransport, tc.transport)
+			t.Setenv(envSSHHost, "jump.example.com")
+			t.Setenv(envPSRPHost, "mgmt.example.com")
+			t.Setenv(envPSRPConfigName, "AdObjects51")
+
+			got := accProviderConfig()
+			for _, w := range tc.wants {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q:\n%s", w, got)
+				}
+			}
+			for _, r := range tc.rejects {
+				if strings.Contains(got, r) {
+					t.Errorf("must not configure %q:\n%s", r, got)
+				}
+			}
+			if n := strings.Count(got, "provider \"activedirectory\""); n != 1 {
+				t.Errorf("%d provider blocks, want 1", n)
+			}
+			// The concurrency and timeout helpers rewrite this exact line.
+			if !strings.Contains(got, "    max_concurrency = 4\n") {
+				t.Errorf("every transport block must emit the literal max_concurrency line:\n%s", got)
+			}
+		})
 	}
 
 	withExtra := accProviderConfig("  replication {\n    wait = true\n  }")
 	if !strings.Contains(withExtra, "replication {") {
 		t.Errorf("the extra block was dropped:\n%s", withExtra)
 	}
-	// The extra block must land inside the provider block, so the last brace of
-	// the string is the provider's own.
 	if !strings.HasSuffix(strings.TrimSpace(withExtra), "}") ||
 		strings.Index(withExtra, "replication {") > strings.LastIndex(withExtra, "}") {
 		t.Errorf("the extra block escaped the provider block:\n%s", withExtra)
 	}
-
 	if got := accProviderConfigWithConcurrency(1); !strings.Contains(got, "max_concurrency = 1") {
 		t.Errorf("the concurrency override did not take:\n%s", got)
 	}

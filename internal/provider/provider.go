@@ -88,7 +88,10 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"and Terraform's default parallelism is 10."},
 					"timeout": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Per-operation transport timeout. Environment: " +
-							"`AD_LOCAL_TIMEOUT`. Defaults to `60s`."},
+							"`AD_LOCAL_TIMEOUT`. Defaults to `90s` — deliberately longer than a " +
+							"resource's own default 60s operation budget (see the `timeouts` block on " +
+							"each resource), so that when both are left at their default, the caller's " +
+							"deadline expires first rather than racing the transport's."},
 				},
 			},
 			"ssh": schema.SingleNestedBlock{
@@ -120,7 +123,11 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 						MarkdownDescription: "Simultaneous SSH channels. Defaults to `4`, because " +
 							"Windows sshd defaults to `MaxSessions 10`."},
 					"timeout": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
+						MarkdownDescription: "Per-operation transport timeout. Defaults to `90s` — " +
+							"deliberately longer than a resource's own default 60s operation budget " +
+							"(see the `timeouts` block on each resource), so that when both are left " +
+							"at their default, the caller's deadline expires first rather than racing " +
+							"the transport's."},
 				},
 			},
 			"psrp": schema.SingleNestedBlock{
@@ -156,12 +163,29 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"keytab_path": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Path to a keytab for headless runners. Environment: `AD_PSRP_KEYTAB`."},
 					"configuration_name": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7` (the module's scripts require PowerShell 7)."},
+						MarkdownDescription: "WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. " +
+							"Defaults to `PowerShell.7`.\n\n" +
+							"Point this at a purpose-made Windows PowerShell 5.1 endpoint — see " +
+							"`scripts/host/README.md`, which registers one per capability tier and needs no " +
+							"PowerShell 7 installation. The difference is not cosmetic — a PowerShell 7 endpoint " +
+							"refuses a non-administrator caller unless the endpoint itself runs as a virtual " +
+							"account, which is a local administrator on that host. A 5.1 endpoint with no RunAs " +
+							"identity runs as the connecting account, so a delegated service account needs no " +
+							"privilege on the management host at all. `microsoft.powershell`, the built-in 5.1 " +
+							"endpoint, only works when the caller is already a local administrator on that host: " +
+							"its stock security descriptor grants only `BUILTIN\\Administrators` and " +
+							"`Remote Management Users`, and this branch's own provisioning script locks it (and " +
+							"`PowerShell.7*`) to administrators regardless."},
 					"max_concurrency": schema.Int64Attribute{Optional: true,
-						Validators:          []validator.Int64{int64validator.AtLeast(1)},
-						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default."},
+						Validators: []validator.Int64{int64validator.AtLeast(1)},
+						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. " +
+							"Each session's underlying WinRM shell is leased for 2 minutes rather than WinRM's own 30-minute default, so it cannot outlive an idle Terraform process for long; the transport transparently rebuilds a shell that gets reaped out from under it, but if that reap ever surfaces as an error, this 2-minute lease is where it comes from. See `scripts/host/Initialize-AdProvisioningHost.ps1`'s `MaxShellsPerUser`, which must cover `max_concurrency` times however many Terraform processes can start within that 2-minute window."},
 					"timeout": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "Per-operation transport timeout. Defaults to `60s`."},
+						MarkdownDescription: "Per-operation transport timeout. Defaults to `90s` — " +
+							"deliberately longer than a resource's own default 60s operation budget " +
+							"(see the `timeouts` block on each resource), so that when both are left " +
+							"at their default, the caller's deadline expires first rather than racing " +
+							"the transport's."},
 				},
 			},
 			"domain": schema.SingleNestedBlock{
@@ -351,10 +375,16 @@ func clientFromProviderData(data any, diags *diag.Diagnostics) *adpwsh.Client {
 	return client
 }
 
-// withTimeout applies a resource's timeouts block, defaulting to the value the
-// transport already enforces.
+// defaultOperationTimeout is the per-CRUD-operation deadline withTimeout
+// applies when a resource's own `timeouts` block leaves that operation unset.
+// config.go's defaultTransportTimeout is built from this value — see the
+// comment there for why the two must stay in that order.
+const defaultOperationTimeout = 60 * time.Second
+
+// withTimeout applies a resource's timeouts block, defaulting to
+// defaultOperationTimeout.
 func withTimeout(ctx context.Context, v func(context.Context, time.Duration) (time.Duration, diag.Diagnostics)) (context.Context, context.CancelFunc, diag.Diagnostics) {
-	d, diags := v(ctx, 60*time.Second)
+	d, diags := v(ctx, defaultOperationTimeout)
 	if diags.HasError() {
 		return ctx, func() {}, diags
 	}

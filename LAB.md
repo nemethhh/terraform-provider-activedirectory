@@ -572,3 +572,106 @@ in-memory fake, all fixed in go-adpwsh before the tag:
 concurrently (writes are serialized per-identity, not globally, so `computer.a`
 and `computer.b` race). It passed on re-run — a concurrent-create transient, not
 a systematic fault, and not specific to computers.
+
+### Windows PowerShell 5.1 as a supported engine, 2026-08-25
+
+The whole PowerShell 7 dependency in go-adpwsh's script layer turned out to be
+four lines — three `?.` uses and one `ConvertFrom-Json -AsHashtable`. With those
+replaced, the scripts run on Windows PowerShell 5.1 as well as 7.
+
+This matters for deployment, not tidiness. A PowerShell 7 WinRM endpoint refuses
+a non-administrator caller unless the endpoint itself runs as a virtual account,
+which is a *local administrator* on that host — so a delegated team account would
+gain local-administrator code execution. A 5.1 endpoint with **no RunAs** admits
+a non-administrator and runs as that caller, so a team account needs no privilege
+on the management host at all. It also removes the PowerShell 7 install from the
+host's prerequisites: `RSAT-AD-PowerShell` is then the only requirement.
+
+**Endpoints used.** `AdObjects51` on `s-client`: Windows PowerShell 5.1,
+`FullLanguage`, **no RunAs**, security descriptor granting local administrators
+plus the AD group `CORP\AD-Terraform-Objects`, which contains `svc_tfacc`. That
+account holds no local group membership on the host — not Administrators, not
+Remote Management Users. `AdObjects7` is the same shape on PowerShell 7.6 with a
+virtual account, used only as the comparison engine so the account and runner are
+identical and the engine is the only variable.
+
+**Parse gate.** All 41 composed operation and tool scripts parsed by the 5.1
+parser: `parsed=41 syntaxErrors=0 on PowerShell 5.1.26100.32684`. This covers the
+operations no suite exercises.
+
+**Results.**
+
+Ten batches against **5.1** over psrp from Linux, run in sequence with a WinRM
+reclaim between each so peak shell count stays low. They sum to **34 pass, 0
+fail** (one skip), not the 44 an earlier draft of this table reported — that
+figure conflated these ten batches with the 10 PowerShell 7 comparison passes
+below, which belong on their own row. A separate, eleventh run — a peak-shell
+probe, not part of the ten — adds 4 more passes.
+
+| Batch | Suites | Result |
+|---|---|---|
+| b1 | OU, group, user lifecycles | 3 pass, 0 fail |
+| b2 (+b2b) | Computer, gMSA, `access_rule` lifecycles | 3 pass, 0 fail (+1 pass, 0 fail) |
+| b3 | Four membership suites | 4 pass, 0 fail |
+| b4 | Data sources | 6 pass, 0 fail |
+| b5 | Data sources | 5 pass, 0 fail (1 skip) |
+| b6 | Replication | 3 pass, 0 fail |
+| b7 | Brownfield config generation | 3 pass, 0 fail |
+| b8 | Denial and hostile-input suites | 4 pass, 0 fail |
+| b9 | Concurrency suites | 2 pass, 0 fail |
+| **Total, ten batches** | | **34 pass, 0 fail (1 skip)** |
+| peak-probe (separate, eleventh) | Shell-quota peak probe | 4 pass, 0 fail |
+
+| Run | Engine | Transport | Result |
+|---|---|---|---|
+| Batches 1-3 (all resource-type converters) | 7 | psrp from Linux | 10 pass, 0 fail |
+| Whole suite | 7 | local, on the member | 38 pass, 0 fail |
+| Large sets, 500 members | 7 | local, on the member | 3 pass |
+
+The 5.1 batches covered OU, group and user lifecycles; computer, gMSA and
+`access_rule` lifecycles; the four membership suites; eleven data sources; the
+three replication suites; brownfield config generation; the denial and
+hostile-input suites; and the two concurrency suites. **User, computer, gMSA,
+`access_rule` and replication had never run on 5.1 before** — each has its own
+read-back converter, and converters are where the engines diverge, so those five
+were the standing risk. All pass.
+
+**Lab-caught and fixed:** the acceptance harness carries two inline PowerShell
+scripts of its own — the large-group provisioner and the sweeper — and both still
+used `ConvertFrom-Json -AsHashtable`. On 5.1 the large-set suites failed at
+provisioning with "The specified module 'ActiveDirectory' was not loaded", and
+`make lab-sweep` would have failed the same way on a 5.1-only host. Neither
+script splats the payload or treats it as a dictionary, so the switch was never
+needed. Fixed in `c1c6771`.
+
+**Not verified, and why.** The large-payload path on **5.1** could not be
+exercised by either route:
+
+- **psrp from Linux** — the large-group suites provision 500 members through a
+  helper that spawns a local `pwsh` directly rather than going through the
+  transport, so it needs Windows with RSAT. It cannot run on the Linux side.
+- **local on the member** — `lab-ship` sends `git archive HEAD`, and `go.work` is
+  gitignored, so the member builds against `go.mod`'s pinned `go-adpwsh v0.11.0`.
+  That released version predates the 5.1 fix, so member-side runs exercise the
+  old PowerShell-7-only scripts. They pass on 7 and fail on 5.1 with the expected
+  `?.` parse error at `preamble.ps1:146`.
+
+Both blocks are understandable and neither indicates a defect. After go-adpwsh is
+released with the 5.1 change, the member-side route works and this gap closes —
+which is why the release order is library tag first, provider bump second.
+
+**Two harness limitations worth knowing.** `lab-acc-only PATTERN=` cannot take a
+`|` alternation: the pattern reaches `go test -run` through a `cmd /c` on the
+member, where `cmd.exe` reads the pipe as a pipe (`'X' is not recognized as an
+internal or external command`). Use a common prefix or a regex without `|`, as
+`lab.mk` already documents for `lab-e2e-only`. Separately, `lab-acc*` does not
+imply `lab-ship`, and `lab-ship` ships **HEAD** — an uncommitted fix will not
+reach the member.
+
+**Also merged into this branch:** the psrp WinRM shell-leak mitigation. Before
+it, a full suite run left 464 live shells and 464 `wsmprovhost` processes holding
+52 GB on a 26 GB host, after which every operation failed at session-establish;
+the transport now requests a 2-minute shell lease instead of inheriting a
+30-minute one, and rebuilds a shell reaped underneath it. Verified on the host:
+shells report `idleTimeout=PT120.000S`, down from `PT1800.000S`. That is a
+mitigation, not a cure — the transport still does not release its own shells.

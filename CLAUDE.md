@@ -63,14 +63,14 @@ domain or cascades a false diff.
 **Transport selection has no implicit default**
 
 `Configure` (`provider.go`) runs `chooseTransport` (`config.go`), which requires
-**exactly one** of the `local {}` and `ssh {}` blocks. Zero or two is an error
-with one attribute-scoped diagnostic per offending block. There is deliberately
-no implicit default: guessing would let a mistyped `ssh` block execute locally as
-whoever launched Terraform. Do not add one. `resolveLocal`/`resolveSSH` turn a
-block plus the environment into the library's transport config — configuration
-always wins over the environment. `NewWithTransport` is the test-only hook that
-substitutes a transport and skips selection, so the fake-backed suites run a full
-resource cycle with no jump box.
+**exactly one** of the `local {}`, `ssh {}` and `psrp {}` blocks. Zero or more
+than one is an error with one attribute-scoped diagnostic per offending block.
+There is deliberately no implicit default: guessing would let a mistyped `ssh`
+block execute locally as whoever launched Terraform. Do not add one.
+`resolveLocal`/`resolveSSH`/`resolvePSRP` turn a block plus the environment into
+the library's transport config — configuration always wins over the environment.
+`NewWithTransport` is the test-only hook that substitutes a transport and skips
+selection, so the fake-backed suites run a full resource cycle with no jump box.
 
 ## Two gotchas
 
@@ -98,6 +98,11 @@ load-bearing facts an agent must not break:
   drift.
 - Acceptance suites `t.Fatal` (not `t.Skip`) on a missing variable; the e2e layer
   (`TestAccE2E*`) is the one deliberate skip, gated on `AD_E2E_CONTAINER`.
+- **The script layer targets Windows PowerShell 5.1**, not just 7. `?.`, `??`,
+  ternaries, `ConvertFrom-Json -AsHashtable` and `ForEach-Object -Parallel` are
+  rejected by `TestScriptsAvoidPowerShell7Constructs` in go-adpwsh — but that is
+  a static gate. Only `make lab-acc-psrp` against both a 5.1 and a 7 endpoint
+  proves the scripts still run.
 
 ## Real-domain changes must run on the lab
 

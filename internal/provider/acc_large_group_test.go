@@ -31,7 +31,11 @@ const largeGroupScript = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 Import-Module ActiveDirectory -ErrorAction Stop
-$p = [Console]::In.ReadToEnd() | ConvertFrom-Json -AsHashtable
+# No -AsHashtable: that switch is PowerShell 6+, and this script must also run
+# under Windows PowerShell 5.1, which is now a supported engine. Nothing here
+# splats $p or treats it as a dictionary -- only property access, which behaves
+# the same on the PSCustomObject 5.1 returns. $common is built locally as @{}.
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
 
 $common = @{}
 if ($p.server) { $common['Server'] = $p.server }

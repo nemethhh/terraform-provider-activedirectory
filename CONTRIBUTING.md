@@ -142,10 +142,29 @@ there — `make lab-status` for health, `make lab-acc` for the whole acceptance
 suite, `make lab-acc-only PATTERN=<re>` for a subset, `make lab-e2e` for the e2e
 layer (`make lab-help` lists them all).
 
+`make lab-acc-psrp` is the odd one out: it runs the suite from *here* over psrp
+instead of shipping to the member, and `LAB_PSRP_CONFIG` picks the WinRM session
+configuration it opens — which is also how it picks the PowerShell engine
+(`AdObjects51` for 5.1, `AdObjects7` for 7 — not the built-in
+`PowerShell.7` endpoint, which has no RunAs identity and so refuses the delegated
+non-administrator account the suite runs as; `lab-acc-psrp-only PATTERN=<re>`
+takes a subset the same way `lab-acc-only` does). **A change to the script layer
+must be validated against both engines**, once with each `LAB_PSRP_CONFIG` —
+the static gate in go-adpwsh (`TestScriptsAvoidPowerShell7Constructs`) catches
+known PowerShell-7-only syntax, but only a real run on 5.1 proves the scripts
+still execute there.
+
 **Any change to real-domain behaviour must be validated against the lab before
 it is called done.** The in-memory backend proves the plan/state mapping but not
 the PowerShell paths, so a real-domain path that has not been run on the lab is
 not "passing". `LAB.md` is the source of truth for the lab's state and run log.
+
+**`lab-acc`, `lab-acc-repl` and `lab-acc-only` do not ship first** — unlike
+`lab-e2e`, they have no `lab-ship` prerequisite, because they run against
+whatever was last unpacked on the member. Run `make lab-ship` yourself before
+one of them, or an uncommitted fix silently never reaches the member and the
+run tests stale code. `lab-ship` also always sends `git archive HEAD`, never the
+working tree, so an uncommitted change is invisible to it either way.
 
 ## Scaffolding that is never committed
 
@@ -202,6 +221,16 @@ make docs           # regenerate docs/ and commit if anything changed
 git tag v0.2.0      # a valid semver, preceded by v
 git push origin v0.2.0
 ```
+
+The lab member is a consumer, not a checkout: `lab-ship` sends `git archive
+HEAD`, `go.work` is gitignored so it never rides along, and the member resolves
+`go-adpwsh` from `go.mod` like anyone installing the provider would. A
+member-side lab run (`lab-acc`, `lab-e2e`) therefore cannot exercise a library
+change that has not been released yet — only `lab-acc-psrp`, running from a
+workspace-enabled checkout here, can. This is exactly why [local library
+development](#local-library-development) says to publish the go-adpwsh tag
+before bumping the pin: bump `go.mod` first and the member keeps testing the
+old library while the release goes out believing the new one was covered.
 
 The tag push triggers `release.yml`; when it finishes, a GitHub Release carrying
 the signed artefacts exists and the Registry ingests the new version.
