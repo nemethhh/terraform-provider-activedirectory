@@ -63,14 +63,14 @@ domain or cascades a false diff.
 **Transport selection has no implicit default**
 
 `Configure` (`provider.go`) runs `chooseTransport` (`config.go`), which requires
-**exactly one** of the `local {}` and `ssh {}` blocks. Zero or two is an error
-with one attribute-scoped diagnostic per offending block. There is deliberately
-no implicit default: guessing would let a mistyped `ssh` block execute locally as
-whoever launched Terraform. Do not add one. `resolveLocal`/`resolveSSH` turn a
-block plus the environment into the library's transport config — configuration
-always wins over the environment. `NewWithTransport` is the test-only hook that
-substitutes a transport and skips selection, so the fake-backed suites run a full
-resource cycle with no jump box.
+**exactly one** of the `local {}`, `ssh {}` and `psrp {}` blocks. Zero or more
+than one is an error with one attribute-scoped diagnostic per offending block.
+There is deliberately no implicit default: guessing would let a mistyped `ssh`
+block execute locally as whoever launched Terraform. Do not add one.
+`resolveLocal`/`resolveSSH`/`resolvePSRP` turn a block plus the environment into
+the library's transport config — configuration always wins over the environment.
+`NewWithTransport` is the test-only hook that substitutes a transport and skips
+selection, so the fake-backed suites run a full resource cycle with no jump box.
 
 ## Two gotchas
 

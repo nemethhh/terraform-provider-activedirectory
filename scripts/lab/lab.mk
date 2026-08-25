@@ -42,6 +42,13 @@ LAB_REALM       ?= CORP.LOCAL
 LAB_DC_FQDN     ?= s-server.corp.local
 LAB_DC2_FQDN    ?= s-server2.corp.local
 
+# run-suite-psrp.sh carries its own identical defaults and reads these six from
+# its environment, not from make — a plain `?=` assignment is invisible to a
+# child process. Without this export, editing the defaults above does nothing;
+# only command-line and environment overrides (`make lab-acc-psrp LAB_PSRP_HOST=...`
+# or an exported shell variable) reach the script today.
+export LAB_PSRP_HOST LAB_PSRP_SPN LAB_PSRP_CONFIG LAB_REALM LAB_DC_FQDN LAB_DC2_FQDN
+
 # One awk per lookup, evaluated only when a recipe runs, so no secret is read
 # into make's memory for targets that do not need one.
 labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CREDS))

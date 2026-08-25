@@ -92,11 +92,15 @@ inherent to the execution contract and identical in both deployments;
 | | |
 |---|---|
 | Terraform | 1.11 or later — the `password` attribute is write-only, which 1.11 introduced |
-| Windows host | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) on `PATH` |
+| Windows host | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) **or** Windows PowerShell 5.1 (`powershell.exe`) on `PATH` |
 | Network | TCP 9389 from that host to the domain controller. For the `ssh` deployment, also OpenSSH Server on it and TCP 22 from wherever Terraform runs |
 
 With the `local` deployment, Terraform itself runs on that Windows host. With the
-`ssh` deployment, Terraform runs anywhere.
+`ssh` deployment, Terraform runs anywhere. There is also a `psrp` deployment,
+reaching the host over WinRM instead — 5.1 is proven there (34 acceptance runs
+against a live domain, see `LAB.md`) but unverified for non-ASCII input over
+`local`/`ssh`; see `scripts/host/README.md` to provision a 5.1 endpoint a
+delegated account can use without local-administrator rights.
 
 Settings also read from the environment, with configuration always winning:
 `AD_PWSH_PATH`, `AD_LOCAL_MAX_CONCURRENCY` and `AD_LOCAL_TIMEOUT` for the local

@@ -601,9 +601,29 @@ operations no suite exercises.
 
 **Results.**
 
+Ten batches against **5.1** over psrp from Linux, run in sequence with a WinRM
+reclaim between each so peak shell count stays low. They sum to **34 pass, 0
+fail** (one skip), not the 44 an earlier draft of this table reported — that
+figure conflated these ten batches with the 10 PowerShell 7 comparison passes
+below, which belong on their own row. A separate, eleventh run — a peak-shell
+probe, not part of the ten — adds 4 more passes.
+
+| Batch | Suites | Result |
+|---|---|---|
+| b1 | OU, group, user lifecycles | 3 pass, 0 fail |
+| b2 (+b2b) | Computer, gMSA, `access_rule` lifecycles | 3 pass, 0 fail (+1 pass, 0 fail) |
+| b3 | Four membership suites | 4 pass, 0 fail |
+| b4 | Data sources | 6 pass, 0 fail |
+| b5 | Data sources | 5 pass, 0 fail (1 skip) |
+| b6 | Replication | 3 pass, 0 fail |
+| b7 | Brownfield config generation | 3 pass, 0 fail |
+| b8 | Denial and hostile-input suites | 4 pass, 0 fail |
+| b9 | Concurrency suites | 2 pass, 0 fail |
+| **Total, ten batches** | | **34 pass, 0 fail (1 skip)** |
+| peak-probe (separate, eleventh) | Shell-quota peak probe | 4 pass, 0 fail |
+
 | Run | Engine | Transport | Result |
 |---|---|---|---|
-| Ten batches, every resource type | **5.1** | psrp from Linux | **44 pass, 0 fail** |
 | Batches 1-3 (all resource-type converters) | 7 | psrp from Linux | 10 pass, 0 fail |
 | Whole suite | 7 | local, on the member | 38 pass, 0 fail |
 | Large sets, 500 members | 7 | local, on the member | 3 pass |

@@ -328,7 +328,7 @@ func accCheckDestroy(t *testing.T) resource.TestCheckFunc {
 	}
 }
 
-func TestAccProviderConfigComposition(t *testing.T) {
+func TestProviderConfigComposition(t *testing.T) {
 	// The transport block is written literally, because it is the deployment
 	// under test: selecting it inside the provider from the environment would
 	// let the suite pass without ever exercising the block.

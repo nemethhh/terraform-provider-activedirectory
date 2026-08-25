@@ -134,7 +134,8 @@ $psscArgs = @{
 if ($RestrictCmdlets) {
     $psscArgs['VisibleCmdlets']   = $visible
     $psscArgs['VisibleProviders'] = $providers
-    Warn 'Cmdlet restriction needs an unreleased go-adpwsh change. See the help in this file.'
+    # Warned about prominently in the closing banner below, not just here --
+    # a warning this early in the output is easy to scroll past.
 }
 New-PSSessionConfigurationFile @psscArgs
 
@@ -150,7 +151,9 @@ Remove-Item $pssc -Force -ErrorAction SilentlyContinue
 
 $c = Get-PSSessionConfiguration -Name $TierName
 Note ("name={0} psVersion={1} language={2} virtualAccount={3}" -f $c.Name, $c.PSVersion, $c.LanguageMode, $c.RunAsVirtualAccount)
-if ([version]$c.PSVersion -ne [version]'5.1') { Warn 'Not a PowerShell 5.1 endpoint. Re-run from Windows PowerShell 5.1 (powershell.exe).' }
+if ([version]$c.PSVersion -ne [version]'5.1') {
+    throw "Endpoint $TierName registered as PowerShell $($c.PSVersion), not 5.1. A non-5.1 endpoint changes the whole security story this script exists for (see the PowerShell-7-RunAs warning at the top of this file), so this is not a warning to note and move past -- re-run this script from Windows PowerShell 5.1 (powershell.exe)."
+}
 
 # --- what the teams need ----------------------------------------------------
 
@@ -159,7 +162,11 @@ $realm     = $dnsDomain.ToUpper()
 $fqdn      = "$env:COMPUTERNAME.$dnsDomain".ToLower()
 
 Write-Host ''
-Write-Host "Endpoint $TierName ready. Onboard a team without touching this host:" -ForegroundColor Green
+if ($RestrictCmdlets) {
+    Write-Host ("Endpoint {0} registered -- but NOT ready: -RestrictCmdlets needs an unreleased go-adpwsh change, so every operation through it fails at once with `"The term 'Import-Module' is not recognized`". Re-run without -RestrictCmdlets for a working endpoint." -f $TierName) -ForegroundColor Yellow
+} else {
+    Write-Host "Endpoint $TierName ready. Onboard a team without touching this host:" -ForegroundColor Green
+}
 Write-Host @"
 
   New-ADUser        -Name svc_teamx -AccountPassword ... -Enabled `$true

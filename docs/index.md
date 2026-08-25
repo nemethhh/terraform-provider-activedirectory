@@ -107,7 +107,7 @@ Optional:
 
 - `max_concurrency` (Number) Simultaneous `pwsh` processes. Environment: `AD_LOCAL_MAX_CONCURRENCY`. Defaults to `4`: every operation pays its own `Import-Module ActiveDirectory`, each process costs real memory, and Terraform's default parallelism is 10.
 - `pwsh_path` (String) Path to PowerShell 7 on this machine. Overrides the top-level `pwsh_path`. Environment: `AD_PWSH_PATH`. Defaults to `pwsh` resolved on `PATH`, and a path that cannot be resolved is a configure-time error rather than a failure on the first resource.
-- `timeout` (String) Per-operation transport timeout. Environment: `AD_LOCAL_TIMEOUT`. Defaults to `60s`.
+- `timeout` (String) Per-operation transport timeout. Environment: `AD_LOCAL_TIMEOUT`. Defaults to `90s` — deliberately longer than a resource's own default 60s operation budget (see the `timeouts` block on each resource), so that when both are left at their default, the caller's deadline expires first rather than racing the transport's.
 
 
 <a id="nestedblock--psrp"></a>
@@ -118,18 +118,18 @@ Optional:
 - `ccache_path` (String) Path to the Kerberos ticket cache. Environment: `AD_PSRP_CCACHE`, else ambient `KRB5CCNAME`.
 - `configuration_name` (String) WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7`.
 
-A Windows PowerShell 5.1 endpoint is usually the better choice and needs no PowerShell 7 installation: set this to `microsoft.powershell`, or to a purpose-made session configuration. The difference is not cosmetic — a PowerShell 7 endpoint refuses a non-administrator caller unless the endpoint itself runs as a virtual account, which is a local administrator on that host. A 5.1 endpoint with no RunAs identity runs as the connecting account, so a delegated service account needs no privilege on the management host at all. See `scripts/host/README.md`.
+Point this at a purpose-made Windows PowerShell 5.1 endpoint — see `scripts/host/README.md`, which registers one per capability tier and needs no PowerShell 7 installation. The difference is not cosmetic — a PowerShell 7 endpoint refuses a non-administrator caller unless the endpoint itself runs as a virtual account, which is a local administrator on that host. A 5.1 endpoint with no RunAs identity runs as the connecting account, so a delegated service account needs no privilege on the management host at all. `microsoft.powershell`, the built-in 5.1 endpoint, only works when the caller is already a local administrator on that host: its stock security descriptor grants only `BUILTIN\Administrators` and `Remote Management Users`, and this branch's own provisioning script locks it (and `PowerShell.7*`) to administrators regardless.
 - `domain` (String) NTLM domain. Environment: `AD_PSRP_DOMAIN`.
 - `host` (String) Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`). Environment: `AD_PSRP_HOST`.
 - `insecure_skip_verify` (Boolean) Skip TLS certificate verification (testing only; requires `use_tls`). Environment: `AD_PSRP_INSECURE_SKIP_VERIFY`.
 - `keytab_path` (String) Path to a keytab for headless runners. Environment: `AD_PSRP_KEYTAB`.
 - `krb5_conf_path` (String) Path to krb5.conf. Environment: `AD_PSRP_KRB5_CONF`, else ambient `KRB5_CONFIG`, else `/etc/krb5.conf`.
-- `max_concurrency` (Number) Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default.
+- `max_concurrency` (Number) Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. Each session's underlying WinRM shell is leased for 2 minutes rather than WinRM's own 30-minute default, so it cannot outlive an idle Terraform process for long; the transport transparently rebuilds a shell that gets reaped out from under it, but if that reap ever surfaces as an error, this 2-minute lease is where it comes from. See `scripts/host/Initialize-AdProvisioningHost.ps1`'s `MaxShellsPerUser`, which must cover `max_concurrency` times however many Terraform processes can start within that 2-minute window.
 - `password` (String, Sensitive) WinRM auth password. Environment: `AD_PSRP_PASSWORD`. Never written to state or a log line.
 - `port` (Number) WinRM port. Environment: `AD_PSRP_PORT`. Defaults to `5985` (HTTP) or `5986` when `use_tls` is set.
 - `realm` (String) Kerberos realm; defaults to krb5.conf's `default_realm`. Environment: `AD_PSRP_REALM`.
 - `spn` (String) Kerberos service principal name. Defaults to `HTTP/<host>` (AD's sPNMappings alias it to the host's HOST SPN). Environment: `AD_PSRP_SPN`.
-- `timeout` (String) Per-operation transport timeout. Defaults to `60s`.
+- `timeout` (String) Per-operation transport timeout. Defaults to `90s` — deliberately longer than a resource's own default 60s operation budget (see the `timeouts` block on each resource), so that when both are left at their default, the caller's deadline expires first rather than racing the transport's.
 - `use_tls` (Boolean) Use HTTPS/WinRM-over-TLS. Environment: `AD_PSRP_USE_TLS`. Required for NTLM auth; Kerberos encrypts over plain HTTP without it.
 - `user` (String) WinRM auth user in `DOMAIN\user` or UPN form. Required: go-psrp needs the principal name even when an ambient Kerberos ticket cache supplies the credentials, because Linux has no SSPI single sign-on. Only on Windows, authenticating via SSPI SSO, can this be omitted. Environment: `AD_PSRP_USER`.
 
@@ -160,6 +160,6 @@ Optional:
 - `port` (Number) SSH port. Environment: `AD_SSH_PORT`. Defaults to `22`.
 - `private_key` (String, Sensitive) PEM-encoded private key. Environment: `AD_SSH_PRIVATE_KEY`.
 - `private_key_path` (String) Path to a private key file. Environment: `AD_SSH_PRIVATE_KEY_PATH`.
-- `timeout` (String) Per-operation transport timeout. Defaults to `60s`.
+- `timeout` (String) Per-operation transport timeout. Defaults to `90s` — deliberately longer than a resource's own default 60s operation budget (see the `timeouts` block on each resource), so that when both are left at their default, the caller's deadline expires first rather than racing the transport's.
 - `use_agent` (Boolean) Authenticate through the agent at `SSH_AUTH_SOCK`.
 - `user` (String) SSH user. Environment: `AD_SSH_USER`.

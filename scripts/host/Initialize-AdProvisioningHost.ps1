@@ -42,8 +42,16 @@ param(
     # logon are denied to it, so the credential is useless for anything but WinRM.
     [string] $ServiceAccountGroup,
 
-    # Shells per user. Must be >= the largest psrp.max_concurrency any team sets.
-    [int] $MaxShellsPerUser = 8,
+    # Shells per user. The psrp transport does not release its own shells: it
+    # asks WinRM for a 2-minute lease per shell instead of the 30-minute
+    # default, so a shell it opened is only reclaimed when that lease expires,
+    # not when the operation using it finishes. A Terraform process therefore
+    # parks up to psrp.max_concurrency shells for the full 2 minutes, so this
+    # must be >= max_concurrency times however many Terraform processes (plan,
+    # apply, ...) can start for the same account within any 2-minute window --
+    # not just the largest max_concurrency any one team sets. Default matches
+    # Windows' own WinRM default (30) rather than lowering it.
+    [int] $MaxShellsPerUser = 30,
 
     # Distinct accounts that may hold shells at once.
     [int] $MaxConcurrentUsers = 20,

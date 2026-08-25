@@ -83,6 +83,20 @@ type replicationModel struct {
 	PollInterval types.String `tfsdk:"poll_interval"`
 }
 
+// defaultTransportTimeout is the per-operation deadline handed to a transport
+// (local/ssh/psrp) when its own `timeout` attribute is left unset — that is,
+// only when BOTH the operation's own deadline (defaultOperationTimeout,
+// provider.go) and the transport's are defaulted. It must stay strictly
+// longer than defaultOperationTimeout: the caller's context expiring aborts
+// the retry loop safely, but a transport-internal deadline is classified
+// transient and can cause the whole operation to be re-issued — potentially
+// after it already reached Active Directory. Making the caller's deadline
+// win the race turns that into a safety ordering rather than a race. This is
+// not a tuning knob and never changes what a user sees: an explicit
+// `timeouts` block on the resource, or an explicit `timeout` on the
+// transport block, always overrides its own default and is used as-is.
+const defaultTransportTimeout = defaultOperationTimeout + 30*time.Second
+
 // str resolves a string attribute, falling back to an environment variable.
 // Configuration always wins; the environment is the fallback, not an override.
 func str(v types.String, getenv func(string) string, envVar string) string {
@@ -137,7 +151,7 @@ func resolveSSH(m providerModel, getenv func(string) string) (adssh.Config, diag
 		HostKey:               str(s.HostKey, nil, ""),
 		InsecureIgnoreHostKey: boolOr(s.InsecureIgnoreHostKey, false),
 		PwshPath:              str(m.PwshPath, nil, ""),
-		Timeout:               duration(s.Timeout, root.AtName("timeout"), 60*time.Second, &diags),
+		Timeout:               duration(s.Timeout, root.AtName("timeout"), defaultTransportTimeout, &diags),
 	}
 	if !s.Port.IsNull() && !s.Port.IsUnknown() {
 		cfg.Port = int(s.Port.ValueInt64())
@@ -206,7 +220,7 @@ func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, di
 		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_PSRP_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
 		KeytabPath:         str(s.KeytabPath, getenv, "AD_PSRP_KEYTAB"),
 		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_PSRP_CONFIGURATION_NAME"),
-		Timeout:            duration(s.Timeout, root.AtName("timeout"), 60*time.Second, &diags),
+		Timeout:            duration(s.Timeout, root.AtName("timeout"), defaultTransportTimeout, &diags),
 	}
 
 	if !s.Port.IsNull() && !s.Port.IsUnknown() {
@@ -291,7 +305,7 @@ func resolveLocal(m providerModel, getenv func(string) string) (adlocal.Config, 
 
 	// The environment supplies the default the attribute falls back to, so
 	// configuration still wins and a malformed variable is still reported.
-	timeoutDefault := 60 * time.Second
+	timeoutDefault := defaultTransportTimeout
 	if v := getenv("AD_LOCAL_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {

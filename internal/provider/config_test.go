@@ -103,7 +103,7 @@ func TestResolveSSHDefaults(t *testing.T) {
 		Password: types.StringValue("x"), InsecureIgnoreHostKey: types.BoolValue(true),
 	})
 	got, _ := resolveSSH(m, env(nil))
-	if got.Port != 22 || got.Concurrency != 4 || got.Timeout != 60*time.Second {
+	if got.Port != 22 || got.Concurrency != 4 || got.Timeout != defaultTransportTimeout {
 		t.Errorf("defaults = %+v", got)
 	}
 }
@@ -208,7 +208,7 @@ func TestResolveLocalDefaults(t *testing.T) {
 	if diags.HasError() {
 		t.Fatalf("resolveLocal: %v", diags)
 	}
-	if got.PwshPath != "pwsh" || got.Concurrency != 4 || got.Timeout != 60*time.Second {
+	if got.PwshPath != "pwsh" || got.Concurrency != 4 || got.Timeout != defaultTransportTimeout {
 		t.Errorf("resolved = %+v", got)
 	}
 	// The library's WorkingDir is deliberately not exposed, so it is never set.
