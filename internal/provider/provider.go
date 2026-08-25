@@ -156,7 +156,15 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"keytab_path": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Path to a keytab for headless runners. Environment: `AD_PSRP_KEYTAB`."},
 					"configuration_name": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7` (the module's scripts require PowerShell 7)."},
+						MarkdownDescription: "WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. " +
+							"Defaults to `PowerShell.7`.\n\n" +
+							"A Windows PowerShell 5.1 endpoint is usually the better choice and needs no " +
+							"PowerShell 7 installation: set this to `microsoft.powershell`, or to a purpose-made " +
+							"session configuration. The difference is not cosmetic — a PowerShell 7 endpoint " +
+							"refuses a non-administrator caller unless the endpoint itself runs as a virtual " +
+							"account, which is a local administrator on that host. A 5.1 endpoint with no RunAs " +
+							"identity runs as the connecting account, so a delegated service account needs no " +
+							"privilege on the management host at all. See `scripts/host/README.md`."},
 					"max_concurrency": schema.Int64Attribute{Optional: true,
 						Validators:          []validator.Int64{int64validator.AtLeast(1)},
 						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default."},

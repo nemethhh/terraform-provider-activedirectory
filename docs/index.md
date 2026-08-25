@@ -116,7 +116,9 @@ Optional:
 Optional:
 
 - `ccache_path` (String) Path to the Kerberos ticket cache. Environment: `AD_PSRP_CCACHE`, else ambient `KRB5CCNAME`.
-- `configuration_name` (String) WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7` (the module's scripts require PowerShell 7).
+- `configuration_name` (String) WinRM session configuration. Environment: `AD_PSRP_CONFIGURATION_NAME`. Defaults to `PowerShell.7`.
+
+A Windows PowerShell 5.1 endpoint is usually the better choice and needs no PowerShell 7 installation: set this to `microsoft.powershell`, or to a purpose-made session configuration. The difference is not cosmetic — a PowerShell 7 endpoint refuses a non-administrator caller unless the endpoint itself runs as a virtual account, which is a local administrator on that host. A 5.1 endpoint with no RunAs identity runs as the connecting account, so a delegated service account needs no privilege on the management host at all. See `scripts/host/README.md`.
 - `domain` (String) NTLM domain. Environment: `AD_PSRP_DOMAIN`.
 - `host` (String) Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`). Environment: `AD_PSRP_HOST`.
 - `insecure_skip_verify` (Boolean) Skip TLS certificate verification (testing only; requires `use_tls`). Environment: `AD_PSRP_INSECURE_SKIP_VERIFY`.

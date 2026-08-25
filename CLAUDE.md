@@ -98,6 +98,11 @@ load-bearing facts an agent must not break:
   drift.
 - Acceptance suites `t.Fatal` (not `t.Skip`) on a missing variable; the e2e layer
   (`TestAccE2E*`) is the one deliberate skip, gated on `AD_E2E_CONTAINER`.
+- **The script layer targets Windows PowerShell 5.1**, not just 7. `?.`, `??`,
+  ternaries, `ConvertFrom-Json -AsHashtable` and `ForEach-Object -Parallel` are
+  rejected by `TestScriptsAvoidPowerShell7Constructs` in go-adpwsh — but that is
+  a static gate. Only `make lab-acc-psrp` against both a 5.1 and a 7 endpoint
+  proves the scripts still run.
 
 ## Real-domain changes must run on the lab
 

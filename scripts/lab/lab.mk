@@ -178,6 +178,9 @@ lab-acc-repl:
 	$(LAB_DIR)/run-suite.sh TestAccReplication 40
 
 # Any subset, e.g. make lab-acc-only PATTERN=TestAccOULifecycle
+# PATTERN must not contain a '|' alternation: it reaches go test -run through a
+# cmd /c "..." on the member, where cmd.exe reads an unquoted '|' as a pipe. Use
+# a common prefix (Go -run is a regex) or run the whole suite with lab-acc.
 lab-acc-only:
 	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
 	$(LAB_DIR)/run-suite.sh '$(PATTERN)' $(or $(MINUTES),40)
