@@ -28,13 +28,23 @@ LAB_DENIED_CONTAINER ?= OU=tfacc-denied,DC=corp,DC=local
 LAB_E2E_CONTAINER    ?= OU=e2e,DC=corp,DC=local
 LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
 
+# The psrp path runs the suite here rather than on the member, so the engine is
+# chosen by which session configuration it opens: AdObjects51 is a Windows
+# PowerShell 5.1 endpoint, PowerShell.7 is the 7 one.
+LAB_PSRP_HOST   ?= 192.168.50.31
+LAB_PSRP_SPN    ?= HTTP/s-client.corp.local
+LAB_PSRP_CONFIG ?= AdObjects51
+LAB_REALM       ?= CORP.LOCAL
+LAB_DC_FQDN     ?= s-server.corp.local
+LAB_DC2_FQDN    ?= s-server2.corp.local
+
 # One awk per lookup, evaluated only when a recipe runs, so no secret is read
 # into make's memory for targets that do not need one.
 labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CREDS))
 
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
-        lab-ship lab-acc lab-acc-repl lab-acc-only lab-sweep \
+        lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -58,6 +68,8 @@ lab-help:
 	@echo '    lab-acc                    run the whole acceptance suite there'
 	@echo '    lab-acc-repl               run only the replication suites'
 	@echo '    lab-acc-only PATTERN=<re>  run one suite, or any -run pattern'
+	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
+	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
 	@echo '    lab-e2e-fixtures           e2e OUs and three delegated principals (one-time, admin)'
 	@echo '    lab-e2e                    ship, then run the whole e2e suite'
@@ -169,6 +181,14 @@ lab-acc-repl:
 lab-acc-only:
 	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
 	$(LAB_DIR)/run-suite.sh '$(PATTERN)' $(or $(MINUTES),40)
+
+# Runs here, not on the member: no lab-ship, so the working tree is what runs.
+lab-acc-psrp:
+	$(LAB_DIR)/run-suite-psrp.sh TestAcc 90
+
+lab-acc-psrp-only:
+	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
+	$(LAB_DIR)/run-suite-psrp.sh '$(PATTERN)' $(or $(MINUTES),40)
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30
