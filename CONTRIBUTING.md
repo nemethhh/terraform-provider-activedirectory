@@ -145,7 +145,9 @@ layer (`make lab-help` lists them all).
 `make lab-acc-psrp` is the odd one out: it runs the suite from *here* over psrp
 instead of shipping to the member, and `LAB_PSRP_CONFIG` picks the WinRM session
 configuration it opens — which is also how it picks the PowerShell engine
-(`AdObjects51` for 5.1, `PowerShell.7` for 7; `lab-acc-psrp-only PATTERN=<re>`
+(`AdObjects51` for 5.1, `AdObjects7` for 7 — not the built-in
+`PowerShell.7` endpoint, which has no RunAs identity and so refuses the delegated
+non-administrator account the suite runs as; `lab-acc-psrp-only PATTERN=<re>`
 takes a subset the same way `lab-acc-only` does). **A change to the script layer
 must be validated against both engines**, once with each `LAB_PSRP_CONFIG` —
 the static gate in go-adpwsh (`TestScriptsAvoidPowerShell7Constructs`) catches

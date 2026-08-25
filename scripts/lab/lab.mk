@@ -30,7 +30,11 @@ LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
 
 # The psrp path runs the suite here rather than on the member, so the engine is
 # chosen by which session configuration it opens: AdObjects51 is a Windows
-# PowerShell 5.1 endpoint, PowerShell.7 is the 7 one.
+# PowerShell 5.1 endpoint, AdObjects7 the PowerShell 7 one. Not the built-in
+# PowerShell.7 endpoint -- it has no RunAs identity, and a PS7 endpoint refuses a
+# non-administrator caller without one, so the delegated account this suite runs
+# as gets an opaque pwrshplugin HTTP 500 there. Both lab endpoints grant the
+# group CORP\AD-Terraform-Objects.
 LAB_PSRP_HOST   ?= 192.168.50.31
 LAB_PSRP_SPN    ?= HTTP/s-client.corp.local
 LAB_PSRP_CONFIG ?= AdObjects51
