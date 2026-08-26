@@ -183,10 +183,10 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"`AD_PSRP_LANGUAGE_MODE`. `full` (default) is the existing behaviour and is required " +
 							"for the ACL-delegation resource. `constrained` targets a ConstrainedLanguage sandbox " +
 							"endpoint (register one with `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the " +
-							"connecting team account is confined to AD cmdlets with no host escape, the payload is " +
-							"delivered without `[Console]`, and the credential is built by the endpoint's " +
-							"`New-TfCredential`. The ACL ops are unavailable in `constrained` mode (they need " +
-							"FullLanguage); use a `full` endpoint for delegation work."},
+							"connecting team account is confined to AD cmdlets with no host escape, and the payload " +
+							"is delivered without `[Console]`. The endpoint runs only stock cmdlets. The ACL ops " +
+							"are unavailable in `constrained` mode (they need FullLanguage); use a `full` endpoint " +
+							"for delegation work."},
 					"max_concurrency": schema.Int64Attribute{Optional: true,
 						Validators: []validator.Int64{int64validator.AtLeast(1)},
 						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_PSRP_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. " +
