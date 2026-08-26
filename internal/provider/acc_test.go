@@ -254,9 +254,13 @@ func accTransport(t *testing.T) adpwsh.Transport {
 			Password:          os.Getenv(envPSRPPassword),
 			SPN:               os.Getenv(envPSRPSPN),
 			ConfigurationName: os.Getenv(envPSRPConfigName),
-			Krb5ConfPath:      os.Getenv("KRB5_CONFIG"),
-			CCachePath:        strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
-			Concurrency:       1,
+			// The verification client must reach AD the same way the provider does,
+			// including the language mode: against a constrained sandbox endpoint a
+			// full-language wrapper's [Console]::SetIn is rejected by CLM.
+			LanguageMode: os.Getenv(envPSRPLanguageMode),
+			Krb5ConfPath: os.Getenv("KRB5_CONFIG"),
+			CCachePath:   strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
+			Concurrency:  1,
 		})
 		if err != nil {
 			t.Fatalf("acceptance: cannot open the psrp transport: %v", err)
