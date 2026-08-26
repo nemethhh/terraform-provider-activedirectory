@@ -50,11 +50,12 @@ const (
 
 	// The psrp transport's own settings. Kerberos files come from the ambient
 	// KRB5_CONFIG and KRB5CCNAME, which the library already reads.
-	envPSRPHost       = "AD_ACC_PSRP_HOST"
-	envPSRPUser       = "AD_ACC_PSRP_USER"
-	envPSRPPassword   = "AD_ACC_PSRP_PASSWORD"
-	envPSRPSPN        = "AD_ACC_PSRP_SPN"
-	envPSRPConfigName = "AD_ACC_PSRP_CONFIGURATION_NAME"
+	envPSRPHost         = "AD_ACC_PSRP_HOST"
+	envPSRPUser         = "AD_ACC_PSRP_USER"
+	envPSRPPassword     = "AD_ACC_PSRP_PASSWORD"
+	envPSRPSPN          = "AD_ACC_PSRP_SPN"
+	envPSRPConfigName   = "AD_ACC_PSRP_CONFIGURATION_NAME"
+	envPSRPLanguageMode = "AD_ACC_PSRP_LANGUAGE_MODE"
 )
 
 // accPreCheck fails the test when a required variable is missing. t.Fatal, not
@@ -145,6 +146,9 @@ func accTransportBlock() string {
 		}
 		if v := os.Getenv(envPSRPConfigName); v != "" {
 			fmt.Fprintf(&b, "    configuration_name = %q\n", v)
+		}
+		if v := os.Getenv(envPSRPLanguageMode); v != "" {
+			fmt.Fprintf(&b, "    language_mode = %q\n", v)
 		}
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
@@ -250,9 +254,13 @@ func accTransport(t *testing.T) adpwsh.Transport {
 			Password:          os.Getenv(envPSRPPassword),
 			SPN:               os.Getenv(envPSRPSPN),
 			ConfigurationName: os.Getenv(envPSRPConfigName),
-			Krb5ConfPath:      os.Getenv("KRB5_CONFIG"),
-			CCachePath:        strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
-			Concurrency:       1,
+			// The verification client must reach AD the same way the provider does,
+			// including the language mode: against a constrained sandbox endpoint a
+			// full-language wrapper's [Console]::SetIn is rejected by CLM.
+			LanguageMode: os.Getenv(envPSRPLanguageMode),
+			Krb5ConfPath: os.Getenv("KRB5_CONFIG"),
+			CCachePath:   strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
+			Concurrency:  1,
 		})
 		if err != nil {
 			t.Fatalf("acceptance: cannot open the psrp transport: %v", err)

@@ -109,6 +109,10 @@ func renderError(op, resourceType string, err error) (summary, detail string) {
 		b.WriteString("\nThe search matched more objects than its limit, and the provider errors " +
 			"rather than silently returning a truncated set. Narrow the filter (container, scope, " +
 			"filter_by or ldap_filter), or raise max_results if you really do want them all.\n")
+	case adpwsh.KindUnsupported:
+		summary = fmt.Sprintf("%s not supported by this endpoint", op)
+		b.WriteString("\nA ConstrainedLanguage sandbox endpoint (psrp.language_mode = \"constrained\") " +
+			"cannot run ACL delegation.\n")
 	default:
 		summary = "Active Directory operation failed"
 		b.WriteString("\nThe provider does not recognise this condition and deliberately does not " +

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -86,6 +87,26 @@ func TestErrorDiagnosticsNeverEchoesASecret(t *testing.T) {
 	detail := errorDiagnostics("User.SetPassword", "activedirectory_user", err).Errors()[0].Detail()
 	if strings.Contains(strings.ToLower(detail), "hunter2") {
 		t.Errorf("detail leaked a password:\n%s", detail)
+	}
+}
+
+func TestErrorDiagnosticsUnsupported(t *testing.T) {
+	err := &adpwsh.Error{Kind: adpwsh.KindUnsupported, Op: "acl_grant",
+		Err: errors.New("ACL delegation requires a full-language endpoint")}
+	diags := errorDiagnostics("Grant", "activedirectory_acl_delegation", err)
+	if !diags.HasError() {
+		t.Fatal("expected an error diagnostic")
+	}
+	if !strings.Contains(diags[0].Detail(), "full-language") {
+		t.Errorf("detail should explain the language_mode requirement, got %q", diags[0].Detail())
+	}
+	// KindUnsupported must render its own summary, not fall through to the
+	// generic default — the substring check on Detail() above passes even
+	// without a dedicated case, since renderError already folds e.Err into
+	// the detail before the Kind switch runs; the summary is what proves the
+	// case exists.
+	if want := "Grant not supported by this endpoint"; diags[0].Summary() != want {
+		t.Errorf("summary = %q, want %q", diags[0].Summary(), want)
 	}
 }
 

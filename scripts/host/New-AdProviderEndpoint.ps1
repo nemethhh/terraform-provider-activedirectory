@@ -54,8 +54,28 @@
     host accordingly: keep nothing else of value on it, and give mutually
     untrusting teams separate management hosts.
 
+.PARAMETER Sandbox
+    Register a real sandbox: the endpoint runs ConstrainedLanguage, not
+    FullLanguage. Cmdlet and provider visibility are always restricted in this
+    mode (regardless of -RestrictCmdlets), and the ACL capability is dropped even
+    if requested -- ConstrainedLanguage cannot run the .NET the ACL cmdlets need,
+    so a team wanting delegation work needs a separate, non-sandbox tier.
+
+    The library's script preamble builds its PSCredential with New-Object, which
+    ConstrainedLanguage blocks. This endpoint works around that the supported way:
+    it defines New-TfCredential via FunctionDefinitions, which runs FullLanguage
+    even inside a ConstrainedLanguage session, and makes only that function (plus
+    the capability's AD cmdlets and Get-Command/Get-Module) visible.
+
+    Teams pointed at this endpoint must set the provider's
+    psrp.language_mode = "constrained" so it calls New-TfCredential instead of
+    building the credential itself.
+
 .EXAMPLE
     .\New-AdProviderEndpoint.ps1 -TierName AdObjects -GrantTo 'CORP\AD-Terraform-Objects' -Capability ou,group,user
+
+.EXAMPLE
+    .\New-AdProviderEndpoint.ps1 -TierName AdSandbox -GrantTo 'CORP\AD-Terraform-Sandbox' -Capability ou,group,user -Sandbox
 #>
 [CmdletBinding()]
 param(
@@ -66,6 +86,7 @@ param(
     [string[]] $Capability = @('all'),
 
     [switch] $RestrictCmdlets,
+    [switch] $Sandbox,
     [switch] $WhatIfOnly
 )
 
@@ -84,7 +105,7 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
 
 $core = @('ConvertFrom-Json','ConvertTo-Json','ConvertTo-SecureString','ForEach-Object',
           'Select-Object','Where-Object','Write-Output','Out-Default','Get-FormatData',
-          'Exit-PSSession','Measure-Object','Get-Command')
+          'Exit-PSSession','Measure-Object','Get-Command','Get-Module')
 $base = @('Get-ADRootDSE','Get-ADDomain','Get-ADDomainController','Get-ADForest',
           'Get-ADObject','Set-ADObject','Move-ADObject','Rename-ADObject')
 $byCapability = @{
@@ -97,6 +118,10 @@ $byCapability = @{
     replication = @('Sync-ADObject')
 }
 $caps    = if ($Capability -contains 'all') { $byCapability.Keys } else { $Capability }
+if ($Sandbox -and ($caps -contains 'acl')) {
+    Write-Warning 'ACL capability is not available in a -Sandbox (ConstrainedLanguage) endpoint; dropping it. Register a separate non-sandbox tier for delegation work.'
+    $caps = $caps | Where-Object { $_ -ne 'acl' }
+}
 $visible = ($core + $base + ($caps | ForEach-Object { $byCapability[$_] })) | Sort-Object -Unique
 $providers = @('FileSystem','Function','Variable')
 if ($caps -contains 'acl') { $providers += 'ActiveDirectory' }
@@ -113,10 +138,10 @@ if ($WhatIfOnly) {
     Write-Host ''
     Note "endpoint       : $TierName"
     Note "granted to     : $GrantTo ($sid)"
-    Note 'language mode  : FullLanguage (required by the provider)'
+    Note ("language mode  : " + $(if ($Sandbox) { 'ConstrainedLanguage (sandbox)' } else { 'FullLanguage' }))
     Note 'run as         : nobody -- the session runs as the connecting account itself'
     Note "capabilities   : $($caps -join ', ')"
-    Note ("visible cmdlets: " + $(if ($RestrictCmdlets) { "$($visible.Count): $($visible -join ', ')" } else { 'unrestricted' }))
+    Note ("visible cmdlets: " + $(if ($RestrictCmdlets -or $Sandbox) { "$($visible.Count): $($visible -join ', ')" } else { 'unrestricted' }))
     return
 }
 
@@ -127,13 +152,30 @@ $pssc = Join-Path $env:TEMP "$TierName.pssc"
 Remove-Item $pssc -Force -ErrorAction SilentlyContinue
 
 $psscArgs = @{
-    Path                = $pssc
-    LanguageMode        = 'FullLanguage'
-    ModulesToImport     = 'ActiveDirectory'
+    Path            = $pssc
+    LanguageMode    = if ($Sandbox) { 'ConstrainedLanguage' } else { 'FullLanguage' }
+    ModulesToImport = 'ActiveDirectory'
 }
-if ($RestrictCmdlets) {
-    $psscArgs['VisibleCmdlets']   = $visible
-    $psscArgs['VisibleProviders'] = $providers
+if ($Sandbox) {
+    # [string[]] casts are load-bearing on Windows PowerShell 5.1: $visible comes
+    # from Sort-Object, so it is an Object[], and New-PSSessionConfigurationFile
+    # 5.1 rejects an Object[] here with the *misleading* error "The member
+    # 'ModulesToImport' must be an array consisting of either string or hashtable
+    # elements." Casting to string[] is what actually silences it (lab-verified).
+    $psscArgs['VisibleCmdlets']      = [string[]]$visible   # always restricted in a sandbox
+    $psscArgs['VisibleProviders']    = [string[]]$providers
+    $psscArgs['VisibleFunctions']    = 'New-TfCredential'
+    $psscArgs['FunctionDefinitions'] = @(
+        @{ Name = 'New-TfCredential'; ScriptBlock = {
+            param($u, $p)
+            $s = ConvertTo-SecureString $p -AsPlainText -Force
+            New-Object System.Management.Automation.PSCredential($u, $s)
+        } }
+    )
+} elseif ($RestrictCmdlets) {
+    # See the [string[]] note above -- same 5.1 Object[] pitfall.
+    $psscArgs['VisibleCmdlets']   = [string[]]$visible
+    $psscArgs['VisibleProviders'] = [string[]]$providers
     # Warned about prominently in the closing banner below, not just here --
     # a warning this early in the output is easy to scroll past.
 }
@@ -160,10 +202,17 @@ if ([version]$c.PSVersion -ne [version]'5.1') {
 $dnsDomain = (Get-CimInstance Win32_ComputerSystem).Domain
 $realm     = $dnsDomain.ToUpper()
 $fqdn      = "$env:COMPUTERNAME.$dnsDomain".ToLower()
+# A -Sandbox endpoint is ConstrainedLanguage, so the team's provider block MUST
+# set language_mode = "constrained" or the provider sends a full-language wrapper
+# the endpoint rejects. Rendered into the example block and its explanation below.
+$langModeLine = if ($Sandbox) { "`n      language_mode      = ""constrained""" } else { "" }
+$langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required against a -Sandbox endpoint: it runs in`nConstrainedLanguage, so the provider delivers each operation without the`nfull-language constructs a normal (full) endpoint allows. ACL delegation is not`navailable in constrained mode; use a full-language endpoint for that." } else { "" }
 
 Write-Host ''
-if ($RestrictCmdlets) {
-    Write-Host ("Endpoint {0} registered -- but NOT ready: -RestrictCmdlets needs an unreleased go-adpwsh change, so every operation through it fails at once with `"The term 'Import-Module' is not recognized`". Re-run without -RestrictCmdlets for a working endpoint." -f $TierName) -ForegroundColor Yellow
+if ($Sandbox) {
+    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, credential built by New-TfCredential). Teams must set the provider's psrp.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
+} elseif ($RestrictCmdlets) {
+    Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage -- a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
 } else {
     Write-Host "Endpoint $TierName ready. Onboard a team without touching this host:" -ForegroundColor Green
 }
@@ -180,7 +229,7 @@ checks against their OU delegation):
   provider "activedirectory" {
     psrp {
       host               = "$fqdn"
-      configuration_name = "$TierName"
+      configuration_name = "$TierName"$langModeLine
       user               = "DOMAIN\\svc_teamx"
       password           = var.ad_password
       max_concurrency    = 4
@@ -195,7 +244,7 @@ checks against their OU delegation):
   }
 
 configuration_name is required, not optional: the provider defaults to the
-PowerShell.7 endpoint, which will refuse this account.
+PowerShell.7 endpoint, which will refuse this account.$langModeNote
 
 On the Linux CI agent, before terraform runs:
 

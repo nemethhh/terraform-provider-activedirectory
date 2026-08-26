@@ -61,6 +61,7 @@ type psrpModel struct {
 	CCachePath         types.String `tfsdk:"ccache_path"`
 	KeytabPath         types.String `tfsdk:"keytab_path"`
 	ConfigurationName  types.String `tfsdk:"configuration_name"`
+	LanguageMode       types.String `tfsdk:"language_mode"`
 	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
 	Timeout            types.String `tfsdk:"timeout"`
 }
@@ -220,6 +221,7 @@ func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, di
 		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_PSRP_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
 		KeytabPath:         str(s.KeytabPath, getenv, "AD_PSRP_KEYTAB"),
 		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_PSRP_CONFIGURATION_NAME"),
+		LanguageMode:       str(s.LanguageMode, getenv, "AD_PSRP_LANGUAGE_MODE"),
 		Timeout:            duration(s.Timeout, root.AtName("timeout"), defaultTransportTimeout, &diags),
 	}
 

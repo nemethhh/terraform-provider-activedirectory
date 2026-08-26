@@ -675,3 +675,45 @@ the transport now requests a 2-minute shell lease instead of inheriting a
 30-minute one, and rebuilds a shell reaped underneath it. Verified on the host:
 shells report `idleTimeout=PT120.000S`, down from `PT1800.000S`. That is a
 mitigation, not a cure — the transport still does not release its own shells.
+
+### ConstrainedLanguage sandbox endpoints, 2026-08-26
+
+`psrp.language_mode = "constrained"` lets the provider drive a locked-down
+ConstrainedLanguage (CLM) endpoint that confines a delegated team account to AD
+cmdlets with no host escape. `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`
+registers such an endpoint (5.1, no RunAs, `VisibleCmdlets` restricted, a
+`New-TfCredential` `FunctionDefinitions` builder, ACL capability dropped). A
+sandbox endpoint named `AdSandbox` was registered on `s-client` and **left in
+place** as a reference; unregister it with `Remove-AdProviderEndpoint.ps1
+-TierName AdSandbox` if you want the host pristine.
+
+Validated end to end as the delegated non-admin `CORP\svc_tfacc`:
+
+    LAB_PSRP_LANGUAGE_MODE=constrained LAB_PSRP_CONFIG=AdSandbox \
+      make lab-acc-psrp-only PATTERN=TestAccOULifecycle
+
+`TestAccOULifecycle`, `TestAccUserLifecycle`, `TestAccGroupLifecycle` all pass in
+constrained mode; a full-mode no-regression run (`LAB_PSRP_CONFIG=AdObjects51`,
+`language_mode` unset) also passes, so the mode-aware preamble did not disturb the
+existing full-language path. The ACL ops are refused before the transport by a
+go-adpwsh guard (`KindUnsupported`), unit-tested, so they need no lab run.
+
+**Four things only a real 5.1/CLM run caught** — none were visible to unit tests,
+diff review, or the design-phase hand-composed capstone, which is exactly why
+CLAUDE.md insists on the lab:
+
+- `New-PSSessionConfigurationFile` on WinPS 5.1 rejects the `Object[]` that
+  `Sort-Object` yields for `-VisibleCmdlets` with the **misleading** error "The
+  member 'ModulesToImport' must be an array…"; the fix is a `[string[]]` cast.
+- `$_.Exception.GetType().FullName` in the preamble/epilogue error handlers is a
+  method call CLM blocks, so *every* AD error under a constrained endpoint —
+  including the not-found that delete-verify relies on — failed the whole pipeline
+  with a CLM violation. `$_.Exception.psobject.TypeNames[0]` (property access) is
+  the CLM-safe, value-identical replacement.
+- The acceptance harness's own out-of-band verification client (`accTransport`)
+  has to carry `language_mode` too, or CheckDestroy sends a full-language wrapper
+  (`[Console]::SetIn`) to the constrained endpoint and CLM rejects it.
+- Kerberos is time-sensitive: a lab host whose clock drifted (here `s-client` was
+  9 h ahead after a suspend) fails the WinRM negotiate handshake with the opaque
+  "unexpected negotiation state: 1"; `w32tm /resync /force` from the domain fixes
+  it before any provider issue is real.

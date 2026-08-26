@@ -201,6 +201,29 @@ func TestResolvePSRPMissingHost(t *testing.T) {
 	_ = cfg
 }
 
+func TestResolvePSRPLanguageMode(t *testing.T) {
+	m := providerModel{PSRP: &psrpModel{
+		Host:         types.StringValue("h"),
+		LanguageMode: types.StringValue("constrained"),
+	}}
+	cfg, diags := resolvePSRP(m, func(string) string { return "" })
+	if diags.HasError() {
+		t.Fatalf("unexpected diags: %v", diags)
+	}
+	if cfg.LanguageMode != "constrained" {
+		t.Errorf("LanguageMode = %q, want constrained", cfg.LanguageMode)
+	}
+}
+
+func TestResolvePSRPLanguageModeEnv(t *testing.T) {
+	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("h")}}
+	env := map[string]string{"AD_PSRP_LANGUAGE_MODE": "constrained"}
+	cfg, _ := resolvePSRP(m, func(k string) string { return env[k] })
+	if cfg.LanguageMode != "constrained" {
+		t.Errorf("env LanguageMode = %q, want constrained", cfg.LanguageMode)
+	}
+}
+
 func localOnly(l localModel) providerModel { return providerModel{Local: &l} }
 
 func TestResolveLocalDefaults(t *testing.T) {
