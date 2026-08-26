@@ -26,6 +26,7 @@ user=$(cred 'svc\.username'); pass=$(cred 'svc\.password')
 host=${LAB_PSRP_HOST:-192.168.50.31}
 spn=${LAB_PSRP_SPN:-HTTP/s-client.corp.local}
 config=${LAB_PSRP_CONFIG:-AdObjects51}
+langmode=${LAB_PSRP_LANGUAGE_MODE:-}
 dc_ip=${LAB_DC_IP:-192.168.50.216}
 dc=${LAB_DC_FQDN:-s-server.corp.local}
 dc2=${LAB_DC2_FQDN:-s-server2.corp.local}
@@ -60,6 +61,10 @@ export AD_ACC_PSRP_SPN="$spn"
 export AD_ACC_PSRP_USER="$user"
 export AD_ACC_PSRP_PASSWORD="$pass"
 export AD_ACC_PSRP_CONFIGURATION_NAME="$config"
+# Empty unless LAB_PSRP_LANGUAGE_MODE=constrained is passed; when set, the acc
+# harness emits `language_mode = "constrained"` into the provider's psrp block so
+# the suite runs against a ConstrainedLanguage sandbox endpoint.
+export AD_ACC_PSRP_LANGUAGE_MODE="$langmode"
 export AD_ACC_CONTAINER="$container"
 export AD_ACC_DENIED_CONTAINER="$denied"
 export AD_ACC_SERVER="$dc"
