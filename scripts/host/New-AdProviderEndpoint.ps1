@@ -202,6 +202,11 @@ if ([version]$c.PSVersion -ne [version]'5.1') {
 $dnsDomain = (Get-CimInstance Win32_ComputerSystem).Domain
 $realm     = $dnsDomain.ToUpper()
 $fqdn      = "$env:COMPUTERNAME.$dnsDomain".ToLower()
+# A -Sandbox endpoint is ConstrainedLanguage, so the team's provider block MUST
+# set language_mode = "constrained" or the provider sends a full-language wrapper
+# the endpoint rejects. Rendered into the example block and its explanation below.
+$langModeLine = if ($Sandbox) { "`n      language_mode      = ""constrained""" } else { "" }
+$langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required against a -Sandbox endpoint: it runs in`nConstrainedLanguage, so the provider delivers each operation without the`nfull-language constructs a normal (full) endpoint allows. ACL delegation is not`navailable in constrained mode; use a full-language endpoint for that." } else { "" }
 
 Write-Host ''
 if ($Sandbox) {
@@ -224,7 +229,7 @@ checks against their OU delegation):
   provider "activedirectory" {
     psrp {
       host               = "$fqdn"
-      configuration_name = "$TierName"
+      configuration_name = "$TierName"$langModeLine
       user               = "DOMAIN\\svc_teamx"
       password           = var.ad_password
       max_concurrency    = 4
@@ -239,7 +244,7 @@ checks against their OU delegation):
   }
 
 configuration_name is required, not optional: the provider defaults to the
-PowerShell.7 endpoint, which will refuse this account.
+PowerShell.7 endpoint, which will refuse this account.$langModeNote
 
 On the Linux CI agent, before terraform runs:
 
