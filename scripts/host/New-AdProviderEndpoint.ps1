@@ -157,8 +157,13 @@ $psscArgs = @{
     ModulesToImport = 'ActiveDirectory'
 }
 if ($Sandbox) {
-    $psscArgs['VisibleCmdlets']      = $visible          # always restricted in a sandbox
-    $psscArgs['VisibleProviders']    = $providers
+    # [string[]] casts are load-bearing on Windows PowerShell 5.1: $visible comes
+    # from Sort-Object, so it is an Object[], and New-PSSessionConfigurationFile
+    # 5.1 rejects an Object[] here with the *misleading* error "The member
+    # 'ModulesToImport' must be an array consisting of either string or hashtable
+    # elements." Casting to string[] is what actually silences it (lab-verified).
+    $psscArgs['VisibleCmdlets']      = [string[]]$visible   # always restricted in a sandbox
+    $psscArgs['VisibleProviders']    = [string[]]$providers
     $psscArgs['VisibleFunctions']    = 'New-TfCredential'
     $psscArgs['FunctionDefinitions'] = @(
         @{ Name = 'New-TfCredential'; ScriptBlock = {
@@ -168,8 +173,9 @@ if ($Sandbox) {
         } }
     )
 } elseif ($RestrictCmdlets) {
-    $psscArgs['VisibleCmdlets']   = $visible
-    $psscArgs['VisibleProviders'] = $providers
+    # See the [string[]] note above -- same 5.1 Object[] pitfall.
+    $psscArgs['VisibleCmdlets']   = [string[]]$visible
+    $psscArgs['VisibleProviders'] = [string[]]$providers
     # Warned about prominently in the closing banner below, not just here --
     # a warning this early in the output is easy to scroll past.
 }
