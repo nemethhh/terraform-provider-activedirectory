@@ -1,32 +1,59 @@
 # Terraform Provider for Active Directory
 
-Manage organizational units, groups, user accounts and access control in Active
-Directory from Terraform — create, update, rename, move, import, search and
-delegate, with a real read-back after every write so an apply converges on the
-first run.
+[![Terraform Registry](https://img.shields.io/github/v/release/nemethhh/terraform-provider-activedirectory?label=Terraform%20Registry&color=7B42BC&logo=terraform)](https://registry.terraform.io/providers/nemethhh/activedirectory/latest)
+[![Terraform ≥ 1.11](https://img.shields.io/badge/Terraform-%E2%89%A5%201.11-7B42BC?logo=terraform)](https://developer.hashicorp.com/terraform/downloads)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-blue)](./LICENSE)
+
+Manage organizational units, groups, users, computers, service accounts, group
+membership and access control in Active Directory from Terraform. Every write is
+followed by a real read-back, so an apply converges on the first run instead of
+the third.
 
 - **Registry:** [`nemethhh/activedirectory`](https://registry.terraform.io/providers/nemethhh/activedirectory/latest)
-- **Documentation:** [registry docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs)
-- **Licence:** Mozilla Public License 2.0
+- **Full schema reference:** [registry docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs)
+- **AD engine library:** [`nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh)
+
+## Features
+
+- **8 resources, 11 data sources** — OUs, groups, users, computers, gMSAs,
+  membership (edge or authoritative set) and access-control entries.
+- **Full lifecycle** — create, update, **rename and move in place** (never
+  destroy-and-recreate, so SIDs and ACLs survive), import and search.
+- **First-apply convergence** — each write pins a domain controller and reads
+  the object back from that same replica; no second apply to settle drift.
+- **Three transports** — run the AD cmdlets locally on a domain-joined host,
+  over SSH to a jump box, or over PSRP/WinRM from anywhere (including Linux).
+- **Write-only passwords** — a user's `password` never touches state or a plan
+  file (Terraform 1.11+); rotation is driven by a version counter.
+- **Adoption is first-class** — import by GUID, DN, SID or sAMAccountName, and a
+  create that collides with an existing object hands back a ready-to-paste
+  `import` block.
+- **Delegation without raw ACLs** — friendly rights names and curated
+  delegation templates instead of hand-assembled access masks and schema GUIDs.
+
+Nothing is installed on a domain controller: the provider drives the standard
+`ActiveDirectory` PowerShell module over AD Web Services.
+
+## Quick start
 
 ```hcl
 terraform {
   required_providers {
     activedirectory = {
       source  = "nemethhh/activedirectory"
-      version = "~> 0.2"
+      version = "~> 0.9"
     }
   }
   required_version = ">= 1.11"
 }
 
 provider "activedirectory" {
-  local {
-    pwsh_path = "pwsh"
-  }
+  # Terraform runs on a domain-joined Windows host and spawns pwsh there,
+  # authenticating as whoever launched Terraform.
+  local {}
 
   domain {
-    server = "dc01.corp.local" # omit to discover one at configure time
+    server = "dc01.corp.local" # omit to discover a DC at configure time
   }
 }
 
@@ -37,75 +64,53 @@ resource "activedirectory_ou" "staff" {
 }
 ```
 
-## How it works
-
-The provider drives the `ActiveDirectory` PowerShell module — nothing is
-installed on a domain controller. There are two deployments, and exactly one is
-configured: there is no implicit default, because guessing would let a mistyped
-block run against the wrong identity.
-
-**On the host — the `local` block.** Terraform runs on a domain-joined Windows
-member server and spawns `pwsh` there. The process inherits that machine's logon
-token, so operations authenticate as whoever launched Terraform.
-
-```
-terraform (Windows host)
-   └─ provider ──spawn──▶ pwsh -EncodedCommand …   (payload on stdin)
-                            └─ Import-Module ActiveDirectory
-                                 └─ ADWS :9389 ──▶ pinned DC
-```
-
-**Over SSH — the `ssh` block.** Terraform runs anywhere and reaches a Windows
-jump box.
-
-```
-terraform (anywhere)
-   └─ ssh ──▶ jump box
-                └─ pwsh -EncodedCommand …   (payload on stdin)
-                     └─ Import-Module ActiveDirectory
-                          └─ ADWS :9389 ──▶ pinned DC
-```
-
-Over SSH, a session authenticated by public key receives a network logon token
-carrying no delegatable credentials, so onward authentication to AD Web Services
-fails — the classic double hop. A `domain.credential` block works around it. On
-the host the problem does not arise, and `domain.credential` remains available
-for the case where operations must authenticate as some account other than the
-one that launched Terraform.
-
-Most operations produce a script too large for a command line, so over SSH they
-are shipped to a temporary file with SFTP and run with `-File` — which also lets
-the transport work when the jump box's OpenSSH `DefaultShell` is `cmd.exe`. This
-needs the OpenSSH `sftp` subsystem, which Windows OpenSSH enables by default.
-
-DC pinning matters in both deployments: a write and the read-back that follows
-it cannot land on different replicas, which is what makes an apply converge on
-the first run rather than the third.
-
-**Apply times.** Every operation spawns a fresh `pwsh` and pays its own
-`Import-Module ActiveDirectory` — roughly 1–3 seconds on Windows. This is
-inherent to the execution contract and identical in both deployments;
-`max_concurrency` bounds how many run at once, defaulting to 4.
+Per-attribute schemas for every resource and data source live in the
+[registry documentation](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs);
+this README covers the shape and the conventions.
 
 ## Requirements
 
 | | |
 |---|---|
-| Terraform | 1.11 or later — the `password` attribute is write-only, which 1.11 introduced |
-| Windows host | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) **or** Windows PowerShell 5.1 (`powershell.exe`) on `PATH` |
-| Network | TCP 9389 from that host to the domain controller. For the `ssh` deployment, also OpenSSH Server on it and TCP 22 from wherever Terraform runs |
+| **Terraform** | 1.11 or later — the write-only `password` attribute requires it |
+| **PowerShell host** | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 |
+| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `psrp` |
 
-With the `local` deployment, Terraform itself runs on that Windows host. With the
-`ssh` deployment, Terraform runs anywhere. There is also a `psrp` deployment,
-reaching the host over WinRM instead — 5.1 is proven there (34 acceptance runs
-against a live domain, see `LAB.md`) but unverified for non-ASCII input over
-`local`/`ssh`; see `scripts/host/README.md` to provision a 5.1 endpoint a
-delegated account can use without local-administrator rights.
+Every setting can also come from the environment (`AD_PWSH_PATH`, `AD_SSH_*`,
+`AD_PSRP_*`, …), and configuration always wins over the environment.
 
-Settings also read from the environment, with configuration always winning:
-`AD_PWSH_PATH`, `AD_LOCAL_MAX_CONCURRENCY` and `AD_LOCAL_TIMEOUT` for the local
-deployment; `AD_SSH_HOST`, `AD_SSH_PORT`, `AD_SSH_USER`, `AD_SSH_PRIVATE_KEY`,
-`AD_SSH_PRIVATE_KEY_PATH` and `AD_SSH_PASSWORD` for the SSH one.
+## Connecting to Active Directory
+
+Exactly **one** of `local`, `ssh` or `psrp` is required — there is no implicit
+default, because guessing would let a mistyped block run against the wrong
+identity.
+
+| Block | Terraform runs on | Authenticates to AD as | Reach for it when |
+|---|---|---|---|
+| `local` | a domain-joined Windows member server | the token of whoever launched Terraform | Terraform already runs on a domain-joined Windows host |
+| `ssh` | anywhere; reaches a Windows jump box over SSH | the SSH session's identity, or `domain.credential` | you want a Windows jump box and Terraform runs elsewhere |
+| `psrp` | anywhere, including Linux; reaches a Windows host over WinRM | an ambient Kerberos ticket, or `psrp.user` / `psrp.password` | you drive AD from Linux/CI, or want no jump box at all |
+
+A few things worth knowing:
+
+- **Pin a DC with `domain.server`.** Omit it to discover one at configure time.
+  Pinning is what keeps a write and its read-back on the same replica.
+- **The double hop.** Over `ssh` (public-key) or `psrp` against a *member* host,
+  the session carries no delegatable credentials, so onward auth to AD Web
+  Services fails. Add a `domain.credential { username = …, password = … }` block
+  to work around it. Against a domain controller directly, or on `local`, it
+  never arises.
+- **PSRP is a first-class transport.** Kerberos over HTTP (5985) by default, or
+  `use_tls` for HTTPS (5986); it can also target a locked-down
+  ConstrainedLanguage sandbox endpoint (`language_mode = "constrained"`). See
+  [`scripts/host/`](./scripts/host/) for provisioning an endpoint a delegated
+  account can use without local-administrator rights.
+- **Replication waits are opt-in.** By default the provider does not block on a
+  write reaching other DCs; set `replication { wait = true }` when a downstream
+  read on a different DC needs it.
+
+The full attribute list for each block is in the
+[provider docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs).
 
 ## What it manages
 
@@ -114,78 +119,50 @@ deployment; `AD_SSH_HOST`, `AD_SSH_PORT`, `AD_SSH_USER`, `AD_SSH_PRIVATE_KEY`,
 | Resource | Manages |
 |---|---|
 | `activedirectory_ou` | An organizational unit |
-| `activedirectory_group` | A group |
-| `activedirectory_user` | A user account |
-| `activedirectory_group_member` | A single, non-authoritative membership edge — leaves other members untouched |
-| `activedirectory_group_membership` | A group's entire, authoritative member set — reconciles out-of-band members away |
-| `activedirectory_access_rule` | A single access-control entry (ACE) on any object — non-authoritative; grants a trustee specific rights, the building block for delegation |
+| `activedirectory_group` | A security or distribution group |
+| `activedirectory_user` | A user account, with a write-only password |
+| `activedirectory_computer` | A computer account — pre-stage a machine before it joins the domain |
+| `activedirectory_gmsa` | A group managed service account; Active Directory owns and rotates the password |
+| `activedirectory_group_member` | One **non-authoritative** membership edge — leaves every other member untouched |
+| `activedirectory_group_membership` | A group's entire **authoritative** member set — reconciles out-of-band members away |
+| `activedirectory_access_rule` | One access-control entry (ACE) on any object — the non-authoritative delegation primitive |
 
 Use at most one of `activedirectory_group_member` and
-`activedirectory_group_membership` per group; do not manage the same group with
+`activedirectory_group_membership` per group; never manage the same group with
 both.
 
 **Data sources**
 
 | Data source | Reads |
 |---|---|
-| `activedirectory_ou` / `activedirectory_group` / `activedirectory_user` | One object by GUID, DN, SID or sAMAccountName |
-| `activedirectory_ous` / `activedirectory_groups` / `activedirectory_users` | A search under a container, by scope and filter |
-| `activedirectory_group_members` | A group's direct members |
+| `activedirectory_ou`, `_group`, `_user`, `_computer`, `_gmsa` | One object, by GUID or DN (security objects also by SID or sAMAccountName) |
+| `activedirectory_ous`, `_groups`, `_users`, `_computers` | A search under a container, by scope and filter |
+| `activedirectory_group_members` | A group's members, optionally recursive |
 | `activedirectory_delegation_template` | The access rules a named delegation task expands into — fed into `activedirectory_access_rule` |
 
-A few conventions worth knowing before reading the schemas:
+## Key conventions
 
-- The parent of an object is always `container`, never `path`, and it is a
-  distinguished name. Referencing another resource's `dn` is what makes it a
-  real dependency edge.
-- The Terraform ID is always the `objectGUID`, which survives rename and move.
-- Booleans are stated positively: `can_change_password`, `password_expires`.
-  Active Directory's own parameters are the negative form, and mirroring that
-  would make every configuration read as a double negative.
-- Renaming or moving an *object* updates it in place — the provider never
-  deletes and recreates an object, because that would destroy its SID and every
-  ACL that references it. The relationship resources
-  (`activedirectory_group_member`, `activedirectory_access_rule`) do replace on
-  change, since a membership edge or an ACE has no SID of its own to preserve.
+Read one resource's docs end to end and these hold across all of them:
 
-## Adopting an existing directory
+- **The parent is `container`** (never `path`), and it is a distinguished name.
+  Referencing another resource's `dn` is what makes it a real dependency edge.
+- **The Terraform ID is the `objectGUID`** — it survives rename and move.
+- **Rename and move update in place.** The provider never deletes and recreates
+  an *object*, because that would destroy its SID and every ACL naming it. The
+  relationship resources (`group_member`, `access_rule`) do replace on change —
+  a membership edge or an ACE has no SID of its own to preserve.
+- **Booleans are stated positively** — `can_change_password`,
+  `password_expires` — even though AD's own parameters are the negative form.
+- **Import detects the form.** Every resource imports by GUID, DN, SID or
+  sAMAccountName; the form is detected and resolved to the GUID on the way in.
+- **A not-found on read is drift, not failure** — the resource is removed from
+  state so the next plan re-creates it.
 
-Almost no Active Directory is greenfield, so adoption is a first-class path
-rather than an afterthought.
+## Common tasks
 
-**Import blocks.** Every resource imports by GUID, distinguished name, SID or
-sAMAccountName; the form is detected and resolved to the GUID on the way in.
-
-```hcl
-import {
-  to = activedirectory_user.jdoe
-  id = "jdoe"
-}
-```
-
-**Adoption on conflict.** Creating an object that already exists does not just
-report the collision — it hands back the import block that adopts it, ready to
-paste. If the name is instead held by a deleted object the Recycle Bin still
-retains, the diagnostic says so and points at `Restore-ADObject`, because that
-is a different problem with a different fix.
-
-**Co-managed attributes.** Where an HR sync or another system writes the same
-attribute, put it in `ignore_changes` rather than fighting it every apply:
-
-```hcl
-lifecycle {
-  ignore_changes = [display_name]
-}
-```
-
-## Passwords
-
-`password` on `activedirectory_user` is a Terraform **write-only** attribute.
-It is sent on create and on rotation and is never written to state or to a plan
-file. Because a write-only value cannot be diffed, rotation is driven by
-`password_version`: increment it and the plan shows a rotation.
-
-Pair it with an ephemeral resource so the value never lands anywhere at all:
+**Create a user with a write-only password.** The value never lands in state or
+a plan file; pair it with an ephemeral resource so it exists nowhere at rest.
+Rotate by incrementing `password_version`.
 
 ```hcl
 ephemeral "random_password" "jdoe" {
@@ -196,33 +173,26 @@ resource "activedirectory_user" "jdoe" {
   sam_account_name = "jdoe"
   container        = activedirectory_ou.staff.dn
   enabled          = true
+
   password         = ephemeral.random_password.jdoe.result
-  password_version = 1
+  password_version = 1 # bump to rotate
 }
 ```
 
-## Access control and delegation
-
-`activedirectory_access_rule` manages a **single access-control entry** on any
-object's DACL. It is non-authoritative: it owns exactly the ACE it creates and
-leaves every other entry — inherited defaults, other trustees' grants —
-untouched, so several rules can target the same object safely. Rights and object
-types are named, not raw masks or GUIDs; the friendly names resolve to schema
-GUIDs against the directory, with the common ones answered from a built-in table.
+**Adopt an object that already exists.** Import by any identifier — and if a
+create ever collides with an existing object, the error *is* the import block
+you need.
 
 ```hcl
-resource "activedirectory_access_rule" "helpdesk_reset_pw" {
-  target      = activedirectory_ou.staff.dn        # any object, DN or GUID
-  trustee     = activedirectory_group.helpdesk.id  # any security principal
-  rights      = ["ExtendedRight"]
-  object_type = "Reset Password"
-  applies_to  = { scope = "descendants", object_class = "user" }
-  type        = "Allow"
+import {
+  to = activedirectory_user.jdoe
+  id = "jdoe" # GUID, DN, SID or sAMAccountName — detected for you
 }
 ```
 
-For the common tasks, `activedirectory_delegation_template` expands a named task
-into the exact set of rules it needs; fan them out with `for_each`:
+**Delegate a task without hand-writing ACEs.** A delegation template expands a
+curated task into concrete rules at plan time (pure computation, no directory
+read); fan them out onto the access-rule primitive with `for_each`.
 
 ```hcl
 data "activedirectory_delegation_template" "manage_users" {
@@ -230,7 +200,9 @@ data "activedirectory_delegation_template" "manage_users" {
 }
 
 resource "activedirectory_access_rule" "manage_users" {
-  for_each    = { for i, r in data.activedirectory_delegation_template.manage_users.rules : i => r }
+  for_each = {
+    for i, r in data.activedirectory_delegation_template.manage_users.rules : tostring(i) => r
+  }
   target      = activedirectory_ou.staff.dn
   trustee     = activedirectory_group.admins.id
   rights      = each.value.rights
@@ -240,14 +212,45 @@ resource "activedirectory_access_rule" "manage_users" {
 }
 ```
 
-An access rule is a relationship, not an object: changing any field replaces it
-(a revoke of the old ACE and a grant of the new one), and drift is matched
-against the explicit ACE only, so inherited entries are never fought.
+**Read the directory.** Search data sources escape and AND your `filter_by`
+terms; exceeding `max_results` is an error, never a silently truncated set.
 
-## Contributing
+```hcl
+data "activedirectory_users" "sales" {
+  container = "OU=Sales,DC=corp,DC=local"
+  scope     = "subtree"
+  filter_by = { department = "Sales" }
+}
 
-Building from source, the test architecture, the Windows lab and the release
-process are documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
+output "sales_upns" {
+  value = [for u in data.activedirectory_users.sales.users : u.user_principal_name]
+}
+```
+
+## Development
+
+This repository is the Terraform provider — **schemas, plan/state mapping,
+diagnostics and import, and nothing else**. Every Active Directory behaviour
+(cmdlet composition, DC pinning, the read-back after each write, delete
+verification, error classification, serialized writes, the replication wait)
+lives in [`go-adpwsh`](https://github.com/nemethhh/go-adpwsh). A change that
+needs new AD behaviour belongs in the library, not here.
+
+```bash
+make check     # build, vet, gofmt, test — exactly what CI runs, in CI's order
+make test      # unit + lifecycle tests against the in-memory fake (needs terraform on PATH)
+make testacc   # adds the suites that need a real domain (TF_ACC=1)
+make docs      # regenerate docs/ from schema descriptions + examples/
+make lab-help  # run the suites against the provisioned Windows lab
+```
+
+Every lifecycle suite runs from **one set of assertions against two backends**:
+an in-memory fake that always runs — no Windows, `pwsh` or domain required — and
+a real domain gated on `TF_ACC=1`. Real-domain paths are validated on a
+provisioned Windows lab; compiling and skipping cleanly is not validation.
+
+The full build, test, lab and release process is in
+[CONTRIBUTING.md](./CONTRIBUTING.md), and the lab itself in [LAB.md](./LAB.md).
 
 ## Licence
 
