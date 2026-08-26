@@ -681,11 +681,14 @@ mitigation, not a cure — the transport still does not release its own shells.
 `psrp.language_mode = "constrained"` lets the provider drive a locked-down
 ConstrainedLanguage (CLM) endpoint that confines a delegated team account to AD
 cmdlets with no host escape. `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`
-registers such an endpoint (5.1, no RunAs, `VisibleCmdlets` restricted, a
-`New-TfCredential` `FunctionDefinitions` builder, ACL capability dropped). A
-sandbox endpoint named `AdSandbox` was registered on `s-client` and **left in
-place** as a reference; unregister it with `Remove-AdProviderEndpoint.ps1
--TierName AdSandbox` if you want the host pristine.
+registers such an endpoint (5.1, no RunAs, `VisibleCmdlets` restricted to stock
+cmdlets, ACL capability dropped). It exposes **no bespoke functions**: the
+preamble builds its credential with `[PSCredential]::new` +
+`ConvertTo-SecureString`, both of which CLM allows (PSCredential/SecureString are
+CLM "core" types — lab-verified in the registered endpoint), so no
+credential-builder helper is needed. A sandbox endpoint named `AdSandbox` was
+registered on `s-client` and **left in place** as a reference; unregister it with
+`Remove-AdProviderEndpoint.ps1 -TierName AdSandbox` if you want the host pristine.
 
 Validated end to end as the delegated non-admin `CORP\svc_tfacc`:
 

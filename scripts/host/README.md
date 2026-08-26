@@ -39,13 +39,15 @@ the provider's scripts require it, and `FullLanguage` permits arbitrary .NET.
 For a real sandbox, use `-Sandbox` instead (below).
 
 `-Sandbox` registers a real sandbox: a `ConstrainedLanguage` endpoint, always
-with restricted cmdlet/provider visibility regardless of `-RestrictCmdlets`. The
-library's preamble builds its credential with `New-Object`, which
-`ConstrainedLanguage` blocks, so this endpoint defines a `New-TfCredential`
-function via `FunctionDefinitions` (those run `FullLanguage` even inside a
-`ConstrainedLanguage` session) and makes only that function, the capability's AD
-cmdlets, and `Get-Command`/`Get-Module` visible. The ACL capability is excluded
-from a sandbox tier — `ConstrainedLanguage` cannot run the .NET the ACL cmdlets
-need — so delegation work needs a separate, non-sandbox tier. Teams pointed at a
-sandbox endpoint must set the provider's `psrp.language_mode = "constrained"` so
-it calls `New-TfCredential` instead of building the credential itself.
+with restricted cmdlet/provider visibility regardless of `-RestrictCmdlets`, and
+exposing **only stock cmdlets** — no bespoke functions. The library preamble
+builds its credential with `[PSCredential]::new` + `ConvertTo-SecureString`
+(both visible in the core set); `ConstrainedLanguage` allows both, because
+`PSCredential` and `SecureString` are on its "core type" list, so no
+credential-builder function is needed. What `ConstrainedLanguage` genuinely
+blocks — `[Console]` payload delivery and the ACL cmdlets'
+`[DirectoryServices]`/`New-PSDrive` .NET — the provider avoids in constrained
+mode (a different delivery path) or the endpoint drops (the ACL capability is
+excluded from a sandbox tier, so delegation work needs a separate, non-sandbox
+tier). Teams pointed at a sandbox endpoint must set the provider's
+`psrp.language_mode = "constrained"`.

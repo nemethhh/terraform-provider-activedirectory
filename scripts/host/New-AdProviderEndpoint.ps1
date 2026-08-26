@@ -61,15 +61,16 @@
     if requested -- ConstrainedLanguage cannot run the .NET the ACL cmdlets need,
     so a team wanting delegation work needs a separate, non-sandbox tier.
 
-    The library's script preamble builds its PSCredential with New-Object, which
-    ConstrainedLanguage blocks. This endpoint works around that the supported way:
-    it defines New-TfCredential via FunctionDefinitions, which runs FullLanguage
-    even inside a ConstrainedLanguage session, and makes only that function (plus
-    the capability's AD cmdlets and Get-Command/Get-Module) visible.
+    The endpoint exposes only stock cmdlets -- no bespoke functions. The library
+    preamble builds its PSCredential with [PSCredential]::new + ConvertTo-SecureString
+    (in the visible core set); ConstrainedLanguage allows both, because PSCredential
+    and SecureString are on its "core type" list, so no credential-builder function
+    is needed. What ConstrainedLanguage does block -- [Console] payload delivery and
+    the ACL cmdlets' [DirectoryServices]/New-PSDrive .NET -- the provider avoids in
+    constrained mode (a different delivery path) or drops (ACL).
 
     Teams pointed at this endpoint must set the provider's
-    psrp.language_mode = "constrained" so it calls New-TfCredential instead of
-    building the credential itself.
+    psrp.language_mode = "constrained".
 
 .EXAMPLE
     .\New-AdProviderEndpoint.ps1 -TierName AdObjects -GrantTo 'CORP\AD-Terraform-Objects' -Capability ou,group,user
@@ -164,14 +165,10 @@ if ($Sandbox) {
     # elements." Casting to string[] is what actually silences it (lab-verified).
     $psscArgs['VisibleCmdlets']      = [string[]]$visible   # always restricted in a sandbox
     $psscArgs['VisibleProviders']    = [string[]]$providers
-    $psscArgs['VisibleFunctions']    = 'New-TfCredential'
-    $psscArgs['FunctionDefinitions'] = @(
-        @{ Name = 'New-TfCredential'; ScriptBlock = {
-            param($u, $p)
-            $s = ConvertTo-SecureString $p -AsPlainText -Force
-            New-Object System.Management.Automation.PSCredential($u, $s)
-        } }
-    )
+    # No custom functions: the provider builds its PSCredential with the stock
+    # [PSCredential] constructor + ConvertTo-SecureString (in $core, so visible),
+    # both of which ConstrainedLanguage allows (PSCredential/SecureString are core
+    # types). So a sandbox endpoint exposes only stock cmdlets, nothing bespoke.
 } elseif ($RestrictCmdlets) {
     # See the [string[]] note above -- same 5.1 Object[] pitfall.
     $psscArgs['VisibleCmdlets']   = [string[]]$visible
@@ -210,7 +207,7 @@ $langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required
 
 Write-Host ''
 if ($Sandbox) {
-    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, credential built by New-TfCredential). Teams must set the provider's psrp.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
+    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, stock cmdlets only). Teams must set the provider's psrp.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
 } elseif ($RestrictCmdlets) {
     Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage -- a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
 } else {
