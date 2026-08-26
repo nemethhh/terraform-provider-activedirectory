@@ -41,6 +41,7 @@ provider "activedirectory" {
 # provider "activedirectory" {
 #   psrp {
 #     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local
+#     # language_mode = "constrained"  # sandbox endpoint from New-AdProviderEndpoint.ps1 -Sandbox; ACL ops need "full"
 #   }
 # }
 #
