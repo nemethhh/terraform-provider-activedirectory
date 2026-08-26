@@ -13,6 +13,7 @@ needed in the directory, to create accounts and delegate OUs.
 |---|---|---|
 | `Initialize-AdProvisioningHost.ps1` | once per host | RSAT-AD, WinRM hardening, built-in endpoints restricted to administrators, firewall, quotas, logon-right denials |
 | `New-AdProviderEndpoint.ps1` | once per capability **tier** | a 5.1 session configuration granted to one AD group |
+| `New-AdProviderEndpoint.ps1 -Sandbox` | once per capability **tier**, for untrusted teams | a ConstrainedLanguage sandbox tier; requires `psrp.language_mode = "constrained"` |
 | `Remove-AdProviderEndpoint.ps1` | to revoke a tier | unregisters it |
 
 Onboarding a team afterwards touches only the directory:
@@ -34,7 +35,17 @@ Two properties make this safe, both established by testing against a real domain
 
 `-RestrictCmdlets` limits the session to the cmdlets a capability needs. It is a
 guardrail against accident, not a sandbox: the session is `FullLanguage` because
-the provider's scripts require it, and `FullLanguage` permits arbitrary .NET. It
-also currently fails at once, because a cmdlet-restricted session cannot make
-`Import-Module` visible and the library's preamble calls it. Leave it off until
-that is addressed.
+the provider's scripts require it, and `FullLanguage` permits arbitrary .NET.
+For a real sandbox, use `-Sandbox` instead (below).
+
+`-Sandbox` registers a real sandbox: a `ConstrainedLanguage` endpoint, always
+with restricted cmdlet/provider visibility regardless of `-RestrictCmdlets`. The
+library's preamble builds its credential with `New-Object`, which
+`ConstrainedLanguage` blocks, so this endpoint defines a `New-TfCredential`
+function via `FunctionDefinitions` (those run `FullLanguage` even inside a
+`ConstrainedLanguage` session) and makes only that function, the capability's AD
+cmdlets, and `Get-Command`/`Get-Module` visible. The ACL capability is excluded
+from a sandbox tier — `ConstrainedLanguage` cannot run the .NET the ACL cmdlets
+need — so delegation work needs a separate, non-sandbox tier. Teams pointed at a
+sandbox endpoint must set the provider's `psrp.language_mode = "constrained"` so
+it calls `New-TfCredential` instead of building the credential itself.
