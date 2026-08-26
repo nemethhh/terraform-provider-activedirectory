@@ -201,7 +201,7 @@ Write-Host ''
 if ($Sandbox) {
     Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, credential built by New-TfCredential). Teams must set the provider's psrp.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
 } elseif ($RestrictCmdlets) {
-    Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage — a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
+    Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage -- a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
 } else {
     Write-Host "Endpoint $TierName ready. Onboard a team without touching this host:" -ForegroundColor Green
 }
