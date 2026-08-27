@@ -720,3 +720,46 @@ CLAUDE.md insists on the lab:
   9 h ahead after a suspend) fails the WinRM negotiate handshake with the opaque
   "unexpected negotiation state: 1"; `w32tm /resync /force` from the domain fixes
   it before any provider issue is real.
+
+### Local warm executor (local + warm cell), 2026-08-27
+
+`go-adpwsh`'s new `transport/localwarm` — a pool of persistent local
+`pwsh -SSHServerMode` runspaces driven over the out-of-proc adapter
+(`internal/oop`) and the shared warm core (`internal/warm`) — is the first cell
+of the transport × execution-mode matrix
+(`docs/superpowers/specs/2026-08-27-transport-execution-mode-independence-design.md`).
+It runs entirely inside go-adpwsh; the `mode`/transport rename in the provider is
+a later phase. Validated on `s-client` (pwsh 7.6.4, AD module 1.0.1.0) against
+`s-server.corp.local` as the delegated non-admin `CORP\svc_tfacc`, via the
+`localwarmlive`-tagged integration test cross-compiled for Windows:
+
+    GOOS=windows GOARCH=amd64 go test -tags localwarmlive -c -o localwarm.test.exe ./transport/localwarm/
+    # scp to s-client, then, with AD_LIVE_SERVER / AD_LIVE_USER / AD_LIVE_PASS /
+    # AD_LIVE_CONTAINER=OU=tfacc,DC=corp,DC=local set:
+    localwarm.test.exe -test.run TestLive -test.v
+
+Two tests, both green:
+
+- `TestLiveWarmLocalReadReuse` (pool of one): read #1 156 ms, read #2 **73 ms** —
+  the second read reuses the open runspace with the AD module already imported.
+  (The full cold→warm gap, ~1100 ms → ~40 ms, was measured in the spike, design
+  §15; here `adpwsh.New`'s rootDSE probe already warms the single conn, so both
+  timed reads are warm.)
+- `TestLiveWarmLocalConcurrentPool` (pool of 4, Terraform-like load): 8 distinct
+  users **created concurrently**, then **40 concurrent reads** across the 4-process
+  pool, each asserting it got back the exact user it asked for — **0 cross-talk**
+  in 1.45 s — then an update + read-back, with full CRUD teardown. This is the
+  load-bearing proof: `[Console]::SetIn` payload delivery is process-global, so a
+  pool that ever shared a process between two concurrently-busy ops would cross
+  their payloads and `-Credential`; only "one process per pooled conn" keeps it
+  correct, and only a real concurrent run against AD can show it. Teardown left
+  the delegated OU empty (`LEFTOVER_COUNT=0`).
+
+**What only the real run settled:** the spec's open item — whether the
+`[Console]::SetIn` → preamble `[Console]::In.ReadToEnd()` → `[PSCredential]`
+rebuild path works inside a go-psrpcore *out-of-proc* runspace (the spike had
+inlined its credential rather than exercising `SetIn`). It does: every read
+returned real directory data under an explicit domain credential delivered
+entirely through the payload, which is also what resolves the spike's
+local-account caveat (the SSH/local session lands as a non-domain account;
+`domain.credential` is the answer).
