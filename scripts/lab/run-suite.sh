@@ -35,6 +35,11 @@ user=$(cred 'svc\.username'); pass=$(cred 'svc\.password')
 large_line=""
 [[ -n ${AD_ACC_LARGE_COUNT:-} ]] && large_line="\$env:AD_ACC_LARGE_COUNT = '${AD_ACC_LARGE_COUNT}'"
 
+# LAB_MODE picks the local execution mode (cold|warm). Empty leaves it to the
+# provider default (warm). Forwarded to the member only when set.
+mode_line=""
+[[ -n ${LAB_MODE:-} ]] && mode_line="\$env:AD_ACC_MODE = '${LAB_MODE}'"
+
 if [[ $pattern == --sweep ]]; then
     go_cmd='go test ./internal/provider -v -sweep=domain -timeout 30m'
     label=SWEEP
@@ -57,6 +62,7 @@ Set-Location 'C:\src\provider'
 \$env:AD_ACC_USERNAME         = \$Username
 \$env:AD_ACC_PASSWORD         = \$Password
 \$env:AD_ACC_PWSH_PATH        = '$pwsh_path'
+$mode_line
 $large_line
 \$log = 'C:\Windows\Temp\lab-run.log'
 Remove-Item \$log -Force -ErrorAction SilentlyContinue

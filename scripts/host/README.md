@@ -13,7 +13,7 @@ needed in the directory, to create accounts and delegate OUs.
 |---|---|---|
 | `Initialize-AdProvisioningHost.ps1` | once per host | RSAT-AD, WinRM hardening, built-in endpoints restricted to administrators, firewall, quotas, logon-right denials |
 | `New-AdProviderEndpoint.ps1` | once per capability **tier** | a 5.1 session configuration granted to one AD group |
-| `New-AdProviderEndpoint.ps1 -Sandbox` | once per capability **tier**, for untrusted teams | a ConstrainedLanguage sandbox tier; requires `psrp.language_mode = "constrained"` |
+| `New-AdProviderEndpoint.ps1 -Sandbox` | once per capability **tier**, for untrusted teams | a ConstrainedLanguage sandbox tier; requires `winrm.language_mode = "constrained"` |
 | `Remove-AdProviderEndpoint.ps1` | to revoke a tier | unregisters it |
 
 Onboarding a team afterwards touches only the directory:
@@ -50,4 +50,4 @@ blocks — `[Console]` payload delivery and the ACL cmdlets'
 mode (a different delivery path) or the endpoint drops (the ACL capability is
 excluded from a sandbox tier, so delegation work needs a separate, non-sandbox
 tier). Teams pointed at a sandbox endpoint must set the provider's
-`psrp.language_mode = "constrained"`.
+`winrm.language_mode = "constrained"`.

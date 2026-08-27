@@ -13,15 +13,17 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
-	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
+	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
+	adsshwarm "github.com/nemethhh/go-adpwsh/transport/sshwarm"
 )
 
 type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
-	PSRP        *psrpModel        `tfsdk:"psrp"`
+	Winrm       *winrmModel       `tfsdk:"winrm"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
 }
@@ -30,6 +32,7 @@ type localModel struct {
 	PwshPath       types.String `tfsdk:"pwsh_path"`
 	MaxConcurrency types.Int64  `tfsdk:"max_concurrency"`
 	Timeout        types.String `tfsdk:"timeout"`
+	Mode           types.String `tfsdk:"mode"`
 }
 
 type sshModel struct {
@@ -45,9 +48,10 @@ type sshModel struct {
 	InsecureIgnoreHostKey types.Bool   `tfsdk:"insecure_ignore_host_key"`
 	MaxConcurrency        types.Int64  `tfsdk:"max_concurrency"`
 	Timeout               types.String `tfsdk:"timeout"`
+	Mode                  types.String `tfsdk:"mode"`
 }
 
-type psrpModel struct {
+type winrmModel struct {
 	Host               types.String `tfsdk:"host"`
 	Port               types.Int64  `tfsdk:"port"`
 	UseTLS             types.Bool   `tfsdk:"use_tls"`
@@ -64,6 +68,7 @@ type psrpModel struct {
 	LanguageMode       types.String `tfsdk:"language_mode"`
 	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
 	Timeout            types.String `tfsdk:"timeout"`
+	Mode               types.String `tfsdk:"mode"`
 }
 
 type domainModel struct {
@@ -85,7 +90,7 @@ type replicationModel struct {
 }
 
 // defaultTransportTimeout is the per-operation deadline handed to a transport
-// (local/ssh/psrp) when its own `timeout` attribute is left unset — that is,
+// (local/ssh/winrm) when its own `timeout` attribute is left unset — that is,
 // only when BOTH the operation's own deadline (defaultOperationTimeout,
 // provider.go) and the transport's are defaulted. It must stay strictly
 // longer than defaultOperationTimeout: the caller's context expiring aborts
@@ -197,40 +202,40 @@ func boolWithEnv(v types.Bool, getenv func(string) string, envVar string, def bo
 	}
 }
 
-// resolvePSRP turns the psrp block plus the environment into a transport
+// resolveWinrm turns the winrm block plus the environment into a transport
 // configuration, mirroring resolveSSH: configuration always wins, and the
 // refusal is rendered against the attribute the user can change.
-func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, diag.Diagnostics) {
+func resolveWinrm(m providerModel, getenv func(string) string) (adwinrm.Config, diag.Diagnostics) {
 	var diags diag.Diagnostics
-	root := path.Root("psrp")
-	s := psrpModel{}
-	if m.PSRP != nil {
-		s = *m.PSRP
+	root := path.Root("winrm")
+	s := winrmModel{}
+	if m.Winrm != nil {
+		s = *m.Winrm
 	}
 
-	cfg := adpsrp.Config{
-		Host:               str(s.Host, getenv, "AD_PSRP_HOST"),
-		UseTLS:             boolWithEnv(s.UseTLS, getenv, "AD_PSRP_USE_TLS", false),
-		InsecureSkipVerify: boolWithEnv(s.InsecureSkipVerify, getenv, "AD_PSRP_INSECURE_SKIP_VERIFY", false),
-		Username:           str(s.User, getenv, "AD_PSRP_USER"),
-		Password:           str(s.Password, getenv, "AD_PSRP_PASSWORD"),
-		Domain:             str(s.Domain, getenv, "AD_PSRP_DOMAIN"),
-		SPN:                str(s.SPN, getenv, "AD_PSRP_SPN"),
-		Realm:              str(s.Realm, getenv, "AD_PSRP_REALM"),
-		Krb5ConfPath:       firstNonEmpty(str(s.Krb5ConfPath, getenv, "AD_PSRP_KRB5_CONF"), getenv("KRB5_CONFIG")),
-		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_PSRP_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
-		KeytabPath:         str(s.KeytabPath, getenv, "AD_PSRP_KEYTAB"),
-		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_PSRP_CONFIGURATION_NAME"),
-		LanguageMode:       str(s.LanguageMode, getenv, "AD_PSRP_LANGUAGE_MODE"),
+	cfg := adwinrm.Config{
+		Host:               str(s.Host, getenv, "AD_WINRM_HOST"),
+		UseTLS:             boolWithEnv(s.UseTLS, getenv, "AD_WINRM_USE_TLS", false),
+		InsecureSkipVerify: boolWithEnv(s.InsecureSkipVerify, getenv, "AD_WINRM_INSECURE_SKIP_VERIFY", false),
+		Username:           str(s.User, getenv, "AD_WINRM_USER"),
+		Password:           str(s.Password, getenv, "AD_WINRM_PASSWORD"),
+		Domain:             str(s.Domain, getenv, "AD_WINRM_DOMAIN"),
+		SPN:                str(s.SPN, getenv, "AD_WINRM_SPN"),
+		Realm:              str(s.Realm, getenv, "AD_WINRM_REALM"),
+		Krb5ConfPath:       firstNonEmpty(str(s.Krb5ConfPath, getenv, "AD_WINRM_KRB5_CONF"), getenv("KRB5_CONFIG")),
+		CCachePath:         firstNonEmpty(str(s.CCachePath, getenv, "AD_WINRM_CCACHE"), strings.TrimPrefix(getenv("KRB5CCNAME"), "FILE:")),
+		KeytabPath:         str(s.KeytabPath, getenv, "AD_WINRM_KEYTAB"),
+		ConfigurationName:  str(s.ConfigurationName, getenv, "AD_WINRM_CONFIGURATION_NAME"),
+		LanguageMode:       str(s.LanguageMode, getenv, "AD_WINRM_LANGUAGE_MODE"),
 		Timeout:            duration(s.Timeout, root.AtName("timeout"), defaultTransportTimeout, &diags),
 	}
 
 	if !s.Port.IsNull() && !s.Port.IsUnknown() {
 		cfg.Port = int(s.Port.ValueInt64())
-	} else if p := getenv("AD_PSRP_PORT"); p != "" {
+	} else if p := getenv("AD_WINRM_PORT"); p != "" {
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			diags.AddAttributeError(root.AtName("port"), "Invalid AD_PSRP_PORT",
+			diags.AddAttributeError(root.AtName("port"), "Invalid AD_WINRM_PORT",
 				fmt.Sprintf("%q is not a port number: %s", p, err))
 		}
 		cfg.Port = n
@@ -238,10 +243,10 @@ func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, di
 
 	if !s.MaxConcurrency.IsNull() && !s.MaxConcurrency.IsUnknown() {
 		cfg.Concurrency = int(s.MaxConcurrency.ValueInt64())
-	} else if v := getenv("AD_PSRP_MAX_CONCURRENCY"); v != "" {
+	} else if v := getenv("AD_WINRM_MAX_CONCURRENCY"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			diags.AddAttributeError(root.AtName("max_concurrency"), "Invalid AD_PSRP_MAX_CONCURRENCY",
+			diags.AddAttributeError(root.AtName("max_concurrency"), "Invalid AD_WINRM_MAX_CONCURRENCY",
 				fmt.Sprintf("%q is not a whole number: %s", v, err))
 		}
 		cfg.Concurrency = n
@@ -249,13 +254,13 @@ func resolvePSRP(m providerModel, getenv func(string) string) (adpsrp.Config, di
 
 	// Validate the raw config (catches a negative concurrency) before defaults.
 	if err := cfg.Validate(); err != nil {
-		diags.AddAttributeError(root, "Invalid PSRP configuration", err.Error())
+		diags.AddAttributeError(root, "Invalid WinRM configuration", err.Error())
 	}
 	cfg = cfg.WithDefaults()
 
 	if cfg.Host == "" {
-		diags.AddAttributeError(root.AtName("host"), "Missing PSRP host",
-			"Set psrp.host or the AD_PSRP_HOST environment variable.")
+		diags.AddAttributeError(root.AtName("host"), "Missing WinRM host",
+			"Set winrm.host or the AD_WINRM_HOST environment variable.")
 	}
 	return cfg, diags
 }
@@ -328,6 +333,28 @@ func resolveLocal(m providerModel, getenv func(string) string) (adlocal.Config, 
 	return cfg.WithDefaults(), diags
 }
 
+// resolveLocalWarm reads the local block into the local+warm transport config.
+// It reuses resolveLocal's pwsh_path/concurrency/timeout resolution — same env
+// fallbacks, same validation — and carries the shared fields across;
+// adlocalwarm.New fills the warm-only ReapAfter/ReadTimeout defaults.
+func resolveLocalWarm(m providerModel, getenv func(string) string) (adlocalwarm.Config, diag.Diagnostics) {
+	cold, diags := resolveLocal(m, getenv)
+	return adlocalwarm.Config{
+		PwshPath:    cold.PwshPath,
+		Concurrency: cold.Concurrency,
+		Timeout:     cold.Timeout,
+	}, diags
+}
+
+// resolveSSHWarm reads the ssh block into the ssh+warm transport config. The
+// jump-box connection, auth and host-key handling are the ssh transport's,
+// embedded verbatim; adsshwarm.New fills the `powershell` subsystem name and
+// the warm-pool timings.
+func resolveSSHWarm(m providerModel, getenv func(string) string) (adsshwarm.Config, diag.Diagnostics) {
+	sshCfg, diags := resolveSSH(m, getenv)
+	return adsshwarm.Config{SSH: sshCfg}, diags
+}
+
 // resolveDomain returns the pinned DC and the optional -Credential.
 func resolveDomain(m providerModel) (string, *adpwsh.Credential, diag.Diagnostics) {
 	var diags diag.Diagnostics
@@ -347,7 +374,7 @@ func resolveDomain(m providerModel) (string, *adpwsh.Credential, diag.Diagnostic
 		diags.AddAttributeError(path.Root("domain").AtName("credential"),
 			"Incomplete credential",
 			"domain.credential requires both username and password, or neither. "+
-				"Omit the block entirely to use the SSH session's own identity.")
+				"Omit the block entirely to use the transport session's own identity.")
 		return server, nil, diags
 	}
 	return server, &adpwsh.Credential{Username: user, Password: adpwsh.NewSecret(pass)}, diags
@@ -386,7 +413,7 @@ const (
 	transportUnset transportKind = iota
 	transportLocal
 	transportSSH
-	transportPSRP
+	transportWinrm
 )
 
 func (k transportKind) String() string {
@@ -395,24 +422,80 @@ func (k transportKind) String() string {
 		return "local"
 	case transportSSH:
 		return "ssh"
-	case transportPSRP:
-		return "psrp"
+	case transportWinrm:
+		return "winrm"
 	default:
 		return "unset"
+	}
+}
+
+// executionMode is how pwsh is driven once a transport channel exists: cold runs
+// one `pwsh -EncodedCommand` per operation (re-importing the AD module every
+// time); warm keeps a persistent PSRP runspace so startup and the module import
+// are paid once per pooled shell and amortized. It is orthogonal to the
+// transport (local/ssh/winrm) — a third, independent axis alongside transport
+// and the `domain` AD-identity block.
+type executionMode int
+
+const (
+	modeWarm executionMode = iota // default: persistent PSRP runspace
+	modeCold                      // one-shot pwsh -EncodedCommand per op
+)
+
+func (e executionMode) String() string {
+	if e == modeCold {
+		return "cold"
+	}
+	return "warm"
+}
+
+// chosenMode reads the selected transport block's `mode` attribute, defaulting
+// to warm (the fast path). An unrecognised value is refused against the mode
+// attribute rather than silently treated as warm.
+func chosenMode(m providerModel, kind transportKind) (executionMode, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var raw types.String
+	var root path.Path
+	switch kind {
+	case transportLocal:
+		if m.Local != nil {
+			raw = m.Local.Mode
+		}
+		root = path.Root("local")
+	case transportSSH:
+		if m.SSH != nil {
+			raw = m.SSH.Mode
+		}
+		root = path.Root("ssh")
+	case transportWinrm:
+		if m.Winrm != nil {
+			raw = m.Winrm.Mode
+		}
+		root = path.Root("winrm")
+	}
+	switch strings.ToLower(str(raw, nil, "")) {
+	case "", "warm":
+		return modeWarm, diags
+	case "cold":
+		return modeCold, diags
+	default:
+		diags.AddAttributeError(root.AtName("mode"), "Invalid execution mode",
+			fmt.Sprintf("%q is not a valid mode; use \"warm\" (default) or \"cold\".", raw.ValueString()))
+		return modeWarm, diags
 	}
 }
 
 // chooseTransport enforces the exactly-one rule. There is deliberately no
 // implicit default: defaulting to local when the block is absent turns a typo'd
 // `ssh` block into silent local execution against the wrong identity, and
-// defaulting to ssh or psrp turns a typo'd `local` block into a dial to
+// defaulting to ssh or winrm turns a typo'd `local` block into a dial to
 // nowhere.
 func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	const summary = "Exactly one transport block is required"
 	const detail = "Set exactly one of `local` (run pwsh where Terraform runs), " +
-		"`ssh` (a Windows jump box), or `psrp` (WinRM/PSRP) — not more than one, and not none.\n\n" +
+		"`ssh` (a Windows jump box), or `winrm` (WinRM/PSRP) — not more than one, and not none.\n\n" +
 		"There is no implicit default. Guessing one would let a mistyped block run against the " +
 		"wrong identity."
 
@@ -423,7 +506,7 @@ func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
 	}{
 		{m.Local != nil, "local", transportLocal},
 		{m.SSH != nil, "ssh", transportSSH},
-		{m.PSRP != nil, "psrp", transportPSRP},
+		{m.Winrm != nil, "winrm", transportWinrm},
 	}
 
 	chosen := transportUnset

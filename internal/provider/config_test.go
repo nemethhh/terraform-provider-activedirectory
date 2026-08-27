@@ -151,19 +151,19 @@ func TestResolveDomainRejectsAHalfCredential(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPDefaultsAndEnv(t *testing.T) {
+func TestResolveWinrmDefaultsAndEnv(t *testing.T) {
 	env := map[string]string{
-		"AD_PSRP_HOST": "dc.corp.local",
-		"KRB5CCNAME":   "FILE:/tmp/krb5cc",
+		"AD_WINRM_HOST": "dc.corp.local",
+		"KRB5CCNAME":    "FILE:/tmp/krb5cc",
 	}
 	getenv := func(k string) string { return env[k] }
 
-	cfg, diags := resolvePSRP(providerModel{}, getenv)
+	cfg, diags := resolveWinrm(providerModel{}, getenv)
 	if diags.HasError() {
 		t.Fatalf("unexpected diags: %v", diags)
 	}
 	if cfg.Host != "dc.corp.local" {
-		t.Errorf("Host = %q, want from AD_PSRP_HOST", cfg.Host)
+		t.Errorf("Host = %q, want from AD_WINRM_HOST", cfg.Host)
 	}
 	if cfg.SPN != "HTTP/dc.corp.local" {
 		t.Errorf("SPN = %q, want HTTP/dc.corp.local", cfg.SPN)
@@ -179,34 +179,34 @@ func TestResolvePSRPDefaultsAndEnv(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPConfigWinsOverEnv(t *testing.T) {
+func TestResolveWinrmConfigWinsOverEnv(t *testing.T) {
 	getenv := func(k string) string {
-		if k == "AD_PSRP_HOST" {
+		if k == "AD_WINRM_HOST" {
 			return "env-host"
 		}
 		return ""
 	}
-	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("cfg-host")}}
-	cfg, _ := resolvePSRP(m, getenv)
+	m := providerModel{Winrm: &winrmModel{Host: types.StringValue("cfg-host")}}
+	cfg, _ := resolveWinrm(m, getenv)
 	if cfg.Host != "cfg-host" {
 		t.Errorf("Host = %q, want cfg-host (config beats env)", cfg.Host)
 	}
 }
 
-func TestResolvePSRPMissingHost(t *testing.T) {
-	cfg, diags := resolvePSRP(providerModel{}, func(string) string { return "" })
+func TestResolveWinrmMissingHost(t *testing.T) {
+	cfg, diags := resolveWinrm(providerModel{}, func(string) string { return "" })
 	if !diags.HasError() {
 		t.Error("missing host: want a diagnostic")
 	}
 	_ = cfg
 }
 
-func TestResolvePSRPLanguageMode(t *testing.T) {
-	m := providerModel{PSRP: &psrpModel{
+func TestResolveWinrmLanguageMode(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{
 		Host:         types.StringValue("h"),
 		LanguageMode: types.StringValue("constrained"),
 	}}
-	cfg, diags := resolvePSRP(m, func(string) string { return "" })
+	cfg, diags := resolveWinrm(m, func(string) string { return "" })
 	if diags.HasError() {
 		t.Fatalf("unexpected diags: %v", diags)
 	}
@@ -215,10 +215,10 @@ func TestResolvePSRPLanguageMode(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPLanguageModeEnv(t *testing.T) {
-	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("h")}}
-	env := map[string]string{"AD_PSRP_LANGUAGE_MODE": "constrained"}
-	cfg, _ := resolvePSRP(m, func(k string) string { return env[k] })
+func TestResolveWinrmLanguageModeEnv(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{Host: types.StringValue("h")}}
+	env := map[string]string{"AD_WINRM_LANGUAGE_MODE": "constrained"}
+	cfg, _ := resolveWinrm(m, func(k string) string { return env[k] })
 	if cfg.LanguageMode != "constrained" {
 		t.Errorf("env LanguageMode = %q, want constrained", cfg.LanguageMode)
 	}
@@ -428,17 +428,17 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 	}
 }
 
-func TestChooseTransportPSRP(t *testing.T) {
-	k, d := chooseTransport(providerModel{PSRP: &psrpModel{}})
-	if d.HasError() || k != transportPSRP {
-		t.Fatalf("psrp-only: kind=%v diags=%v", k, d)
+func TestChooseTransportWinrm(t *testing.T) {
+	k, d := chooseTransport(providerModel{Winrm: &winrmModel{}})
+	if d.HasError() || k != transportWinrm {
+		t.Fatalf("winrm-only: kind=%v diags=%v", k, d)
 	}
 }
 
 func TestChooseTransportThreeWayConflict(t *testing.T) {
-	_, d := chooseTransport(providerModel{Local: &localModel{}, PSRP: &psrpModel{}})
+	_, d := chooseTransport(providerModel{Local: &localModel{}, Winrm: &winrmModel{}})
 	if !d.HasError() {
-		t.Error("local+psrp: want a conflict diagnostic")
+		t.Error("local+winrm: want a conflict diagnostic")
 	}
 }
 
@@ -446,5 +446,92 @@ func TestChooseTransportNone(t *testing.T) {
 	_, d := chooseTransport(providerModel{})
 	if !d.HasError() {
 		t.Error("no block: want a diagnostic")
+	}
+}
+
+func TestChosenModeDefaultsWarm(t *testing.T) {
+	m := providerModel{SSH: &sshModel{Host: types.StringValue("jump")}}
+	mode, diags := chosenMode(m, transportSSH)
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if mode != modeWarm {
+		t.Fatalf("default mode = %v, want modeWarm", mode)
+	}
+}
+
+func TestChosenModeCold(t *testing.T) {
+	m := providerModel{Local: &localModel{Mode: types.StringValue("cold")}}
+	mode, _ := chosenMode(m, transportLocal)
+	if mode != modeCold {
+		t.Fatalf("mode = %v, want modeCold", mode)
+	}
+}
+
+// The default is warm on every transport, not just the one spot-checked above.
+func TestChosenModeDefaultsWarmEveryTransport(t *testing.T) {
+	cases := []struct {
+		name string
+		m    providerModel
+		kind transportKind
+	}{
+		{"local", providerModel{Local: &localModel{}}, transportLocal},
+		{"ssh", providerModel{SSH: &sshModel{}}, transportSSH},
+		{"winrm", providerModel{Winrm: &winrmModel{}}, transportWinrm},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mode, diags := chosenMode(tc.m, tc.kind)
+			if diags.HasError() {
+				t.Fatalf("diags: %v", diags)
+			}
+			if mode != modeWarm {
+				t.Fatalf("%s default mode = %v, want modeWarm", tc.name, mode)
+			}
+		})
+	}
+}
+
+// An unrecognised mode value is refused with an attribute-scoped diagnostic
+// rather than silently treated as warm.
+func TestChosenModeRejectsGarbage(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{Mode: types.StringValue("tepid")}}
+	_, diags := chosenMode(m, transportWinrm)
+	if !diags.HasError() {
+		t.Fatal("an unknown mode must be an attribute error")
+	}
+	first := diags.Errors()[0]
+	if _, ok := first.(diag.DiagnosticWithPath); !ok {
+		t.Error("the diagnostic must carry an attribute path")
+	}
+}
+
+// The warm resolvers reuse the cold transports' own resolution, so the ssh
+// connection fields land in the warm config's embedded ssh config unchanged.
+func TestResolveSSHWarmReusesSSHFields(t *testing.T) {
+	m := providerModel{SSH: &sshModel{
+		Host: types.StringValue("jump"), User: types.StringValue("svc"),
+		Password: types.StringValue("hunter2"), InsecureIgnoreHostKey: types.BoolValue(true),
+	}}
+	cfg, diags := resolveSSHWarm(m, func(string) string { return "" })
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if cfg.SSH.Host != "jump" || cfg.SSH.User != "svc" {
+		t.Fatalf("ssh connection fields not carried into warm config: %+v", cfg.SSH)
+	}
+}
+
+func TestResolveLocalWarmCarriesLocalFields(t *testing.T) {
+	m := providerModel{Local: &localModel{
+		MaxConcurrency: types.Int64Value(6),
+		Timeout:        types.StringValue("10s"),
+	}}
+	cfg, diags := resolveLocalWarm(m, env(nil))
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if cfg.Concurrency != 6 || cfg.Timeout != 10*time.Second || cfg.PwshPath != "pwsh" {
+		t.Fatalf("local fields not carried into warm config: %+v", cfg)
 	}
 }

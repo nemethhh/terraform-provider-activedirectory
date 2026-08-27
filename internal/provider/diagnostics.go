@@ -111,7 +111,7 @@ func renderError(op, resourceType string, err error) (summary, detail string) {
 			"filter_by or ldap_filter), or raise max_results if you really do want them all.\n")
 	case adpwsh.KindUnsupported:
 		summary = fmt.Sprintf("%s not supported by this endpoint", op)
-		b.WriteString("\nA ConstrainedLanguage sandbox endpoint (psrp.language_mode = \"constrained\") " +
+		b.WriteString("\nA ConstrainedLanguage sandbox endpoint (winrm.language_mode = \"constrained\") " +
 			"cannot run ACL delegation.\n")
 	default:
 		summary = "Active Directory operation failed"

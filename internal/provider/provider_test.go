@@ -91,6 +91,51 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
+// winrm+cold has no implementation yet, so Configure refuses it with a
+// mode-scoped diagnostic before it opens a WinRM socket — a unit test.
+func TestConfigureRejectsWinrmCold(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  winrm {
+    host = "dc1.corp.local"
+    mode = "cold"
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`WinRM cold mode is not yet available`),
+		}},
+	})
+}
+
+// An unknown mode value is refused by the schema's OneOf validator, before
+// Configure runs at all.
+func TestConfigureRejectsUnknownMode(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  local {
+    mode = "tepid"
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`(?i)value must be one of`),
+		}},
+	})
+}
+
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(dir.Transport())),

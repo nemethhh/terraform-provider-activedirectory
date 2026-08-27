@@ -13,7 +13,7 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
-	adpsrp "github.com/nemethhh/go-adpwsh/transport/psrp"
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 )
 
@@ -39,23 +39,28 @@ const (
 	envPwshPath = "AD_ACC_PWSH_PATH" // omit to use pwsh on PATH
 
 	// envTransport selects the deployment under test: "local" (the default, and
-	// the only one that can run on the host itself), "ssh", or "psrp". A 5.1
-	// endpoint is reached over psrp from wherever the suite runs.
+	// the only one that can run on the host itself), "ssh", or "winrm". A 5.1
+	// endpoint is reached over winrm from wherever the suite runs.
 	envTransport = "AD_ACC_TRANSPORT"
+
+	// envMode selects the execution mode emitted into the transport block:
+	// "cold" or "warm". Empty leaves the attribute out, so the provider's own
+	// default (warm) applies — which is what the pre-two-axis runs expect.
+	envMode = "AD_ACC_MODE"
 
 	// The ssh transport's own settings.
 	envSSHHost    = "AD_ACC_SSH_HOST"
 	envSSHUser    = "AD_ACC_SSH_USER"
 	envSSHKeyPath = "AD_ACC_SSH_KEY_PATH"
 
-	// The psrp transport's own settings. Kerberos files come from the ambient
+	// The winrm transport's own settings. Kerberos files come from the ambient
 	// KRB5_CONFIG and KRB5CCNAME, which the library already reads.
-	envPSRPHost         = "AD_ACC_PSRP_HOST"
-	envPSRPUser         = "AD_ACC_PSRP_USER"
-	envPSRPPassword     = "AD_ACC_PSRP_PASSWORD"
-	envPSRPSPN          = "AD_ACC_PSRP_SPN"
-	envPSRPConfigName   = "AD_ACC_PSRP_CONFIGURATION_NAME"
-	envPSRPLanguageMode = "AD_ACC_PSRP_LANGUAGE_MODE"
+	envWinrmHost         = "AD_ACC_WINRM_HOST"
+	envWinrmUser         = "AD_ACC_WINRM_USER"
+	envWinrmPassword     = "AD_ACC_WINRM_PASSWORD"
+	envWinrmSPN          = "AD_ACC_WINRM_SPN"
+	envWinrmConfigName   = "AD_ACC_WINRM_CONFIGURATION_NAME"
+	envWinrmLanguageMode = "AD_ACC_WINRM_LANGUAGE_MODE"
 )
 
 // accPreCheck fails the test when a required variable is missing. t.Fatal, not
@@ -86,14 +91,14 @@ func accPreCheck(t *testing.T, alsoRequired ...string) func() {
 			if os.Getenv(envSSHHost) == "" {
 				t.Fatalf("%s=ssh requires %s", envTransport, envSSHHost)
 			}
-		case "psrp":
-			if os.Getenv(envPSRPHost) == "" {
-				t.Fatalf("%s=psrp requires %s", envTransport, envPSRPHost)
+		case "winrm":
+			if os.Getenv(envWinrmHost) == "" {
+				t.Fatalf("%s=winrm requires %s", envTransport, envWinrmHost)
 			}
 			// go-psrp needs the principal name even with an ambient ticket
 			// cache: Linux has no SSPI single sign-on to infer it from.
-			if os.Getenv(envPSRPUser) == "" {
-				t.Fatalf("%s=psrp requires %s", envTransport, envPSRPUser)
+			if os.Getenv(envWinrmUser) == "" {
+				t.Fatalf("%s=winrm requires %s", envTransport, envWinrmUser)
 			}
 		}
 	}
@@ -105,10 +110,10 @@ func accTransportName() string {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envTransport))); v {
 	case "", "local":
 		return "local"
-	case "ssh", "psrp":
+	case "ssh", "winrm":
 		return v
 	default:
-		panic(fmt.Sprintf("%s=%q: want local, ssh or psrp", envTransport, v))
+		panic(fmt.Sprintf("%s=%q: want local, ssh or winrm", envTransport, v))
 	}
 }
 
@@ -130,26 +135,28 @@ func accTransportBlock() string {
 		// A lab jump box has no host key in a known_hosts file on a throwaway
 		// CI agent. This is a test harness, not a deployment recommendation.
 		b.WriteString("    insecure_ignore_host_key = true\n")
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
-	case "psrp":
-		b.WriteString("  psrp {\n")
-		fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envPSRPHost))
-		if v := os.Getenv(envPSRPUser); v != "" {
+	case "winrm":
+		b.WriteString("  winrm {\n")
+		fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envWinrmHost))
+		if v := os.Getenv(envWinrmUser); v != "" {
 			fmt.Fprintf(&b, "    user = %q\n", v)
 		}
-		if v := os.Getenv(envPSRPPassword); v != "" {
+		if v := os.Getenv(envWinrmPassword); v != "" {
 			fmt.Fprintf(&b, "    password = %q\n", v)
 		}
-		if v := os.Getenv(envPSRPSPN); v != "" {
+		if v := os.Getenv(envWinrmSPN); v != "" {
 			fmt.Fprintf(&b, "    spn = %q\n", v)
 		}
-		if v := os.Getenv(envPSRPConfigName); v != "" {
+		if v := os.Getenv(envWinrmConfigName); v != "" {
 			fmt.Fprintf(&b, "    configuration_name = %q\n", v)
 		}
-		if v := os.Getenv(envPSRPLanguageMode); v != "" {
+		if v := os.Getenv(envWinrmLanguageMode); v != "" {
 			fmt.Fprintf(&b, "    language_mode = %q\n", v)
 		}
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
 	default:
@@ -157,10 +164,21 @@ func accTransportBlock() string {
 		if v := os.Getenv(envPwshPath); v != "" {
 			fmt.Fprintf(&b, "    pwsh_path = %q\n", v)
 		}
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
 	}
 	return b.String()
+}
+
+// accModeLine renders the transport block's `mode` attribute from AD_ACC_MODE.
+// Empty emits nothing, leaving the provider's default (warm) in force — so a
+// run that predates the two-axis config behaves exactly as it did before.
+func accModeLine() string {
+	if v := os.Getenv(envMode); v != "" {
+		return fmt.Sprintf("    mode = %q\n", v)
+	}
+	return ""
 }
 
 // accProviderConfig is the provider block the acceptance suite runs against.
@@ -176,6 +194,15 @@ func accTransportBlock() string {
 func accProviderConfig(extraBlocks ...string) string {
 	var b strings.Builder
 	b.WriteString("provider \"activedirectory\" {\n")
+	// The ssh transport reads the top-level pwsh_path (the ssh block has none),
+	// so emitting it here selects the jump box's PowerShell — Windows PowerShell
+	// 5.1 vs 7 — for the cold path. Warm ssh ignores it: the sshd `powershell`
+	// subsystem launches pwsh 7 itself.
+	if accTransportName() == "ssh" {
+		if v := os.Getenv(envPwshPath); v != "" {
+			fmt.Fprintf(&b, "  pwsh_path = %q\n", v)
+		}
+	}
 	b.WriteString(accTransportBlock())
 	b.WriteString("\n")
 
@@ -247,23 +274,23 @@ func accTransport(t *testing.T) adpwsh.Transport {
 			t.Fatalf("acceptance: cannot open the ssh transport: %v", err)
 		}
 		return tr
-	case "psrp":
-		tr, err := adpsrp.New(adpsrp.Config{
-			Host:              os.Getenv(envPSRPHost),
-			Username:          os.Getenv(envPSRPUser),
-			Password:          os.Getenv(envPSRPPassword),
-			SPN:               os.Getenv(envPSRPSPN),
-			ConfigurationName: os.Getenv(envPSRPConfigName),
+	case "winrm":
+		tr, err := adwinrm.New(adwinrm.Config{
+			Host:              os.Getenv(envWinrmHost),
+			Username:          os.Getenv(envWinrmUser),
+			Password:          os.Getenv(envWinrmPassword),
+			SPN:               os.Getenv(envWinrmSPN),
+			ConfigurationName: os.Getenv(envWinrmConfigName),
 			// The verification client must reach AD the same way the provider does,
 			// including the language mode: against a constrained sandbox endpoint a
 			// full-language wrapper's [Console]::SetIn is rejected by CLM.
-			LanguageMode: os.Getenv(envPSRPLanguageMode),
+			LanguageMode: os.Getenv(envWinrmLanguageMode),
 			Krb5ConfPath: os.Getenv("KRB5_CONFIG"),
 			CCachePath:   strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
 			Concurrency:  1,
 		})
 		if err != nil {
-			t.Fatalf("acceptance: cannot open the psrp transport: %v", err)
+			t.Fatalf("acceptance: cannot open the winrm transport: %v", err)
 		}
 		return tr
 	default:
@@ -345,16 +372,16 @@ func TestProviderConfigComposition(t *testing.T) {
 		wants     []string
 		rejects   []string
 	}{
-		{"", []string{"local {"}, []string{"ssh {", "psrp {"}},
-		{"local", []string{"local {"}, []string{"ssh {", "psrp {"}},
-		{"ssh", []string{"ssh {", `host = "jump.example.com"`}, []string{"local {", "psrp {"}},
-		{"psrp", []string{"psrp {", `configuration_name = "AdObjects51"`}, []string{"local {", "ssh {"}},
+		{"", []string{"local {"}, []string{"ssh {", "winrm {"}},
+		{"local", []string{"local {"}, []string{"ssh {", "winrm {"}},
+		{"ssh", []string{"ssh {", `host = "jump.example.com"`}, []string{"local {", "winrm {"}},
+		{"winrm", []string{"winrm {", `configuration_name = "AdObjects51"`}, []string{"local {", "ssh {"}},
 	} {
 		t.Run("transport="+tc.transport, func(t *testing.T) {
 			t.Setenv(envTransport, tc.transport)
 			t.Setenv(envSSHHost, "jump.example.com")
-			t.Setenv(envPSRPHost, "mgmt.example.com")
-			t.Setenv(envPSRPConfigName, "AdObjects51")
+			t.Setenv(envWinrmHost, "mgmt.example.com")
+			t.Setenv(envWinrmConfigName, "AdObjects51")
 
 			got := accProviderConfig()
 			for _, w := range tc.wants {

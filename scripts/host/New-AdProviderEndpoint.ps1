@@ -18,7 +18,7 @@
     an OU and a group, and was refused by the domain controller outside its OU.
 
 .PARAMETER TierName
-    Endpoint name; the value teams put in psrp.configuration_name. Name it for the
+    Endpoint name; the value teams put in winrm.configuration_name. Name it for the
     capability tier, e.g. AdObjects or AdReadOnly.
 
 .PARAMETER GrantTo
@@ -70,7 +70,7 @@
     constrained mode (a different delivery path) or drops (ACL).
 
     Teams pointed at this endpoint must set the provider's
-    psrp.language_mode = "constrained".
+    winrm.language_mode = "constrained".
 
 .EXAMPLE
     .\New-AdProviderEndpoint.ps1 -TierName AdObjects -GrantTo 'CORP\AD-Terraform-Objects' -Capability ou,group,user
@@ -207,7 +207,7 @@ $langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required
 
 Write-Host ''
 if ($Sandbox) {
-    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, stock cmdlets only). Teams must set the provider's psrp.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
+    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, stock cmdlets only). Teams must set the provider's winrm.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
 } elseif ($RestrictCmdlets) {
     Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage -- a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
 } else {
@@ -224,7 +224,7 @@ to this host, once for the directory calls -- the second is what Active Director
 checks against their OU delegation):
 
   provider "activedirectory" {
-    psrp {
+    winrm {
       host               = "$fqdn"
       configuration_name = "$TierName"$langModeLine
       user               = "DOMAIN\\svc_teamx"
@@ -259,6 +259,6 @@ On the Linux CI agent, before terraform runs:
   export KRB5_CONFIG=`$WORKSPACE/krb5.conf KRB5CCNAME=FILE:`$WORKSPACE/ccache
   printf '%s' "`$AD_PASSWORD" | kinit svc_teamx@$realm
 
-If $fqdn does not resolve from the agent, set psrp.host to the IP and add
+If $fqdn does not resolve from the agent, set winrm.host to the IP and add
 spn = "HTTP/$fqdn".
 "@

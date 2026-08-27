@@ -55,16 +55,19 @@ printf '%s' "$pass" | kinit "${user##*\\}@$realm" >/dev/null
 klist -s || { echo 'kinit produced no usable ticket' >&2; exit 1; }
 
 export TF_ACC=1
-export AD_ACC_TRANSPORT=psrp
-export AD_ACC_PSRP_HOST="$host"
-export AD_ACC_PSRP_SPN="$spn"
-export AD_ACC_PSRP_USER="$user"
-export AD_ACC_PSRP_PASSWORD="$pass"
-export AD_ACC_PSRP_CONFIGURATION_NAME="$config"
+export AD_ACC_TRANSPORT=winrm
+# The winrm transport is warm-only today; LAB_MODE exists for symmetry with the
+# other runners and defaults to warm. (winrm + cold is refused by the provider.)
+export AD_ACC_MODE="${LAB_MODE:-warm}"
+export AD_ACC_WINRM_HOST="$host"
+export AD_ACC_WINRM_SPN="$spn"
+export AD_ACC_WINRM_USER="$user"
+export AD_ACC_WINRM_PASSWORD="$pass"
+export AD_ACC_WINRM_CONFIGURATION_NAME="$config"
 # Empty unless LAB_PSRP_LANGUAGE_MODE=constrained is passed; when set, the acc
-# harness emits `language_mode = "constrained"` into the provider's psrp block so
+# harness emits `language_mode = "constrained"` into the provider's winrm block so
 # the suite runs against a ConstrainedLanguage sandbox endpoint.
-export AD_ACC_PSRP_LANGUAGE_MODE="$langmode"
+export AD_ACC_WINRM_LANGUAGE_MODE="$langmode"
 export AD_ACC_CONTAINER="$container"
 export AD_ACC_DENIED_CONTAINER="$denied"
 export AD_ACC_SERVER="$dc"
