@@ -763,3 +763,70 @@ returned real directory data under an explicit domain credential delivered
 entirely through the payload, which is also what resolves the spike's
 local-account caveat (the SSH/local session lands as a non-domain account;
 `domain.credential` is the answer).
+
+### SSH warm executor (ssh + warm cell), 2026-08-27
+
+`go-adpwsh`'s new `transport/sshwarm` — a pool of persistent `pwsh -sshs`
+runspaces on the jump box, each reached over its own SSH **subsystem** channel and
+driven over the out-of-proc adapter (`internal/oop`) and the shared warm core
+(`internal/warm`), sharing the runspace executor with local+warm via the extracted
+`internal/psrun` — is the second warm cell of the transport × execution-mode matrix
+(`docs/superpowers/specs/2026-08-27-transport-execution-mode-independence-design.md`,
+phase 3). It runs entirely inside go-adpwsh; the `mode`/transport rename in the
+provider is a later phase. Unlike the local-warm run (built on and run *on*
+`s-client`), this was driven **from the Linux dev box**, which SSHes into the jump
+box and opens the subsystem channel — the real ssh-warm topology.
+
+**Registering the `powershell` subsystem (and the sftp-coexistence fix).** Warm-ssh
+needs a clean binary channel, so the jump box must expose `pwsh -sshs` as an sshd
+`Subsystem` (a plain exec of `pwsh -sshs` is corrupted by the remote cmd.exe). The
+design's earlier attempt (§14/§15) broke `sftp` when the line was added. **Root
+cause, confirmed this run:** the naive append put the new directive at the *end* of
+`C:\ProgramData\ssh\sshd_config`, which on this host ends with a `Match Group
+administrators` block — and `Subsystem` is a global-only directive that OpenSSH
+rejects inside a `Match` block, so the whole config failed to parse and sftp went
+with it. The fix is to insert it in the **global** section, right after the
+existing `Subsystem sftp` line. The exact working line (OpenSSH_for_Windows_9.5p2,
+LibreSSL 3.8.2; PowerShell 7 at `C:\Program Files\PowerShell\7\pwsh.exe`):
+
+    Subsystem	powershell	c:/progra~1/powershell/7/pwsh.exe -sshs -nologo
+
+The `progra~1` 8.3 short name sidesteps the space in "Program Files" (sshd's
+`Subsystem` parser mishandles quoted paths with spaces). Deploy safely: back up
+the file, edit it preserving its **ASCII/CRLF, no-BOM** encoding, validate the
+candidate with `sshd -T -f <candidate>` **before** touching the live file (a
+config that passes `-T` cannot lock you out), copy it over, then restart sshd
+**out-of-band** (a one-shot SYSTEM scheduled task, so the session issuing the
+restart is not the one torn down). Verify **both** afterwards: `scp` still works
+(sftp intact) **and** `ssh -s s-client powershell </dev/null` returns the
+out-of-proc `__NamedPipeError__` (the subsystem responds). A rollback copy is left
+at `C:\ProgramData\ssh\sshd_config.bak.sshwarm`.
+
+Validated on `s-client` against `s-server.corp.local` as the delegated non-admin
+`CORP\svc_tfacc`, via the `sshwarmlive`-tagged integration test run from the Linux
+dev box (`x/crypto/ssh` ignores `~/.ssh/config`, so use the address, not the
+alias):
+
+    cd go-adpwsh
+    AD_SSH_HOST=192.168.50.31 AD_SSH_USER=Administrator AD_SSH_KEY=~/.ssh/tf_ad_lab \
+    AD_LIVE_SERVER=s-server.corp.local \
+    AD_LIVE_CREDUSER='<svc.username>' AD_LIVE_CREDPASS='<svc.password>' \
+    AD_LIVE_CONTAINER=OU=tfacc,DC=corp,DC=local AD_LIVE_IDENTITY=krbtgt \
+    go test -tags sshwarmlive ./transport/sshwarm/ -run TestLive -v
+
+Two tests, both green:
+
+- `TestLiveWarmSSHReadsAD` (default pool): read `krbtgt` over a warm subsystem
+  runspace — `sam=krbtgt dn=CN=krbtgt,CN=Users,DC=corp,DC=local`.
+- `TestLiveWarmSSHConcurrentPool` (pool of 4, Terraform-like load): 8 distinct
+  users **created concurrently**, then **40 concurrent reads** across the 4-process
+  pool, each asserting it got back the exact user it asked for — **0 cross-talk in
+  1.53 s** (~38 ms/read amortized, versus the ~1.3 s a cold op costs; the warm win
+  realized the way the provider realizes it — module import amortized across many
+  ops on each pooled process, not two sequential reads on a shrunk pool) — then an
+  update + read-back, with full CRUD teardown that left the delegated OU empty.
+
+This closes the `ssh + warm` cell end-to-end: the shared `psrun` executor drives a
+warm runspace over an SSH subsystem exactly as it does over a local child, the
+`[Console]::SetIn` payload + `-Credential` delivery is byte-clean over the
+subsystem channel, and the pool keeps concurrently-busy operations isolated.
