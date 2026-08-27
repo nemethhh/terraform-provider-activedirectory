@@ -448,3 +448,36 @@ func TestChooseTransportNone(t *testing.T) {
 		t.Error("no block: want a diagnostic")
 	}
 }
+
+func TestChosenModeDefaultsWarm(t *testing.T) {
+	m := providerModel{SSH: &sshModel{Host: types.StringValue("jump")}}
+	mode, diags := chosenMode(m, transportSSH)
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if mode != modeWarm {
+		t.Fatalf("default mode = %v, want modeWarm", mode)
+	}
+}
+
+func TestChosenModeCold(t *testing.T) {
+	m := providerModel{Local: &localModel{Mode: types.StringValue("cold")}}
+	mode, _ := chosenMode(m, transportLocal)
+	if mode != modeCold {
+		t.Fatalf("mode = %v, want modeCold", mode)
+	}
+}
+
+// An unrecognised mode value is refused with an attribute-scoped diagnostic
+// rather than silently treated as warm.
+func TestChosenModeRejectsGarbage(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{Mode: types.StringValue("tepid")}}
+	_, diags := chosenMode(m, transportWinrm)
+	if !diags.HasError() {
+		t.Fatal("an unknown mode must be an attribute error")
+	}
+	first := diags.Errors()[0]
+	if _, ok := first.(diag.DiagnosticWithPath); !ok {
+		t.Error("the diagnostic must carry an attribute path")
+	}
+}

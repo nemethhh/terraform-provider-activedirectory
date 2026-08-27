@@ -93,6 +93,13 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"resource's own default 60s operation budget (see the `timeouts` block on " +
 							"each resource), so that when both are left at their default, the caller's " +
 							"deadline expires first rather than racing the transport's."},
+					"mode": schema.StringAttribute{Optional: true,
+						Validators: []validator.String{stringvalidator.OneOf("cold", "warm")},
+						MarkdownDescription: "Execution mode. `warm` (default) keeps a persistent " +
+							"PowerShell 7 runspace so process startup and `Import-Module ActiveDirectory` " +
+							"are paid once per pooled process and amortized across operations; `cold` runs " +
+							"a fresh `pwsh -EncodedCommand` for every operation. Both modes run `pwsh` on " +
+							"this machine."},
 				},
 			},
 			"ssh": schema.SingleNestedBlock{
@@ -129,6 +136,15 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"(see the `timeouts` block on each resource), so that when both are left " +
 							"at their default, the caller's deadline expires first rather than racing " +
 							"the transport's."},
+					"mode": schema.StringAttribute{Optional: true,
+						Validators: []validator.String{stringvalidator.OneOf("cold", "warm")},
+						MarkdownDescription: "Execution mode. `warm` (default) keeps a persistent " +
+							"PowerShell 7 runspace on the jump box so startup and `Import-Module " +
+							"ActiveDirectory` are paid once per pooled channel and amortized; `cold` " +
+							"runs a fresh `pwsh -EncodedCommand` per operation. `warm` requires " +
+							"PowerShell 7 on the jump box with the `powershell` sshd subsystem " +
+							"registered (`pwsh -sshs`); set `mode = \"cold\"` for a Windows PowerShell " +
+							"5.1 jump box."},
 				},
 			},
 			"winrm": schema.SingleNestedBlock{
@@ -197,6 +213,13 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"(see the `timeouts` block on each resource), so that when both are left " +
 							"at their default, the caller's deadline expires first rather than racing " +
 							"the transport's."},
+					"mode": schema.StringAttribute{Optional: true,
+						Validators: []validator.String{stringvalidator.OneOf("cold", "warm")},
+						MarkdownDescription: "Execution mode. The `winrm` transport is inherently a " +
+							"persistent PSRP runspace, so only `warm` (the default) is supported today. " +
+							"`cold` (a per-operation `pwsh -EncodedCommand` over WinRS) is not yet " +
+							"available and is rejected with a diagnostic pointing here. Omit this, or " +
+							"set `mode = \"warm\"`."},
 				},
 			},
 			"domain": schema.SingleNestedBlock{

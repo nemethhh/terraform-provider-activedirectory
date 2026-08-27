@@ -21,7 +21,7 @@ type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
-	Winrm       *winrmModel        `tfsdk:"winrm"`
+	Winrm       *winrmModel       `tfsdk:"winrm"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
 }
@@ -30,6 +30,7 @@ type localModel struct {
 	PwshPath       types.String `tfsdk:"pwsh_path"`
 	MaxConcurrency types.Int64  `tfsdk:"max_concurrency"`
 	Timeout        types.String `tfsdk:"timeout"`
+	Mode           types.String `tfsdk:"mode"`
 }
 
 type sshModel struct {
@@ -45,6 +46,7 @@ type sshModel struct {
 	InsecureIgnoreHostKey types.Bool   `tfsdk:"insecure_ignore_host_key"`
 	MaxConcurrency        types.Int64  `tfsdk:"max_concurrency"`
 	Timeout               types.String `tfsdk:"timeout"`
+	Mode                  types.String `tfsdk:"mode"`
 }
 
 type winrmModel struct {
@@ -64,6 +66,7 @@ type winrmModel struct {
 	LanguageMode       types.String `tfsdk:"language_mode"`
 	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
 	Timeout            types.String `tfsdk:"timeout"`
+	Mode               types.String `tfsdk:"mode"`
 }
 
 type domainModel struct {
@@ -399,6 +402,62 @@ func (k transportKind) String() string {
 		return "winrm"
 	default:
 		return "unset"
+	}
+}
+
+// executionMode is how pwsh is driven once a transport channel exists: cold runs
+// one `pwsh -EncodedCommand` per operation (re-importing the AD module every
+// time); warm keeps a persistent PSRP runspace so startup and the module import
+// are paid once per pooled shell and amortized. It is orthogonal to the
+// transport (local/ssh/winrm) — a third, independent axis alongside transport
+// and the `domain` AD-identity block.
+type executionMode int
+
+const (
+	modeWarm executionMode = iota // default: persistent PSRP runspace
+	modeCold                      // one-shot pwsh -EncodedCommand per op
+)
+
+func (e executionMode) String() string {
+	if e == modeCold {
+		return "cold"
+	}
+	return "warm"
+}
+
+// chosenMode reads the selected transport block's `mode` attribute, defaulting
+// to warm (the fast path). An unrecognised value is refused against the mode
+// attribute rather than silently treated as warm.
+func chosenMode(m providerModel, kind transportKind) (executionMode, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var raw types.String
+	var root path.Path
+	switch kind {
+	case transportLocal:
+		if m.Local != nil {
+			raw = m.Local.Mode
+		}
+		root = path.Root("local")
+	case transportSSH:
+		if m.SSH != nil {
+			raw = m.SSH.Mode
+		}
+		root = path.Root("ssh")
+	case transportWinrm:
+		if m.Winrm != nil {
+			raw = m.Winrm.Mode
+		}
+		root = path.Root("winrm")
+	}
+	switch strings.ToLower(str(raw, nil, "")) {
+	case "", "warm":
+		return modeWarm, diags
+	case "cold":
+		return modeCold, diags
+	default:
+		diags.AddAttributeError(root.AtName("mode"), "Invalid execution mode",
+			fmt.Sprintf("%q is not a valid mode; use \"warm\" (default) or \"cold\".", raw.ValueString()))
+		return modeWarm, diags
 	}
 }
 
