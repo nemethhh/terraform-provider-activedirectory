@@ -151,19 +151,19 @@ func TestResolveDomainRejectsAHalfCredential(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPDefaultsAndEnv(t *testing.T) {
+func TestResolveWinrmDefaultsAndEnv(t *testing.T) {
 	env := map[string]string{
-		"AD_PSRP_HOST": "dc.corp.local",
+		"AD_WINRM_HOST": "dc.corp.local",
 		"KRB5CCNAME":   "FILE:/tmp/krb5cc",
 	}
 	getenv := func(k string) string { return env[k] }
 
-	cfg, diags := resolvePSRP(providerModel{}, getenv)
+	cfg, diags := resolveWinrm(providerModel{}, getenv)
 	if diags.HasError() {
 		t.Fatalf("unexpected diags: %v", diags)
 	}
 	if cfg.Host != "dc.corp.local" {
-		t.Errorf("Host = %q, want from AD_PSRP_HOST", cfg.Host)
+		t.Errorf("Host = %q, want from AD_WINRM_HOST", cfg.Host)
 	}
 	if cfg.SPN != "HTTP/dc.corp.local" {
 		t.Errorf("SPN = %q, want HTTP/dc.corp.local", cfg.SPN)
@@ -179,34 +179,34 @@ func TestResolvePSRPDefaultsAndEnv(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPConfigWinsOverEnv(t *testing.T) {
+func TestResolveWinrmConfigWinsOverEnv(t *testing.T) {
 	getenv := func(k string) string {
-		if k == "AD_PSRP_HOST" {
+		if k == "AD_WINRM_HOST" {
 			return "env-host"
 		}
 		return ""
 	}
-	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("cfg-host")}}
-	cfg, _ := resolvePSRP(m, getenv)
+	m := providerModel{Winrm: &winrmModel{Host: types.StringValue("cfg-host")}}
+	cfg, _ := resolveWinrm(m, getenv)
 	if cfg.Host != "cfg-host" {
 		t.Errorf("Host = %q, want cfg-host (config beats env)", cfg.Host)
 	}
 }
 
-func TestResolvePSRPMissingHost(t *testing.T) {
-	cfg, diags := resolvePSRP(providerModel{}, func(string) string { return "" })
+func TestResolveWinrmMissingHost(t *testing.T) {
+	cfg, diags := resolveWinrm(providerModel{}, func(string) string { return "" })
 	if !diags.HasError() {
 		t.Error("missing host: want a diagnostic")
 	}
 	_ = cfg
 }
 
-func TestResolvePSRPLanguageMode(t *testing.T) {
-	m := providerModel{PSRP: &psrpModel{
+func TestResolveWinrmLanguageMode(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{
 		Host:         types.StringValue("h"),
 		LanguageMode: types.StringValue("constrained"),
 	}}
-	cfg, diags := resolvePSRP(m, func(string) string { return "" })
+	cfg, diags := resolveWinrm(m, func(string) string { return "" })
 	if diags.HasError() {
 		t.Fatalf("unexpected diags: %v", diags)
 	}
@@ -215,10 +215,10 @@ func TestResolvePSRPLanguageMode(t *testing.T) {
 	}
 }
 
-func TestResolvePSRPLanguageModeEnv(t *testing.T) {
-	m := providerModel{PSRP: &psrpModel{Host: types.StringValue("h")}}
-	env := map[string]string{"AD_PSRP_LANGUAGE_MODE": "constrained"}
-	cfg, _ := resolvePSRP(m, func(k string) string { return env[k] })
+func TestResolveWinrmLanguageModeEnv(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{Host: types.StringValue("h")}}
+	env := map[string]string{"AD_WINRM_LANGUAGE_MODE": "constrained"}
+	cfg, _ := resolveWinrm(m, func(k string) string { return env[k] })
 	if cfg.LanguageMode != "constrained" {
 		t.Errorf("env LanguageMode = %q, want constrained", cfg.LanguageMode)
 	}
@@ -428,17 +428,17 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 	}
 }
 
-func TestChooseTransportPSRP(t *testing.T) {
-	k, d := chooseTransport(providerModel{PSRP: &psrpModel{}})
-	if d.HasError() || k != transportPSRP {
-		t.Fatalf("psrp-only: kind=%v diags=%v", k, d)
+func TestChooseTransportWinrm(t *testing.T) {
+	k, d := chooseTransport(providerModel{Winrm: &winrmModel{}})
+	if d.HasError() || k != transportWinrm {
+		t.Fatalf("winrm-only: kind=%v diags=%v", k, d)
 	}
 }
 
 func TestChooseTransportThreeWayConflict(t *testing.T) {
-	_, d := chooseTransport(providerModel{Local: &localModel{}, PSRP: &psrpModel{}})
+	_, d := chooseTransport(providerModel{Local: &localModel{}, Winrm: &winrmModel{}})
 	if !d.HasError() {
-		t.Error("local+psrp: want a conflict diagnostic")
+		t.Error("local+winrm: want a conflict diagnostic")
 	}
 }
 
