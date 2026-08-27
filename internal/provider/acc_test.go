@@ -13,8 +13,8 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
-	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
 // The acceptance suite's environment. TF_ACC is Terraform's own gate and is

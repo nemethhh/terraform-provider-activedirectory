@@ -862,3 +862,34 @@ runs (`powershell.exe -EncodedCommand`); `ssh + warm` drives the `powershell`
 sshd subsystem (`pwsh -sshs`); `winrm + warm` picks its engine by session
 configuration (5.1 vs pwsh 7). Default warm was validated as the real default:
 where a cell left `mode` unset it constructed the warm transport.
+
+### winrm + cold — implemented, lab-tested, and refused, 2026-08-27
+
+The final matrix cell, `winrm + cold` (one fresh WinRS `pwsh -EncodedCommand`
+per op over WSMan), was built in `go-adpwsh` v0.16.0 (`transport/winrm.NewCold`;
+that release also renames `transport/psrp` → `transport/winrm`, since PSRP is the
+protocol running *over* the WinRM transport, not a transport itself) and run
+against `s-client`. **It does not work, for two independent reasons:**
+
+1. **Command size (fundamental).** The first operation — the provider's
+   Configure-time domain probe — produced a **28,568-char** encoded command. Every
+   go-adpwsh operation carries a ~10 KB PowerShell preamble (credential rebuild,
+   error handling, envelope markers); base64-of-UTF16 is ~2.7×, so even a trivial
+   op is ~28 KB encoded. A WinRS command travels on a cmd.exe command line, capped
+   near **8191 chars** — so *no* real op fits. This is not a "large op" edge case;
+   it is the baseline.
+2. **Permissions.** With the size guard raised experimentally, WinRS shell
+   creation itself returned WSMan `AccessDenied` (HTTP 500): the `svc_tfacc`
+   account is granted the custom `AdObjects51`/`AdObjects7` PSRP session
+   configurations, not the default WinRS/cmd shell.
+
+Per the design's deferred review decision (spec §14), `winrm + cold` is therefore
+**refused with a clear diagnostic** ("WinRM cold mode is not supported … use
+`mode = "warm"`"), unit-tested by `TestConfigureRejectsWinrmCold`. `winrm + warm`
+(PSRP) has no command-size limit and is strictly faster, so nothing is lost.
+`go-adpwsh` v0.16.0's `NewCold` stays in the library (unit-tested, size-limited)
+but is unused by the provider; a future stdin-fed delivery could revive it.
+
+This completes the transport × mode matrix at **five supported cells**
+(`local`/`ssh` × `cold`/`warm`, `winrm` × `warm`); `winrm + cold` is a documented,
+lab-confirmed non-cell.

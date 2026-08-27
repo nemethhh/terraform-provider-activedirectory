@@ -25,9 +25,9 @@ import (
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
-	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 	adsshwarm "github.com/nemethhh/go-adpwsh/transport/sshwarm"
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
 type adProvider struct {
@@ -217,10 +217,12 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"the transport's."},
 					"mode": schema.StringAttribute{Optional: true,
 						Validators: []validator.String{stringvalidator.OneOf("cold", "warm")},
-						MarkdownDescription: "Execution mode. The `winrm` transport is inherently a " +
-							"persistent PSRP runspace, so only `warm` (the default) is supported today. " +
-							"`cold` (a per-operation `pwsh -EncodedCommand` over WinRS) is not yet " +
-							"available and is rejected with a diagnostic pointing here. Omit this, or " +
+						MarkdownDescription: "Execution mode. Only `warm` (the default) is supported " +
+							"on `winrm`: it keeps a persistent PSRP runspace, paying `pwsh` startup " +
+							"and `Import-Module ActiveDirectory` once. `cold` is rejected with a " +
+							"diagnostic — a one-shot `pwsh -EncodedCommand` per operation would have to " +
+							"travel on the WinRS command line, but every AD operation's encoded " +
+							"preamble is tens of kilobytes, past the WinRS ~8 KB limit. Omit this, or " +
 							"set `mode = \"warm\"`."},
 				},
 			},
@@ -352,9 +354,13 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		case transportWinrm:
 			if mode == modeCold {
 				resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("mode"),
-					"WinRM cold mode is not yet available",
-					"The `winrm` transport currently supports only `mode = \"warm\"` (PSRP over a "+
-						"persistent runspace). Set `mode = \"warm\"` or omit it.")
+					"WinRM cold mode is not supported",
+					"Every Active Directory operation carries a PowerShell preamble that, once "+
+						"base64-encoded, is tens of kilobytes — well past the WinRS command line's "+
+						"~8 KB limit — so the `winrm` transport cannot deliver a one-shot "+
+						"`pwsh -EncodedCommand` per operation. Use `mode = \"warm\"` (a persistent "+
+						"PSRP runspace), which has no command-size limit and is faster. Set "+
+						"`mode = \"warm\"` or omit it.")
 				return
 			}
 			c, d := resolveWinrm(cfg, os.Getenv)

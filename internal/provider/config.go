@@ -14,9 +14,9 @@ import (
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
-	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
 	adsshwarm "github.com/nemethhh/go-adpwsh/transport/sshwarm"
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
 type providerModel struct {

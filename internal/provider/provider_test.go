@@ -91,8 +91,10 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
-// winrm+cold has no implementation yet, so Configure refuses it with a
-// mode-scoped diagnostic before it opens a WinRM socket — a unit test.
+// winrm+cold is refused: an AD operation's encoded preamble far exceeds the
+// WinRS command-line limit, so a one-shot pwsh -EncodedCommand per op cannot be
+// delivered. Configure rejects it with a mode-scoped diagnostic before it opens
+// a WinRM socket — a unit test. (Lab-confirmed 2026-08-27; see LAB.md.)
 func TestConfigureRejectsWinrmCold(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories(),
@@ -109,7 +111,7 @@ resource "activedirectory_ou" "unreachable" {
   name      = "tfacc-never-created"
   container = "DC=corp,DC=local"
 }`,
-			ExpectError: regexp.MustCompile(`WinRM cold mode is not yet available`),
+			ExpectError: regexp.MustCompile(`WinRM cold mode is not supported`),
 		}},
 	})
 }

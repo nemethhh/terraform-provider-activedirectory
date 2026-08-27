@@ -53,7 +53,9 @@ provider "activedirectory" {
 # double hop. Add a domain.credential block to work around it.
 
 # Alternatively, reach a domain controller over WinRM with Kerberos. The winrm
-# transport is a persistent PSRP runspace, so its mode is always warm today:
+# transport is warm only (a persistent PSRP runspace); mode = "cold" is rejected
+# because an AD operation's encoded preamble exceeds the WinRS command-line
+# limit. Use ssh or local if you need a cold, one-pwsh-per-operation mode.
 # provider "activedirectory" {
 #   winrm {
 #     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local

@@ -222,7 +222,9 @@ lab-acc-psrp-only:
 # One target per supported cell of the two-axis design (transport x mode), with
 # the PowerShell version split where it is real: ssh+cold runs on 5.1 or 7, and
 # winrm+warm picks its engine by session configuration (AdObjects51 vs
-# AdObjects7). winrm+cold is intentionally absent — the provider refuses it.
+# AdObjects7). winrm+cold is intentionally absent — the provider refuses it,
+# because an AD operation's encoded preamble exceeds the WinRS command-line
+# limit (lab-confirmed 2026-08-27; see LAB.md).
 #
 # | cell                | transport | mode | pwsh | runner            |
 # |---------------------|-----------|------|------|-------------------|
