@@ -43,6 +43,11 @@ const (
 	// endpoint is reached over winrm from wherever the suite runs.
 	envTransport = "AD_ACC_TRANSPORT"
 
+	// envMode selects the execution mode emitted into the transport block:
+	// "cold" or "warm". Empty leaves the attribute out, so the provider's own
+	// default (warm) applies — which is what the pre-two-axis runs expect.
+	envMode = "AD_ACC_MODE"
+
 	// The ssh transport's own settings.
 	envSSHHost    = "AD_ACC_SSH_HOST"
 	envSSHUser    = "AD_ACC_SSH_USER"
@@ -130,6 +135,7 @@ func accTransportBlock() string {
 		// A lab jump box has no host key in a known_hosts file on a throwaway
 		// CI agent. This is a test harness, not a deployment recommendation.
 		b.WriteString("    insecure_ignore_host_key = true\n")
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
 	case "winrm":
@@ -150,6 +156,7 @@ func accTransportBlock() string {
 		if v := os.Getenv(envWinrmLanguageMode); v != "" {
 			fmt.Fprintf(&b, "    language_mode = %q\n", v)
 		}
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
 	default:
@@ -157,10 +164,21 @@ func accTransportBlock() string {
 		if v := os.Getenv(envPwshPath); v != "" {
 			fmt.Fprintf(&b, "    pwsh_path = %q\n", v)
 		}
+		b.WriteString(accModeLine())
 		b.WriteString("    max_concurrency = 4\n")
 		b.WriteString("  }\n")
 	}
 	return b.String()
+}
+
+// accModeLine renders the transport block's `mode` attribute from AD_ACC_MODE.
+// Empty emits nothing, leaving the provider's default (warm) in force — so a
+// run that predates the two-axis config behaves exactly as it did before.
+func accModeLine() string {
+	if v := os.Getenv(envMode); v != "" {
+		return fmt.Sprintf("    mode = %q\n", v)
+	}
+	return ""
 }
 
 // accProviderConfig is the provider block the acceptance suite runs against.
@@ -176,6 +194,15 @@ func accTransportBlock() string {
 func accProviderConfig(extraBlocks ...string) string {
 	var b strings.Builder
 	b.WriteString("provider \"activedirectory\" {\n")
+	// The ssh transport reads the top-level pwsh_path (the ssh block has none),
+	// so emitting it here selects the jump box's PowerShell — Windows PowerShell
+	// 5.1 vs 7 — for the cold path. Warm ssh ignores it: the sshd `powershell`
+	// subsystem launches pwsh 7 itself.
+	if accTransportName() == "ssh" {
+		if v := os.Getenv(envPwshPath); v != "" {
+			fmt.Fprintf(&b, "  pwsh_path = %q\n", v)
+		}
+	}
 	b.WriteString(accTransportBlock())
 	b.WriteString("\n")
 

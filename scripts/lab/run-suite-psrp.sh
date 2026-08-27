@@ -56,6 +56,9 @@ klist -s || { echo 'kinit produced no usable ticket' >&2; exit 1; }
 
 export TF_ACC=1
 export AD_ACC_TRANSPORT=winrm
+# The winrm transport is warm-only today; LAB_MODE exists for symmetry with the
+# other runners and defaults to warm. (winrm + cold is refused by the provider.)
+export AD_ACC_MODE="${LAB_MODE:-warm}"
 export AD_ACC_WINRM_HOST="$host"
 export AD_ACC_WINRM_SPN="$spn"
 export AD_ACC_WINRM_USER="$user"

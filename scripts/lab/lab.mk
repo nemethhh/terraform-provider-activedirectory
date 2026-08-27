@@ -27,6 +27,7 @@ LAB_CONTAINER        ?= OU=tfacc,DC=corp,DC=local
 LAB_DENIED_CONTAINER ?= OU=tfacc-denied,DC=corp,DC=local
 LAB_E2E_CONTAINER    ?= OU=e2e,DC=corp,DC=local
 LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
+LAB_PWSH51           ?= C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
 
 # The psrp path runs the suite here rather than on the member, so the engine is
 # chosen by which session configuration it opens: AdObjects51 is a Windows
@@ -38,6 +39,8 @@ LAB_PWSH             ?= C:\Program Files\PowerShell\7\pwsh.exe
 LAB_PSRP_HOST   ?= 192.168.50.31
 LAB_PSRP_SPN    ?= HTTP/s-client.corp.local
 LAB_PSRP_CONFIG ?= AdObjects51
+# The PowerShell 7 WinRM endpoint, the winrm+warm+7 matrix cell's engine.
+LAB_WINRM_CONFIG7 ?= AdObjects7
 LAB_REALM       ?= CORP.LOCAL
 LAB_DC_FQDN     ?= s-server.corp.local
 LAB_DC2_FQDN    ?= s-server2.corp.local
@@ -56,6 +59,8 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
+        lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
+        lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -82,6 +87,14 @@ lab-help:
 	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
 	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
+	@echo ''
+	@echo '  Transport x mode x pwsh matrix (PATTERN=<re> MINUTES=<n> override; full TestAcc by default):'
+	@echo '    lab-acc-matrix             every supported cell in turn, then a pass/fail summary'
+	@echo '                               (defaults to a fast lifecycle suite; PATTERN=TestAcc for the full sweep)'
+	@echo '    lab-acc-local-cold / -warm      local transport on the member, cold vs warm (pwsh 7)'
+	@echo '    lab-acc-ssh-cold-51 / -cold-7   ssh cold over Windows PowerShell 5.1 vs pwsh 7'
+	@echo '    lab-acc-ssh-warm                ssh warm (pwsh -sshs subsystem, pwsh 7)'
+	@echo '    lab-acc-winrm-51 / -winrm-7     winrm warm over the 5.1 vs pwsh 7 endpoint'
 	@echo '    lab-e2e-fixtures           e2e OUs and three delegated principals (one-time, admin)'
 	@echo '    lab-e2e                    ship, then run the whole e2e suite'
 	@echo '    lab-e2e-only PATTERN=<re>  run one e2e suite, or any -run pattern'
@@ -203,6 +216,77 @@ lab-acc-psrp:
 lab-acc-psrp-only:
 	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
 	$(LAB_DIR)/run-suite-psrp.sh '$(PATTERN)' $(or $(MINUTES),40)
+
+# --- transport x mode x powershell-version matrix ---------------------------
+#
+# One target per supported cell of the two-axis design (transport x mode), with
+# the PowerShell version split where it is real: ssh+cold runs on 5.1 or 7, and
+# winrm+warm picks its engine by session configuration (AdObjects51 vs
+# AdObjects7). winrm+cold is intentionally absent — the provider refuses it.
+#
+# | cell                | transport | mode | pwsh | runner            |
+# |---------------------|-----------|------|------|-------------------|
+# | lab-acc-local-cold  | local     | cold | 7    | on member (ship)  |
+# | lab-acc-local-warm  | local     | warm | 7    | on member (ship)  |
+# | lab-acc-ssh-cold-51 | ssh       | cold | 5.1  | from here         |
+# | lab-acc-ssh-cold-7  | ssh       | cold | 7    | from here         |
+# | lab-acc-ssh-warm    | ssh       | warm | 7    | from here         |
+# | lab-acc-winrm-51    | winrm     | warm | 5.1  | from here         |
+# | lab-acc-winrm-7     | winrm     | warm | 7    | from here         |
+#
+# Each cell defaults to the full TestAcc suite; override with PATTERN=<re> and
+# MINUTES=<n>. Local cells ship the committed tree to the member and run there
+# (like lab-acc). ssh/winrm cells run the working tree from here against the
+# released go-adpwsh (GOWORK=off), so a code change is exercised without a
+# commit. warm needs pwsh 7 on the target (for ssh, the `powershell` sshd
+# subsystem). A '|' alternation in PATTERN is safe for ssh/winrm (run here) but
+# not for the local cells (they cross cmd.exe on the member) — use a prefix.
+MATRIX_CELLS := lab-acc-local-cold lab-acc-local-warm \
+                lab-acc-ssh-cold-51 lab-acc-ssh-cold-7 lab-acc-ssh-warm \
+                lab-acc-winrm-51 lab-acc-winrm-7
+
+lab-acc-local-cold: lab-ship
+	LAB_MODE=cold $(LAB_DIR)/run-suite.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-local-warm: lab-ship
+	LAB_MODE=warm $(LAB_DIR)/run-suite.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-ssh-cold-51:
+	GOWORK=off LAB_MODE=cold LAB_PWSH='$(LAB_PWSH51)' \
+	  $(LAB_DIR)/run-suite-ssh.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-ssh-cold-7:
+	GOWORK=off LAB_MODE=cold LAB_PWSH='$(LAB_PWSH)' \
+	  $(LAB_DIR)/run-suite-ssh.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-ssh-warm:
+	GOWORK=off LAB_MODE=warm \
+	  $(LAB_DIR)/run-suite-ssh.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-winrm-51:
+	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_PSRP_CONFIG) \
+	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-winrm-7:
+	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_WINRM_CONFIG7) \
+	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+# Run every matrix cell in turn, continuing past a failure and printing a
+# pass/fail summary at the end (exit non-zero if any cell failed). The single
+# command defaults to a fast representative lifecycle suite so the whole sweep is
+# practical; PATTERN=TestAcc MINUTES=90 runs the full suite in each cell.
+lab-acc-matrix:
+	@fail=0; results=''; \
+	for t in $(MATRIX_CELLS); do \
+	  echo; echo "=== matrix cell: $$t ==="; \
+	  if $(MAKE) --no-print-directory $$t PATTERN='$(or $(PATTERN),TestAccOULifecycle)' MINUTES='$(or $(MINUTES),40)'; then \
+	    results="$$results\nPASS  $$t"; \
+	  else \
+	    results="$$results\nFAIL  $$t"; fail=1; \
+	  fi; \
+	done; \
+	echo; echo '=== matrix summary ==='; printf '%b\n' "$$results"; \
+	exit $$fail
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30
