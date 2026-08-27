@@ -830,3 +830,35 @@ This closes the `ssh + warm` cell end-to-end: the shared `psrun` executor drives
 warm runspace over an SSH subsystem exactly as it does over a local child, the
 `[Console]::SetIn` payload + `-Credential` delivery is byte-clean over the
 subsystem channel, and the pool keeps concurrently-busy operations isolated.
+
+### Provider two-axis config — full matrix, 2026-08-27
+
+The provider now models transport (`local`/`ssh`/`winrm`) and execution mode
+(`cold`/`warm`, default warm) as independent axes; `psrp {}` was renamed to
+`winrm {}`. The lab targets `make lab-acc-<cell>` and `make lab-acc-matrix` run
+one acceptance suite per supported cell. `make lab-acc-matrix
+PATTERN=TestAccOULifecycle MINUTES=8` — every supported (transport × mode ×
+PowerShell) cell, all green:
+
+| cell | target | pwsh | result |
+|---|---|---|---|
+| local + cold | `lab-acc-local-cold`  | 7   | PASS 50.0s (on member) |
+| local + warm | `lab-acc-local-warm`  | 7   | PASS 46.3s (on member) |
+| ssh + cold   | `lab-acc-ssh-cold-51` | 5.1 | PASS 46.9s |
+| ssh + cold   | `lab-acc-ssh-cold-7`  | 7   | PASS 61.1s |
+| ssh + warm   | `lab-acc-ssh-warm`    | 7   | PASS 59.3s (`pwsh -sshs`) |
+| winrm + warm | `lab-acc-winrm-51`    | 5.1 | PASS 32.9s (AdObjects51) |
+| winrm + warm | `lab-acc-winrm-7`     | 7   | PASS 42.0s (AdObjects7)  |
+
+`winrm + cold` is intentionally absent — the provider refuses it with a
+mode-scoped diagnostic (unit-tested, `TestConfigureRejectsWinrmCold`). Every
+cell exercised the real path the provider takes: `local` ran on `s-client` with
+the committed tree; the `ssh`/`winrm` cells ran the working tree from the Linux
+box `GOWORK=off` (so the released `go-adpwsh` v0.15.0 is what was tested, not the
+`../go-adpwsh` checkout). The `ssh` session lands as a local account, so all
+`ssh` cells authenticated to AD with the svc `domain.credential` — the same
+decoupling the design relies on. `ssh + cold` proves the 5.1 jump-box path still
+runs (`powershell.exe -EncodedCommand`); `ssh + warm` drives the `powershell`
+sshd subsystem (`pwsh -sshs`); `winrm + warm` picks its engine by session
+configuration (5.1 vs pwsh 7). Default warm was validated as the real default:
+where a cell left `mode` unset it constructed the warm transport.
