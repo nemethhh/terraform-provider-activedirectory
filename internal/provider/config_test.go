@@ -154,7 +154,7 @@ func TestResolveDomainRejectsAHalfCredential(t *testing.T) {
 func TestResolveWinrmDefaultsAndEnv(t *testing.T) {
 	env := map[string]string{
 		"AD_WINRM_HOST": "dc.corp.local",
-		"KRB5CCNAME":   "FILE:/tmp/krb5cc",
+		"KRB5CCNAME":    "FILE:/tmp/krb5cc",
 	}
 	getenv := func(k string) string { return env[k] }
 
@@ -465,6 +465,30 @@ func TestChosenModeCold(t *testing.T) {
 	mode, _ := chosenMode(m, transportLocal)
 	if mode != modeCold {
 		t.Fatalf("mode = %v, want modeCold", mode)
+	}
+}
+
+// The default is warm on every transport, not just the one spot-checked above.
+func TestChosenModeDefaultsWarmEveryTransport(t *testing.T) {
+	cases := []struct {
+		name string
+		m    providerModel
+		kind transportKind
+	}{
+		{"local", providerModel{Local: &localModel{}}, transportLocal},
+		{"ssh", providerModel{SSH: &sshModel{}}, transportSSH},
+		{"winrm", providerModel{Winrm: &winrmModel{}}, transportWinrm},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mode, diags := chosenMode(tc.m, tc.kind)
+			if diags.HasError() {
+				t.Fatalf("diags: %v", diags)
+			}
+			if mode != modeWarm {
+				t.Fatalf("%s default mode = %v, want modeWarm", tc.name, mode)
+			}
+		})
 	}
 }
 
