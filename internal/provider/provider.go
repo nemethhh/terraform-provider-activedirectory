@@ -235,7 +235,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 				Blocks: map[string]schema.Block{
 					"credential": schema.SingleNestedBlock{
 						MarkdownDescription: "Credentials passed to the AD cmdlets. Omit to use " +
-							"the SSH session's own identity.",
+							"the transport session's own identity.",
 						Attributes: map[string]schema.Attribute{
 							"username": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "The account the cmdlets run as, in " +

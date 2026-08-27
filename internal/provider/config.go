@@ -374,7 +374,7 @@ func resolveDomain(m providerModel) (string, *adpwsh.Credential, diag.Diagnostic
 		diags.AddAttributeError(path.Root("domain").AtName("credential"),
 			"Incomplete credential",
 			"domain.credential requires both username and password, or neither. "+
-				"Omit the block entirely to use the SSH session's own identity.")
+				"Omit the block entirely to use the transport session's own identity.")
 		return server, nil, diags
 	}
 	return server, &adpwsh.Credential{Username: user, Password: adpwsh.NewSecret(pass)}, diags
