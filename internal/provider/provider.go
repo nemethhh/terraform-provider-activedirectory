@@ -24,8 +24,10 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
 	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
+	adsshwarm "github.com/nemethhh/go-adpwsh/transport/sshwarm"
 )
 
 type adProvider struct {
@@ -292,54 +294,80 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 			return
 		}
 
+		mode, diags := chosenMode(cfg, kind)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		// (transport, mode) selects the go-adpwsh constructor: cold is a fresh
+		// pwsh per operation, warm a persistent pooled runspace. winrm has only
+		// a warm implementation today.
+		var err error
 		switch kind {
 		case transportLocal:
-			localCfg, diags := resolveLocal(cfg, os.Getenv)
-			resp.Diagnostics.Append(diags...)
-			if resp.Diagnostics.HasError() {
-				return
+			if mode == modeCold {
+				c, d := resolveLocal(cfg, os.Getenv)
+				resp.Diagnostics.Append(d...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				transport, err = adlocal.New(c)
+			} else {
+				c, d := resolveLocalWarm(cfg, os.Getenv)
+				resp.Diagnostics.Append(d...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				transport, err = adlocalwarm.New(c)
 			}
-			tr, err := adlocal.New(localCfg)
 			if err != nil {
 				resp.Diagnostics.AddAttributeError(path.Root("local"),
-					"Cannot run PowerShell on this machine",
-					"The provider could not start PowerShell 7. This is a transport problem, "+
-						"not an Active Directory one.\n\n"+err.Error())
+					"Cannot run PowerShell on this machine", transportErrDetail(mode, err))
 				return
 			}
-			transport = tr
 
 		case transportSSH:
-			sshCfg, diags := resolveSSH(cfg, os.Getenv)
-			resp.Diagnostics.Append(diags...)
-			if resp.Diagnostics.HasError() {
-				return
+			if mode == modeCold {
+				c, d := resolveSSH(cfg, os.Getenv)
+				resp.Diagnostics.Append(d...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				transport, err = adssh.New(c)
+			} else {
+				c, d := resolveSSHWarm(cfg, os.Getenv)
+				resp.Diagnostics.Append(d...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				transport, err = adsshwarm.New(c)
 			}
-			tr, err := adssh.New(sshCfg)
 			if err != nil {
 				resp.Diagnostics.AddAttributeError(path.Root("ssh"),
-					"Cannot reach the jump box",
-					"The provider could not open an SSH connection. This is a transport problem, "+
-						"not an Active Directory one.\n\n"+err.Error())
+					"Cannot reach the jump box", transportErrDetail(mode, err))
 				return
 			}
-			transport = tr
 
 		case transportWinrm:
-			winrmCfg, diags := resolveWinrm(cfg, os.Getenv)
-			resp.Diagnostics.Append(diags...)
+			if mode == modeCold {
+				resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("mode"),
+					"WinRM cold mode is not yet available",
+					"The `winrm` transport currently supports only `mode = \"warm\"` (PSRP over a "+
+						"persistent runspace). Set `mode = \"warm\"` or omit it.")
+				return
+			}
+			c, d := resolveWinrm(cfg, os.Getenv)
+			resp.Diagnostics.Append(d...)
 			if resp.Diagnostics.HasError() {
 				return
 			}
-			tr, err := adwinrm.New(winrmCfg)
+			transport, err = adwinrm.New(c)
 			if err != nil {
 				resp.Diagnostics.AddAttributeError(path.Root("winrm"),
-					"Cannot reach the Windows host over WinRM",
-					"The provider could not open a PSRP session. This is a transport problem, "+
-						"not an Active Directory one.\n\n"+err.Error())
+					"Cannot reach the Windows host over WinRM", transportErrDetail(mode, err))
 				return
 			}
-			transport = tr
 		}
 	}
 
@@ -407,6 +435,19 @@ func clientFromProviderData(data any, diags *diag.Diagnostics) *adpwsh.Client {
 		return nil
 	}
 	return client
+}
+
+// transportErrDetail frames a transport construction failure. For warm mode it
+// leads with the PowerShell 7 requirement that cold mode does not have, since a
+// missing pwsh 7 (or, over ssh, a missing `powershell` subsystem) is the most
+// likely cause of a warm-transport failure.
+func transportErrDetail(mode executionMode, err error) string {
+	base := "This is a transport problem, not an Active Directory one.\n\n" + err.Error()
+	if mode == modeWarm {
+		return "Warm mode needs PowerShell 7 (and, for ssh, the `powershell` sshd subsystem). " +
+			"If the target only has Windows PowerShell 5.1, set `mode = \"cold\"`.\n\n" + base
+	}
+	return base
 }
 
 // defaultOperationTimeout is the per-CRUD-operation deadline withTimeout

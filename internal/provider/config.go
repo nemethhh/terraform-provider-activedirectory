@@ -13,8 +13,10 @@ import (
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
 	adwinrm "github.com/nemethhh/go-adpwsh/transport/psrp"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
+	adsshwarm "github.com/nemethhh/go-adpwsh/transport/sshwarm"
 )
 
 type providerModel struct {
@@ -329,6 +331,28 @@ func resolveLocal(m providerModel, getenv func(string) string) (adlocal.Config, 
 		diags.AddAttributeError(root, "Invalid local configuration", err.Error())
 	}
 	return cfg.WithDefaults(), diags
+}
+
+// resolveLocalWarm reads the local block into the local+warm transport config.
+// It reuses resolveLocal's pwsh_path/concurrency/timeout resolution — same env
+// fallbacks, same validation — and carries the shared fields across;
+// adlocalwarm.New fills the warm-only ReapAfter/ReadTimeout defaults.
+func resolveLocalWarm(m providerModel, getenv func(string) string) (adlocalwarm.Config, diag.Diagnostics) {
+	cold, diags := resolveLocal(m, getenv)
+	return adlocalwarm.Config{
+		PwshPath:    cold.PwshPath,
+		Concurrency: cold.Concurrency,
+		Timeout:     cold.Timeout,
+	}, diags
+}
+
+// resolveSSHWarm reads the ssh block into the ssh+warm transport config. The
+// jump-box connection, auth and host-key handling are the ssh transport's,
+// embedded verbatim; adsshwarm.New fills the `powershell` subsystem name and
+// the warm-pool timings.
+func resolveSSHWarm(m providerModel, getenv func(string) string) (adsshwarm.Config, diag.Diagnostics) {
+	sshCfg, diags := resolveSSH(m, getenv)
+	return adsshwarm.Config{SSH: sshCfg}, diags
 }
 
 // resolveDomain returns the pinned DC and the optional -Credential.

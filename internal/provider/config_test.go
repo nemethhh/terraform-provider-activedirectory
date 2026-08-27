@@ -481,3 +481,33 @@ func TestChosenModeRejectsGarbage(t *testing.T) {
 		t.Error("the diagnostic must carry an attribute path")
 	}
 }
+
+// The warm resolvers reuse the cold transports' own resolution, so the ssh
+// connection fields land in the warm config's embedded ssh config unchanged.
+func TestResolveSSHWarmReusesSSHFields(t *testing.T) {
+	m := providerModel{SSH: &sshModel{
+		Host: types.StringValue("jump"), User: types.StringValue("svc"),
+		Password: types.StringValue("hunter2"), InsecureIgnoreHostKey: types.BoolValue(true),
+	}}
+	cfg, diags := resolveSSHWarm(m, func(string) string { return "" })
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if cfg.SSH.Host != "jump" || cfg.SSH.User != "svc" {
+		t.Fatalf("ssh connection fields not carried into warm config: %+v", cfg.SSH)
+	}
+}
+
+func TestResolveLocalWarmCarriesLocalFields(t *testing.T) {
+	m := providerModel{Local: &localModel{
+		MaxConcurrency: types.Int64Value(6),
+		Timeout:        types.StringValue("10s"),
+	}}
+	cfg, diags := resolveLocalWarm(m, env(nil))
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+	if cfg.Concurrency != 6 || cfg.Timeout != 10*time.Second || cfg.PwshPath != "pwsh" {
+		t.Fatalf("local fields not carried into warm config: %+v", cfg)
+	}
+}
