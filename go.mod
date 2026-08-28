@@ -9,15 +9,10 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-log v0.11.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
-	github.com/nemethhh/go-adpwsh v0.17.0
+	github.com/nemethhh/go-adpwsh v0.18.0
 )
 
 replace github.com/go-krb5/krb5 => github.com/smnsjas/krb5 v0.0.0-20260129173902-49e50274bc95
-
-// TEMPORARY: validating against the local go-adpwsh checkout (branch
-// feat/acl-constrained-language) before the v0.18.0 tag is published. A
-// later task removes this replace and pins the real tag.
-replace github.com/nemethhh/go-adpwsh => ../go-adpwsh
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.0 // indirect
