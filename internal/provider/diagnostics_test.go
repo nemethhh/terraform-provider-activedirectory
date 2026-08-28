@@ -97,8 +97,8 @@ func TestErrorDiagnosticsUnsupported(t *testing.T) {
 	if !diags.HasError() {
 		t.Fatal("expected an error diagnostic")
 	}
-	if !strings.Contains(diags[0].Detail(), "full-language") {
-		t.Errorf("detail should explain the language_mode requirement, got %q", diags[0].Detail())
+	if !strings.Contains(diags[0].Detail(), "ACL helpers") {
+		t.Errorf("detail should explain the missing ACL helpers, got %q", diags[0].Detail())
 	}
 	// KindUnsupported must render its own summary, not fall through to the
 	// generic default — the substring check on Detail() above passes even

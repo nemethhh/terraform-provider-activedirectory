@@ -84,8 +84,10 @@ provider "activedirectory" {
 # access. The team's block sets language_mode = "constrained" and passes its own
 # credential twice: winrm.user/password authenticates to the host, and
 # domain.credential is what the domain controller checks against the account's OU
-# delegation. ACL delegation is unavailable in constrained mode — a full-language
-# endpoint is required for that.
+# delegation. ACL delegation also works against a constrained-mode endpoint when
+# it was registered with the acl capability (New-AdProviderEndpoint.ps1
+# -Capability acl -Sandbox); without that capability an ACL apply fails with a
+# message telling you to re-register the endpoint.
 # provider "activedirectory" {
 #   winrm {
 #     host               = "mgmt.corp.local"
