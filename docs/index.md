@@ -66,13 +66,18 @@ provider "activedirectory" {
 # credentials, so onward authentication to AD Web Services fails — the classic
 # double hop. Add a domain.credential block to work around it.
 
-# Alternatively, reach a domain controller over WinRM with Kerberos. The winrm
-# transport is warm only (a persistent PSRP runspace); mode = "cold" is rejected
-# because an AD operation's encoded preamble exceeds the WinRS command-line
-# limit. Use ssh or local if you need a cold, one-pwsh-per-operation mode.
+# Alternatively, reach a domain controller over WinRM with Kerberos. warm (the
+# default) keeps a persistent PSRP runspace and needs a registered PSRP session
+# configuration (configuration_name). mode = "cold" opens a fresh Windows Remote
+# Shell per operation and feeds the script on stdin to powershell -EncodedCommand
+# (Windows PowerShell 5.1) — slower, but it needs NO server-side PSRP session
+# configuration, so it fits a host where PSRP remoting is disabled but WinRS is
+# allowed. For cold, the winrm.user must have WinRS shell access (Remote
+# Management Users, or admin).
 # provider "activedirectory" {
 #   winrm {
 #     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local
+#     # mode = "cold"          # no PSRP endpoint needed; user needs WinRS access
 #   }
 # }
 #
@@ -201,7 +206,7 @@ Point this at a purpose-made Windows PowerShell 5.1 endpoint — see `scripts/ho
 - `krb5_conf_path` (String) Path to krb5.conf. Environment: `AD_WINRM_KRB5_CONF`, else ambient `KRB5_CONFIG`, else `/etc/krb5.conf`.
 - `language_mode` (String) PowerShell language mode of the target endpoint. Environment: `AD_WINRM_LANGUAGE_MODE`. `full` (default) is the existing behaviour and is required for the ACL-delegation resource. `constrained` targets a ConstrainedLanguage sandbox endpoint (register one with `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the connecting team account is confined to AD cmdlets with no host escape, and the payload is delivered without `[Console]`. The endpoint runs only stock cmdlets. The ACL ops are unavailable in `constrained` mode (they need FullLanguage); use a `full` endpoint for delegation work.
 - `max_concurrency` (Number) Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_WINRM_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. Each session's underlying WinRM shell is leased for 2 minutes rather than WinRM's own 30-minute default, so it cannot outlive an idle Terraform process for long; the transport transparently rebuilds a shell that gets reaped out from under it, but if that reap ever surfaces as an error, this 2-minute lease is where it comes from. See `scripts/host/Initialize-AdProvisioningHost.ps1`'s `MaxShellsPerUser`, which must cover `max_concurrency` times however many Terraform processes can start within that 2-minute window.
-- `mode` (String) Execution mode. Only `warm` (the default) is supported on `winrm`: it keeps a persistent PSRP runspace, paying `pwsh` startup and `Import-Module ActiveDirectory` once. `cold` is rejected with a diagnostic — a one-shot `pwsh -EncodedCommand` per operation would have to travel on the WinRS command line, but every AD operation's encoded preamble is tens of kilobytes, past the WinRS ~8 KB limit. Omit this, or set `mode = "warm"`.
+- `mode` (String) Execution mode. `warm` (the default) keeps a persistent PSRP runspace, paying `pwsh` startup and `Import-Module ActiveDirectory` once per pooled process, and needs a registered PSRP session configuration (`configuration_name`). `cold` opens a fresh Windows Remote Shell per operation and feeds the script on stdin to `powershell -EncodedCommand` (Windows PowerShell 5.1 by default) — slower, but it needs **no** server-side PSRP session configuration, so it fits a host where PSRP remoting is disabled but WinRS is allowed. `cold` uses only the default WinRS shell, so `configuration_name`/`language_mode` do not apply; the `user` here must have WinRS shell access (Remote Management Users, or admin).
 - `password` (String, Sensitive) WinRM auth password. Environment: `AD_WINRM_PASSWORD`. Never written to state or a log line.
 - `port` (Number) WinRM port. Environment: `AD_WINRM_PORT`. Defaults to `5985` (HTTP) or `5986` when `use_tls` is set.
 - `realm` (String) Kerberos realm; defaults to krb5.conf's `default_realm`. Environment: `AD_WINRM_REALM`.

@@ -217,13 +217,17 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"the transport's."},
 					"mode": schema.StringAttribute{Optional: true,
 						Validators: []validator.String{stringvalidator.OneOf("cold", "warm")},
-						MarkdownDescription: "Execution mode. Only `warm` (the default) is supported " +
-							"on `winrm`: it keeps a persistent PSRP runspace, paying `pwsh` startup " +
-							"and `Import-Module ActiveDirectory` once. `cold` is rejected with a " +
-							"diagnostic — a one-shot `pwsh -EncodedCommand` per operation would have to " +
-							"travel on the WinRS command line, but every AD operation's encoded " +
-							"preamble is tens of kilobytes, past the WinRS ~8 KB limit. Omit this, or " +
-							"set `mode = \"warm\"`."},
+						MarkdownDescription: "Execution mode. `warm` (the default) keeps a persistent " +
+							"PSRP runspace, paying `pwsh` startup and `Import-Module ActiveDirectory` " +
+							"once per pooled process, and needs a registered PSRP session configuration " +
+							"(`configuration_name`). `cold` opens a fresh Windows Remote Shell per " +
+							"operation and feeds the script on stdin to `powershell -EncodedCommand` " +
+							"(Windows PowerShell 5.1 by default) — slower, but it needs **no** " +
+							"server-side PSRP session configuration, so it fits a host where PSRP " +
+							"remoting is disabled but WinRS is allowed. `cold` uses only the default " +
+							"WinRS shell, so `configuration_name`/`language_mode` do not apply; the " +
+							"`user` here must have WinRS shell access (Remote Management Users, or " +
+							"admin)."},
 				},
 			},
 			"domain": schema.SingleNestedBlock{
@@ -352,26 +356,48 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 			}
 
 		case transportWinrm:
-			if mode == modeCold {
-				resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("mode"),
-					"WinRM cold mode is not supported",
-					"Every Active Directory operation carries a PowerShell preamble that, once "+
-						"base64-encoded, is tens of kilobytes — well past the WinRS command line's "+
-						"~8 KB limit — so the `winrm` transport cannot deliver a one-shot "+
-						"`pwsh -EncodedCommand` per operation. Use `mode = \"warm\"` (a persistent "+
-						"PSRP runspace), which has no command-size limit and is faster. Set "+
-						"`mode = \"warm\"` or omit it.")
-				return
-			}
 			c, d := resolveWinrm(cfg, os.Getenv)
 			resp.Diagnostics.Append(d...)
 			if resp.Diagnostics.HasError() {
 				return
 			}
-			transport, err = adwinrm.New(c)
+			if mode == modeCold {
+				// configuration_name / language_mode are PSRP session-configuration
+				// concerns; cold uses the default WinRS shell, so they are a
+				// misconfiguration rather than a silent no-op.
+				if w := cfg.Winrm; w != nil {
+					if !w.ConfigurationName.IsNull() && w.ConfigurationName.ValueString() != "" {
+						resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("configuration_name"),
+							"configuration_name does not apply to winrm cold mode",
+							"`configuration_name` selects a PSRP session configuration, which winrm "+
+								"`mode = \"cold\"` does not use — cold opens the default Windows Remote "+
+								"Shell, not a PSRP endpoint. Remove it, or use `mode = \"warm\"`.")
+					}
+					if !w.LanguageMode.IsNull() && w.LanguageMode.ValueString() != "" {
+						resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("language_mode"),
+							"language_mode does not apply to winrm cold mode",
+							"`language_mode` configures a ConstrainedLanguage PSRP endpoint, which "+
+								"winrm `mode = \"cold\"` does not use. Remove it, or use `mode = \"warm\"`.")
+					}
+					if resp.Diagnostics.HasError() {
+						return
+					}
+				}
+				// A fresh WinRS shell per op, feeding the wrapped script on stdin to
+				// `powershell -EncodedCommand` (no command-size limit). Unlike warm,
+				// it needs no server-side PSRP session configuration — for a host
+				// where PSRP endpoints are disabled but WinRS is allowed.
+				transport, err = adwinrm.NewCold(c)
+			} else {
+				transport, err = adwinrm.New(c)
+			}
 			if err != nil {
+				detail := transportErrDetail(mode, err)
+				if mode == modeCold {
+					detail = winrmColdErrDetail(err)
+				}
 				resp.Diagnostics.AddAttributeError(path.Root("winrm"),
-					"Cannot reach the Windows host over WinRM", transportErrDetail(mode, err))
+					"Cannot reach the Windows host over WinRM", detail)
 				return
 			}
 		}
@@ -454,6 +480,23 @@ func transportErrDetail(mode executionMode, err error) string {
 			"If the target only has Windows PowerShell 5.1, set `mode = \"cold\"`.\n\n" + base
 	}
 	return base
+}
+
+// winrmColdErrDetail frames a winrm+cold construction/connection failure. The
+// two identities are separate for cold: the `winrm { user }` TRANSPORT account
+// must have WinRS shell access (member of Remote Management Users, or an admin,
+// and present in the WSMan service RootSDDL), which is a different grant than the
+// PSRP session-configuration SDDL warm relies on. A WSMan "access denied" here
+// is almost always that transport-side grant — NOT a `domain.credential`
+// problem, which is the AD-cmdlet identity delivered in the payload and consumed
+// only after the shell exists.
+func winrmColdErrDetail(err error) string {
+	return "This is a transport problem, not an Active Directory one.\n\n" +
+		"winrm `mode = \"cold\"` opens a Windows Remote Shell as the `winrm` block's " +
+		"`user`. That account needs WinRS shell access on the target — membership in " +
+		"`Remote Management Users` (or local Administrators), and inclusion in the WSMan " +
+		"service RootSDDL. An \"access denied\" is that grant, not a `domain.credential` " +
+		"issue (the AD identity is delivered separately, in the payload).\n\n" + err.Error()
 }
 
 // defaultOperationTimeout is the per-CRUD-operation deadline withTimeout

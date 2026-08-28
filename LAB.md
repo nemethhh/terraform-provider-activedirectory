@@ -849,10 +849,9 @@ PowerShell) cell, all green:
 | ssh + warm   | `lab-acc-ssh-warm`    | 7   | PASS 59.3s (`pwsh -sshs`) |
 | winrm + warm | `lab-acc-winrm-51`    | 5.1 | PASS 32.9s (AdObjects51) |
 | winrm + warm | `lab-acc-winrm-7`     | 7   | PASS 42.0s (AdObjects7)  |
+| winrm + cold | `lab-acc-winrm-cold`  | 5.1 | PASS 88.8s (WinRS stdin; see 2026-08-27 revision below) |
 
-`winrm + cold` is intentionally absent — the provider refuses it with a
-mode-scoped diagnostic (unit-tested, `TestConfigureRejectsWinrmCold`). Every
-cell exercised the real path the provider takes: `local` ran on `s-client` with
+Every cell exercised the real path the provider takes: `local` ran on `s-client` with
 the committed tree; the `ssh`/`winrm` cells ran the working tree from the Linux
 box `GOWORK=off` (so the released `go-adpwsh` v0.15.0 is what was tested, not the
 `../go-adpwsh` checkout). The `ssh` session lands as a local account, so all
@@ -863,33 +862,39 @@ sshd subsystem (`pwsh -sshs`); `winrm + warm` picks its engine by session
 configuration (5.1 vs pwsh 7). Default warm was validated as the real default:
 where a cell left `mode` unset it constructed the warm transport.
 
-### winrm + cold — implemented, lab-tested, and refused, 2026-08-27
+### winrm + cold — first refused, then REVIVED via stdin and lab-validated, 2026-08-27
 
-The final matrix cell, `winrm + cold` (one fresh WinRS `pwsh -EncodedCommand`
-per op over WSMan), was built in `go-adpwsh` v0.16.0 (`transport/winrm.NewCold`;
-that release also renames `transport/psrp` → `transport/winrm`, since PSRP is the
-protocol running *over* the WinRM transport, not a transport itself) and run
-against `s-client`. **It does not work, for two independent reasons:**
+An earlier `winrm + cold` (go-adpwsh v0.16.0 `NewCold`, a fresh WinRS
+`pwsh -EncodedCommand` per op) was **refused**: the ~10 KB preamble base64-of-UTF16
+is ~28 KB, past the WinRS **cmd.exe ~8191-char** command line, so no op fit. That
+verdict blamed the wrong layer — the limit is `cmd.exe`, not WinRS. Putting the
+script on **stdin** removes it entirely.
 
-1. **Command size (fundamental).** The first operation — the provider's
-   Configure-time domain probe — produced a **28,568-char** encoded command. Every
-   go-adpwsh operation carries a ~10 KB PowerShell preamble (credential rebuild,
-   error handling, envelope markers); base64-of-UTF16 is ~2.7×, so even a trivial
-   op is ~28 KB encoded. A WinRS command travels on a cmd.exe command line, capped
-   near **8191 chars** — so *no* real op fits. This is not a "large op" edge case;
-   it is the baseline.
-2. **Permissions.** With the size guard raised experimentally, WinRS shell
-   creation itself returned WSMan `AccessDenied` (HTTP 500): the `svc_tfacc`
-   account is granted the custom `AdObjects51`/`AdObjects7` PSRP session
-   configurations, not the default WinRS/cmd shell.
+**go-adpwsh v0.17.0 revives the cell** (`transport/winrm`, stdin-fed): a fresh
+Windows Remote Shell per op, feeding the wrapped script on **stdin** to a tiny
+`powershell -EncodedCommand` bootstrap (`[Console]::In.ReadToEnd() | iex`). No
+command-size limit. go-adpwsh owns the WinRS shell body (go-psrp consumed
+unmodified via its public `wsman`/`transport`/`auth` packages): the decisive fix
+is `<rsp:InputStreams>stdin</>` — go-psrp hardcodes the PSRP-shaped `stdin pr`,
+which makes the server accept every `Send` yet never route stdin to the process —
+plus a separate empty `End="true"` for stdin EOF (go-psrp's `Send` never sets it).
+Full analysis: `docs/superpowers/analysis/2026-08-27-winrm-cold-stdin-spike.md`.
 
-Per the design's deferred review decision (spec §14), `winrm + cold` is therefore
-**refused with a clear diagnostic** ("WinRM cold mode is not supported … use
-`mode = "warm"`"), unit-tested by `TestConfigureRejectsWinrmCold`. `winrm + warm`
-(PSRP) has no command-size limit and is strictly faster, so nothing is lost.
-`go-adpwsh` v0.16.0's `NewCold` stays in the library (unit-tested, size-limited)
-but is unused by the provider; a future stdin-fed delivery could revive it.
+**Two identities (cold makes them distinct):** the WinRS **transport** account
+needs WinRS shell access (member of `Remote Management Users`, and present in the
+WSMan service **RootSDDL** — this host was hardened to admins-only, so the default
+RMU ACE `(A;;GA;;;RM)` was restored); the **AD** identity rides `domain.credential`
+(`-Credential`), least-privilege. Lab created a dedicated WinRS-only account
+`CORP\svc_tfcold` (creds file `cold.*`) for this; the AD cmdlets run as `svc_tfacc`.
 
-This completes the transport × mode matrix at **five supported cells**
-(`local`/`ssh` × `cold`/`warm`, `winrm` × `warm`); `winrm + cold` is a documented,
-lab-confirmed non-cell.
+**Validated end-to-end (2026-08-27):** go-adpwsh `TestLiveColdStdinGetADUser`
+(Kerberos); provider `TestAccOULifecycle` (88.8s), `TestAccGroupLifecycle` (70.9s),
+`TestAccUserLifecycle` (62.8s) over the winrm+cold cell — the last against the
+**released** go-adpwsh v0.17.0 with `GOWORK=off` (`make lab-acc-winrm-cold`). The
+earlier `AccessDenied` was the transport account lacking WinRS RootSDDL access,
+not a `domain.credential` problem. The provider still rejects
+`winrm{mode="cold"}` with `configuration_name`/`language_mode` set (those are PSRP
+session-config knobs cold does not use).
+
+This makes the transport × mode matrix **six supported cells**: `local`/`ssh` ×
+`cold`/`warm`, `winrm` × `warm`/`cold`.

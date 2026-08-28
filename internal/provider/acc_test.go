@@ -275,20 +275,30 @@ func accTransport(t *testing.T) adpwsh.Transport {
 		}
 		return tr
 	case "winrm":
-		tr, err := adwinrm.New(adwinrm.Config{
-			Host:              os.Getenv(envWinrmHost),
-			Username:          os.Getenv(envWinrmUser),
-			Password:          os.Getenv(envWinrmPassword),
-			SPN:               os.Getenv(envWinrmSPN),
-			ConfigurationName: os.Getenv(envWinrmConfigName),
-			// The verification client must reach AD the same way the provider does,
-			// including the language mode: against a constrained sandbox endpoint a
-			// full-language wrapper's [Console]::SetIn is rejected by CLM.
-			LanguageMode: os.Getenv(envWinrmLanguageMode),
+		// The verification client must reach AD the same way the provider does,
+		// including the execution mode: cold opens a WinRS shell (no PSRP session
+		// configuration), warm a PSRP runspace. Building warm for a cold cell would
+		// try a PSRP endpoint the cold transport account cannot open.
+		cfg := adwinrm.Config{
+			Host:         os.Getenv(envWinrmHost),
+			Username:     os.Getenv(envWinrmUser),
+			Password:     os.Getenv(envWinrmPassword),
+			SPN:          os.Getenv(envWinrmSPN),
 			Krb5ConfPath: os.Getenv("KRB5_CONFIG"),
 			CCachePath:   strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
 			Concurrency:  1,
-		})
+		}
+		var tr adpwsh.Transport
+		var err error
+		if strings.EqualFold(os.Getenv(envMode), "cold") {
+			tr, err = adwinrm.NewCold(cfg) // default WinRS shell; config_name/language_mode don't apply
+		} else {
+			// language_mode matters for warm: against a constrained sandbox endpoint
+			// a full-language wrapper's [Console]::SetIn is rejected by CLM.
+			cfg.ConfigurationName = os.Getenv(envWinrmConfigName)
+			cfg.LanguageMode = os.Getenv(envWinrmLanguageMode)
+			tr, err = adwinrm.New(cfg)
+		}
 		if err != nil {
 			t.Fatalf("acceptance: cannot open the winrm transport: %v", err)
 		}

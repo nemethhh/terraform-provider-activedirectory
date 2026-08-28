@@ -52,13 +52,18 @@ provider "activedirectory" {
 # credentials, so onward authentication to AD Web Services fails — the classic
 # double hop. Add a domain.credential block to work around it.
 
-# Alternatively, reach a domain controller over WinRM with Kerberos. The winrm
-# transport is warm only (a persistent PSRP runspace); mode = "cold" is rejected
-# because an AD operation's encoded preamble exceeds the WinRS command-line
-# limit. Use ssh or local if you need a cold, one-pwsh-per-operation mode.
+# Alternatively, reach a domain controller over WinRM with Kerberos. warm (the
+# default) keeps a persistent PSRP runspace and needs a registered PSRP session
+# configuration (configuration_name). mode = "cold" opens a fresh Windows Remote
+# Shell per operation and feeds the script on stdin to powershell -EncodedCommand
+# (Windows PowerShell 5.1) — slower, but it needs NO server-side PSRP session
+# configuration, so it fits a host where PSRP remoting is disabled but WinRS is
+# allowed. For cold, the winrm.user must have WinRS shell access (Remote
+# Management Users, or admin).
 # provider "activedirectory" {
 #   winrm {
 #     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local
+#     # mode = "cold"          # no PSRP endpoint needed; user needs WinRS access
 #   }
 # }
 #

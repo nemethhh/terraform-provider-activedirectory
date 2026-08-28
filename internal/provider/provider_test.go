@@ -91,30 +91,12 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
-// winrm+cold is refused: an AD operation's encoded preamble far exceeds the
-// WinRS command-line limit, so a one-shot pwsh -EncodedCommand per op cannot be
-// delivered. Configure rejects it with a mode-scoped diagnostic before it opens
-// a WinRM socket — a unit test. (Lab-confirmed 2026-08-27; see LAB.md.)
-func TestConfigureRejectsWinrmCold(t *testing.T) {
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: accFactories(),
-		Steps: []resource.TestStep{{
-			Config: `
-provider "activedirectory" {
-  winrm {
-    host = "dc1.corp.local"
-    mode = "cold"
-  }
-}
-
-resource "activedirectory_ou" "unreachable" {
-  name      = "tfacc-never-created"
-  container = "DC=corp,DC=local"
-}`,
-			ExpectError: regexp.MustCompile(`WinRM cold mode is not supported`),
-		}},
-	})
-}
+// winrm+cold is a supported cell: a fresh Windows Remote Shell per op feeding
+// the script on stdin to `powershell -EncodedCommand` (no command-size limit,
+// no server-side PSRP session configuration required). Its runtime is validated
+// on the lab (go-adpwsh TestLiveColdStdinGetADUser and the provider's
+// winrm-cold lab cell); the schema's OneOf already accepts `cold`, exercised by
+// TestConfigureRejectsUnknownMode below.
 
 // An unknown mode value is refused by the schema's OneOf validator, before
 // Configure runs at all.
@@ -134,6 +116,31 @@ resource "activedirectory_ou" "unreachable" {
   container = "DC=corp,DC=local"
 }`,
 			ExpectError: regexp.MustCompile(`(?i)value must be one of`),
+		}},
+	})
+}
+
+// winrm cold + a warm-only knob (configuration_name / language_mode) is a
+// misconfiguration Configure catches before it opens any WinRM socket: cold uses
+// the default WinRS shell, not a PSRP session configuration. A unit test.
+func TestConfigureRejectsWinrmColdWithWarmOnlyKnobs(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  winrm {
+    host               = "dc1.corp.local"
+    mode               = "cold"
+    configuration_name = "AdObjects51"
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`configuration_name does not apply to winrm cold mode`),
 		}},
 	})
 }

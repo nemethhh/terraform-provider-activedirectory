@@ -61,6 +61,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
+        lab-acc-winrm-cold \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -95,6 +96,7 @@ lab-help:
 	@echo '    lab-acc-ssh-cold-51 / -cold-7   ssh cold over Windows PowerShell 5.1 vs pwsh 7'
 	@echo '    lab-acc-ssh-warm                ssh warm (pwsh -sshs subsystem, pwsh 7)'
 	@echo '    lab-acc-winrm-51 / -winrm-7     winrm warm over the 5.1 vs pwsh 7 endpoint'
+	@echo '    lab-acc-winrm-cold             winrm cold (WinRS stdin; transport=cold.* AD=svc.*)'
 	@echo '    lab-e2e-fixtures           e2e OUs and three delegated principals (one-time, admin)'
 	@echo '    lab-e2e                    ship, then run the whole e2e suite'
 	@echo '    lab-e2e-only PATTERN=<re>  run one e2e suite, or any -run pattern'
@@ -245,7 +247,7 @@ lab-acc-psrp-only:
 # not for the local cells (they cross cmd.exe on the member) — use a prefix.
 MATRIX_CELLS := lab-acc-local-cold lab-acc-local-warm \
                 lab-acc-ssh-cold-51 lab-acc-ssh-cold-7 lab-acc-ssh-warm \
-                lab-acc-winrm-51 lab-acc-winrm-7
+                lab-acc-winrm-51 lab-acc-winrm-7 lab-acc-winrm-cold
 
 lab-acc-local-cold: lab-ship
 	LAB_MODE=cold $(LAB_DIR)/run-suite.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
@@ -272,6 +274,14 @@ lab-acc-winrm-51:
 lab-acc-winrm-7:
 	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_WINRM_CONFIG7) \
 	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+# winrm + cold: a fresh Windows Remote Shell per op, script on stdin to
+# `powershell -EncodedCommand` (no PSRP session configuration). The transport
+# account (cred file cold.*) is WinRS-only; the AD identity (svc.*) rides
+# domain.credential. run-suite-winrm-cold.sh carries the kinit + env.
+lab-acc-winrm-cold:
+	GOWORK=off \
+	  $(LAB_DIR)/run-suite-winrm-cold.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
 
 # Run every matrix cell in turn, continuing past a failure and printing a
 # pass/fail summary at the end (exit non-zero if any cell failed). The single
