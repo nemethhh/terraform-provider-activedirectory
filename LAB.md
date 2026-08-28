@@ -898,3 +898,50 @@ session-config knobs cold does not use).
 
 This makes the transport × mode matrix **six supported cells**: `local`/`ssh` ×
 `cold`/`warm`, `winrm` × `warm`/`cold`.
+
+### ACL delegation under ConstrainedLanguage, 2026-08-28
+
+`activedirectory_access_rule` now works against a `-Sandbox`
+(ConstrainedLanguage) endpoint — the case that was previously refused
+(`KindUnsupported`). The refusal existed because the ACL ops construct
+`[System.DirectoryServices.ActiveDirectoryAccessRule]` /
+`[System.Security.Principal.SecurityIdentifier]` and call `$acl.AddAccessRule`,
+none of which a ConstrainedLanguage **caller** may run. The fix keeps the caller
+constrained and moves that .NET into a **FullLanguage island**: go-adpwsh ships
+`Set-AdAce`/`Get-AdAce`/`Remove-AdAce` as endpoint `FunctionDefinitions` (which
+run FullLanguage even inside a CLM session), plus thin `acl_{grant,read,revoke}_clm`
+op variants that `core.exec` selects when the transport reports `Constrained()`;
+the CLM op just calls the helper by name. The double hop is cleared the same way
+the full path clears it — the helper takes `-Credential` (the `domain.credential`)
+and passes it to `New-PSDrive`/`Get-ADObject`. `dsacls` (the obvious
+stock-tool alternative) was rejected before implementation: it binds to the DC on
+the caller's own token and takes no `-Credential`, so it cannot clear the WinRM
+double hop. The provider's `New-AdProviderEndpoint.ps1 -Sandbox` now emits the
+helper `FunctionDefinitions` (a verbatim, drift-tested copy of go-adpwsh's
+`ACLEndpointHelpers()`) plus the `Get-Acl`/`Set-Acl`/`New-PSDrive`/`Remove-PSDrive`
+cmdlets and the `ActiveDirectory` provider whenever `-Capability acl` is combined
+with `-Sandbox`. Backed by go-adpwsh **v0.18.0** (feature-branch at run time) and
+the provider feature branch pinning it via a local `replace`.
+
+**Endpoint.** Registered on `s-client` as
+`New-AdProviderEndpoint.ps1 -TierName AdSandboxAcl -GrantTo 'CORP\AD-Terraform-Objects' -Capability all -Sandbox`
+— 5.1, ConstrainedLanguage, granted to `AD-Terraform-Objects` (which `svc_tfacc`
+is a member of). Left registered as the constrained-ACL test fixture, alongside
+the object-only `AdSandbox`. (`-Capability all` rather than `ou,group,user,acl`
+because `psrun.sh` single-quotes a comma list into one string, which the
+`[string[]]` `ValidateSet` rejects; `all` includes `acl`, and the extra cmdlets
+are harmless on a test endpoint.)
+
+**Run.**
+`LAB_PSRP_LANGUAGE_MODE=constrained LAB_PSRP_CONFIG=AdSandboxAcl scripts/lab/run-suite-psrp.sh TestAccAccessRuleLifecycle 40`
+→ `--- PASS: TestAccAccessRuleLifecycle (31.11s)`, as the delegated non-admin
+`CORP\svc_tfacc`. The suite is the full mask/inheritance round-trip proof: create
++ grant two ACEs (an `ExtendedRight`/`Reset Password` and a two-right
+`ReadProperty`+`WriteProperty`, both `scope=descendants object_class=user`), a
+no-diff replan (a DACL AD echoed back differently would show drift), an
+`Allow`→`Deny` **replace** (destroy = revoke, create = grant), an import, and
+`CheckDestroy` (revoke all) — every one going through the CLM `_clm` path and the
+endpoint helpers. A spike first proved a `member`-attribute ACE granted to
+Authenticated Users hits an AD validated-write `Access is denied` on revoke, but
+that is an AD ACL-evaluation quirk of that specific ACE, not the mechanism — the
+suite's ordinary delegation ACEs grant and revoke cleanly.
