@@ -40,14 +40,18 @@ For a real sandbox, use `-Sandbox` instead (below).
 
 `-Sandbox` registers a real sandbox: a `ConstrainedLanguage` endpoint, always
 with restricted cmdlet/provider visibility regardless of `-RestrictCmdlets`, and
-exposing **only stock cmdlets** — no bespoke functions. The library preamble
-builds its credential with `[PSCredential]::new` + `ConvertTo-SecureString`
-(both visible in the core set); `ConstrainedLanguage` allows both, because
-`PSCredential` and `SecureString` are on its "core type" list, so no
-credential-builder function is needed. What `ConstrainedLanguage` genuinely
-blocks — `[Console]` payload delivery and the ACL cmdlets'
+exposing **only stock cmdlets** — no bespoke functions, with one exception: ACL
+delegation is available in a sandbox endpoint registered with `-Capability acl`.
+The library preamble builds its credential with `[PSCredential]::new` +
+`ConvertTo-SecureString` (both visible in the core set); `ConstrainedLanguage`
+allows both, because `PSCredential` and `SecureString` are on its "core type"
+list, so no credential-builder function is needed. What `ConstrainedLanguage`
+genuinely blocks — `[Console]` payload delivery and the ACL cmdlets'
 `[DirectoryServices]`/`New-PSDrive` .NET — the provider avoids in constrained
-mode (a different delivery path) or the endpoint drops (the ACL capability is
-excluded from a sandbox tier, so delegation work needs a separate, non-sandbox
-tier). Teams pointed at a sandbox endpoint must set the provider's
+mode (a different delivery path) or, for ACL, works around: when
+`-Capability acl` is requested, the endpoint installs `Set-AdAce`/`Get-AdAce`/
+`Remove-AdAce` as `-FunctionDefinitions` synced from go-adpwsh, which run
+`FullLanguage` inside the CLM session and do the .NET ACL work the CLM caller
+itself cannot — so no separate non-sandbox tier is needed for delegation.
+Teams pointed at a sandbox endpoint must set the provider's
 `winrm.language_mode = "constrained"`.
