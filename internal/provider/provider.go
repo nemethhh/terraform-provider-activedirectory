@@ -198,13 +198,14 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"language_mode": schema.StringAttribute{Optional: true,
 						Validators: []validator.String{stringvalidator.OneOf("full", "constrained")},
 						MarkdownDescription: "PowerShell language mode of the target endpoint. Environment: " +
-							"`AD_WINRM_LANGUAGE_MODE`. `full` (default) is the existing behaviour and is required " +
-							"for the ACL-delegation resource. `constrained` targets a ConstrainedLanguage sandbox " +
-							"endpoint (register one with `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the " +
-							"connecting team account is confined to AD cmdlets with no host escape, and the payload " +
-							"is delivered without `[Console]`. The endpoint runs only stock cmdlets. The ACL ops " +
-							"are unavailable in `constrained` mode (they need FullLanguage); use a `full` endpoint " +
-							"for delegation work."},
+							"`AD_WINRM_LANGUAGE_MODE`. `full` (default) is the existing behaviour. `constrained` targets a " +
+							"ConstrainedLanguage sandbox endpoint (register one with " +
+							"`scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the connecting team account " +
+							"is confined to AD cmdlets with no host escape, and the payload is delivered " +
+							"without `[Console]`. ACL delegation works in `constrained` mode when the endpoint " +
+							"was registered with the `acl` capability (its FunctionDefinitions run the ACL " +
+							"cmdlets in a FullLanguage island); against a sandbox endpoint without that " +
+							"capability, an ACL apply fails with a message telling you to re-register it."},
 					"max_concurrency": schema.Int64Attribute{Optional: true,
 						Validators: []validator.Int64{int64validator.AtLeast(1)},
 						MarkdownDescription: "Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_WINRM_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. " +

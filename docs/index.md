@@ -98,8 +98,10 @@ provider "activedirectory" {
 # access. The team's block sets language_mode = "constrained" and passes its own
 # credential twice: winrm.user/password authenticates to the host, and
 # domain.credential is what the domain controller checks against the account's OU
-# delegation. ACL delegation is unavailable in constrained mode — a full-language
-# endpoint is required for that.
+# delegation. ACL delegation also works against a constrained-mode endpoint when
+# it was registered with the acl capability (New-AdProviderEndpoint.ps1
+# -Capability acl -Sandbox); without that capability an ACL apply fails with a
+# message telling you to re-register the endpoint.
 # provider "activedirectory" {
 #   winrm {
 #     host               = "mgmt.corp.local"
@@ -204,7 +206,7 @@ Point this at a purpose-made Windows PowerShell 5.1 endpoint — see `scripts/ho
 - `insecure_skip_verify` (Boolean) Skip TLS certificate verification (testing only; requires `use_tls`). Environment: `AD_WINRM_INSECURE_SKIP_VERIFY`.
 - `keytab_path` (String) Path to a keytab for headless runners. Environment: `AD_WINRM_KEYTAB`.
 - `krb5_conf_path` (String) Path to krb5.conf. Environment: `AD_WINRM_KRB5_CONF`, else ambient `KRB5_CONFIG`, else `/etc/krb5.conf`.
-- `language_mode` (String) PowerShell language mode of the target endpoint. Environment: `AD_WINRM_LANGUAGE_MODE`. `full` (default) is the existing behaviour and is required for the ACL-delegation resource. `constrained` targets a ConstrainedLanguage sandbox endpoint (register one with `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the connecting team account is confined to AD cmdlets with no host escape, and the payload is delivered without `[Console]`. The endpoint runs only stock cmdlets. The ACL ops are unavailable in `constrained` mode (they need FullLanguage); use a `full` endpoint for delegation work.
+- `language_mode` (String) PowerShell language mode of the target endpoint. Environment: `AD_WINRM_LANGUAGE_MODE`. `full` (default) is the existing behaviour. `constrained` targets a ConstrainedLanguage sandbox endpoint (register one with `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`): the connecting team account is confined to AD cmdlets with no host escape, and the payload is delivered without `[Console]`. ACL delegation works in `constrained` mode when the endpoint was registered with the `acl` capability (its FunctionDefinitions run the ACL cmdlets in a FullLanguage island); against a sandbox endpoint without that capability, an ACL apply fails with a message telling you to re-register it.
 - `max_concurrency` (Number) Size of the pool of independent WinRM/PSRP sessions (each its own process on the target). Environment: `AD_WINRM_MAX_CONCURRENCY`. Defaults to `4`, like `ssh`/`local`; each session costs a `wsmprovhost` process and a warm AD module on the target, well under WinRM's 30-shell-per-user default. Each session's underlying WinRM shell is leased for 2 minutes rather than WinRM's own 30-minute default, so it cannot outlive an idle Terraform process for long; the transport transparently rebuilds a shell that gets reaped out from under it, but if that reap ever surfaces as an error, this 2-minute lease is where it comes from. See `scripts/host/Initialize-AdProvisioningHost.ps1`'s `MaxShellsPerUser`, which must cover `max_concurrency` times however many Terraform processes can start within that 2-minute window.
 - `mode` (String) Execution mode. `warm` (the default) keeps a persistent PSRP runspace, paying `pwsh` startup and `Import-Module ActiveDirectory` once per pooled process, and needs a registered PSRP session configuration (`configuration_name`). `cold` opens a fresh Windows Remote Shell per operation and feeds the script on stdin to `powershell -EncodedCommand` (Windows PowerShell 5.1 by default) — slower, but it needs **no** server-side PSRP session configuration, so it fits a host where PSRP remoting is disabled but WinRS is allowed. `cold` uses only the default WinRS shell, so `configuration_name`/`language_mode` do not apply; the `user` here must have WinRS shell access (Remote Management Users, or admin).
 - `password` (String, Sensitive) WinRM auth password. Environment: `AD_WINRM_PASSWORD`. Never written to state or a log line.

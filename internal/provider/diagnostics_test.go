@@ -92,19 +92,21 @@ func TestErrorDiagnosticsNeverEchoesASecret(t *testing.T) {
 
 func TestErrorDiagnosticsUnsupported(t *testing.T) {
 	err := &adpwsh.Error{Kind: adpwsh.KindUnsupported, Op: "acl_grant",
-		Err: errors.New("ACL delegation requires a full-language endpoint")}
+		Err: errors.New("this constrained endpoint has no ACL delegation helpers registered")}
 	diags := errorDiagnostics("Grant", "activedirectory_acl_delegation", err)
 	if !diags.HasError() {
 		t.Fatal("expected an error diagnostic")
 	}
-	if !strings.Contains(diags[0].Detail(), "full-language") {
-		t.Errorf("detail should explain the language_mode requirement, got %q", diags[0].Detail())
+	if !strings.Contains(diags[0].Detail(), "ACL helpers") {
+		t.Errorf("detail should explain the missing ACL helpers, got %q", diags[0].Detail())
 	}
 	// KindUnsupported must render its own summary, not fall through to the
-	// generic default — the substring check on Detail() above passes even
-	// without a dedicated case, since renderError already folds e.Err into
-	// the detail before the Kind switch runs; the summary is what proves the
-	// case exists.
+	// generic default. Both assertions here depend on that dedicated case
+	// existing: the fabricated Err text above never contains "ACL helpers"
+	// (it reads "ACL delegation helpers"), so the substring check on
+	// Detail() only passes because renderError's KindUnsupported case writes
+	// its own "...was not registered with the ACL helpers..." text; and the
+	// summary is set only by that same case, never by the generic default.
 	if want := "Grant not supported by this endpoint"; diags[0].Summary() != want {
 		t.Errorf("summary = %q, want %q", diags[0].Summary(), want)
 	}

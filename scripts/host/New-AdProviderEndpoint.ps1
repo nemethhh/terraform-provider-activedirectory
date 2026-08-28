@@ -57,17 +57,21 @@
 .PARAMETER Sandbox
     Register a real sandbox: the endpoint runs ConstrainedLanguage, not
     FullLanguage. Cmdlet and provider visibility are always restricted in this
-    mode (regardless of -RestrictCmdlets), and the ACL capability is dropped even
-    if requested -- ConstrainedLanguage cannot run the .NET the ACL cmdlets need,
-    so a team wanting delegation work needs a separate, non-sandbox tier.
+    mode (regardless of -RestrictCmdlets).
 
-    The endpoint exposes only stock cmdlets -- no bespoke functions. The library
-    preamble builds its PSCredential with [PSCredential]::new + ConvertTo-SecureString
-    (in the visible core set); ConstrainedLanguage allows both, because PSCredential
-    and SecureString are on its "core type" list, so no credential-builder function
-    is needed. What ConstrainedLanguage does block -- [Console] payload delivery and
-    the ACL cmdlets' [DirectoryServices]/New-PSDrive .NET -- the provider avoids in
-    constrained mode (a different delivery path) or drops (ACL).
+    The endpoint exposes only stock cmdlets -- no bespoke functions, with one
+    exception: ACL delegation is available in a sandbox endpoint registered with
+    -Capability acl. The library preamble builds its PSCredential with
+    [PSCredential]::new + ConvertTo-SecureString (in the visible core set);
+    ConstrainedLanguage allows both, because PSCredential and SecureString are on
+    its "core type" list, so no credential-builder function is needed. What
+    ConstrainedLanguage does block -- [Console] payload delivery and the ACL
+    cmdlets' [DirectoryServices]/New-PSDrive .NET -- the provider avoids in
+    constrained mode (a different delivery path) or, for ACL, works around: when
+    -Capability acl is requested, this script installs Set-AdAce/Remove-AdAce/
+    Get-AdAce as -FunctionDefinitions synced from go-adpwsh's
+    adpwsh.ACLEndpointHelpers(), which run FullLanguage inside the CLM session and
+    do the .NET ACL work the CLM caller itself cannot.
 
     Teams pointed at this endpoint must set the provider's
     winrm.language_mode = "constrained".
@@ -115,17 +119,94 @@ $byCapability = @{
     user        = @('Get-ADUser','New-ADUser','Set-ADUser','Remove-ADUser','Set-ADAccountPassword')
     computer    = @('Get-ADComputer','New-ADComputer','Set-ADComputer','Remove-ADComputer')
     gmsa        = @('Get-ADServiceAccount','New-ADServiceAccount','Set-ADServiceAccount','Remove-ADServiceAccount')
-    acl         = @('Get-Acl','Set-Acl','New-PSDrive')
+    acl         = @('Get-Acl','Set-Acl','New-PSDrive','Remove-PSDrive')
     replication = @('Sync-ADObject')
 }
 $caps    = if ($Capability -contains 'all') { $byCapability.Keys } else { $Capability }
-if ($Sandbox -and ($caps -contains 'acl')) {
-    Write-Warning 'ACL capability is not available in a -Sandbox (ConstrainedLanguage) endpoint; dropping it. Register a separate non-sandbox tier for delegation work.'
-    $caps = $caps | Where-Object { $_ -ne 'acl' }
-}
 $visible = ($core + $base + ($caps | ForEach-Object { $byCapability[$_] })) | Sort-Object -Unique
 $providers = @('FileSystem','Function','Variable')
 if ($caps -contains 'acl') { $providers += 'ActiveDirectory' }
+
+# >>> go-adpwsh ACL endpoint helpers (synced from adpwsh.ACLEndpointHelpers; do not edit by hand) >>>
+$aclFunctionDefinitions = @(
+    # go-adpwsh ACL endpoint helpers. A ConstrainedLanguage endpoint installs these
+    # as -FunctionDefinitions, so each runs FullLanguage inside the CLM session and
+    # can construct the .NET ACL types the CLM caller cannot. Mirrors
+    # ops/acl_{grant,read,revoke}.ps1. SINGLE SOURCE OF TRUTH: the provider's
+    # New-AdProviderEndpoint.ps1 embeds a verbatim copy, guarded by a drift test.
+    @{ Name = 'Set-AdAce'; ScriptBlock = {
+        param([Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Server,[pscredential]$Credential,[Parameter(Mandatory)]$Aces)
+        $credOnly = @{}; if ($Credential) { $credOnly['Credential'] = $Credential }
+        $dn = (Get-ADObject -Identity $Target -Properties distinguishedName -Server $Server @credOnly).DistinguishedName
+        $drive = "TFAD$PID"
+        $null = New-PSDrive -Name $drive -PSProvider ActiveDirectory -Root '' -Server $Server @credOnly -ErrorAction Stop
+        try {
+            $path = "$($drive):$dn"
+            $acl = Get-Acl -Path $path
+            foreach ($ace in $Aces) {
+                $sid     = [System.Security.Principal.SecurityIdentifier]::new([string]$ace.trustee)
+                $rights  = [System.DirectoryServices.ActiveDirectoryRights](@($ace.rights) -join ', ')
+                $type    = [System.Security.AccessControl.AccessControlType][string]$ace.type
+                $inh     = [System.DirectoryServices.ActiveDirectorySecurityInheritance][string]$ace.inheritance
+                $objType = if ($ace.objectType) { [Guid][string]$ace.objectType } else { [Guid]::Empty }
+                $inhType = if ($ace.inheritedObjectType) { [Guid][string]$ace.inheritedObjectType } else { [Guid]::Empty }
+                $rule = [System.DirectoryServices.ActiveDirectoryAccessRule]::new($sid,$rights,$type,$objType,$inh,$inhType)
+                $acl.AddAccessRule($rule)
+            }
+            Set-Acl -Path $path -AclObject $acl
+            $obj = Get-ADObject -Identity $dn -Properties objectGUID -Server $Server @credOnly
+            [ordered]@{ granted = $true; guid = $obj.ObjectGUID.ToString() }
+        } finally { Remove-PSDrive -Name $drive -ErrorAction SilentlyContinue }
+    }}
+    @{ Name = 'Remove-AdAce'; ScriptBlock = {
+        param([Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Server,[pscredential]$Credential,[Parameter(Mandatory)]$Aces)
+        $credOnly = @{}; if ($Credential) { $credOnly['Credential'] = $Credential }
+        $dn = (Get-ADObject -Identity $Target -Properties distinguishedName -Server $Server @credOnly).DistinguishedName
+        $drive = "TFAD$PID"
+        $null = New-PSDrive -Name $drive -PSProvider ActiveDirectory -Root '' -Server $Server @credOnly -ErrorAction Stop
+        try {
+            $path = "$($drive):$dn"
+            $acl = Get-Acl -Path $path
+            foreach ($ace in $Aces) {
+                $sid     = [System.Security.Principal.SecurityIdentifier]::new([string]$ace.trustee)
+                $rights  = [System.DirectoryServices.ActiveDirectoryRights](@($ace.rights) -join ', ')
+                $type    = [System.Security.AccessControl.AccessControlType][string]$ace.type
+                $inh     = [System.DirectoryServices.ActiveDirectorySecurityInheritance][string]$ace.inheritance
+                $objType = if ($ace.objectType) { [Guid][string]$ace.objectType } else { [Guid]::Empty }
+                $inhType = if ($ace.inheritedObjectType) { [Guid][string]$ace.inheritedObjectType } else { [Guid]::Empty }
+                $rule = [System.DirectoryServices.ActiveDirectoryAccessRule]::new($sid,$rights,$type,$objType,$inh,$inhType)
+                $null = $acl.RemoveAccessRule($rule)
+            }
+            Set-Acl -Path $path -AclObject $acl
+            $obj = Get-ADObject -Identity $dn -Properties objectGUID -Server $Server @credOnly
+            [ordered]@{ revoked = $true; guid = $obj.ObjectGUID.ToString() }
+        } finally { Remove-PSDrive -Name $drive -ErrorAction SilentlyContinue }
+    }}
+    @{ Name = 'Get-AdAce'; ScriptBlock = {
+        param([Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Server,[pscredential]$Credential)
+        $credOnly = @{}; if ($Credential) { $credOnly['Credential'] = $Credential }
+        $dn = (Get-ADObject -Identity $Target -Properties distinguishedName -Server $Server @credOnly).DistinguishedName
+        $drive = "TFAD$PID"
+        $null = New-PSDrive -Name $drive -PSProvider ActiveDirectory -Root '' -Server $Server @credOnly -ErrorAction Stop
+        try {
+            $acl = Get-Acl -Path "$($drive):$dn"
+            $aces = foreach ($a in $acl.Access) {
+                $sid = try { $a.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $a.IdentityReference.Value }
+                [ordered]@{
+                    trustee             = $sid
+                    type                = $a.AccessControlType.ToString()
+                    rights              = @($a.ActiveDirectoryRights.ToString() -split ',\s*')
+                    objectType          = $a.ObjectType.ToString()
+                    inheritedObjectType = $a.InheritedObjectType.ToString()
+                    inheritance         = $a.InheritanceType.ToString()
+                    inherited           = [bool]$a.IsInherited
+                }
+            }
+            [ordered]@{ aces = @($aces) }
+        } finally { Remove-PSDrive -Name $drive -ErrorAction SilentlyContinue }
+    }}
+)
+# <<< go-adpwsh ACL endpoint helpers <<<
 
 # --- resolve the grantee to a SID -------------------------------------------
 # By SID, so the descriptor never depends on name resolution again.
@@ -165,10 +246,14 @@ if ($Sandbox) {
     # elements." Casting to string[] is what actually silences it (lab-verified).
     $psscArgs['VisibleCmdlets']      = [string[]]$visible   # always restricted in a sandbox
     $psscArgs['VisibleProviders']    = [string[]]$providers
-    # No custom functions: the provider builds its PSCredential with the stock
-    # [PSCredential] constructor + ConvertTo-SecureString (in $core, so visible),
-    # both of which ConstrainedLanguage allows (PSCredential/SecureString are core
-    # types). So a sandbox endpoint exposes only stock cmdlets, nothing bespoke.
+    # No custom functions for the base credential path: the provider builds its
+    # PSCredential with the stock [PSCredential] constructor + ConvertTo-SecureString
+    # (in $core, so visible), both of which ConstrainedLanguage allows (PSCredential/
+    # SecureString are core types). The one exception is ACL delegation: the ACL
+    # cmdlets need .NET ConstrainedLanguage blocks, so when acl is requested the
+    # synced FunctionDefinitions below install FullLanguage-trusted helper functions
+    # (Set-AdAce/Remove-AdAce/Get-AdAce) that do that work on the CLM caller's behalf.
+    if ($caps -contains 'acl') { $psscArgs['FunctionDefinitions'] = $aclFunctionDefinitions }
 } elseif ($RestrictCmdlets) {
     # See the [string[]] note above -- same 5.1 Object[] pitfall.
     $psscArgs['VisibleCmdlets']   = [string[]]$visible
@@ -203,11 +288,12 @@ $fqdn      = "$env:COMPUTERNAME.$dnsDomain".ToLower()
 # set language_mode = "constrained" or the provider sends a full-language wrapper
 # the endpoint rejects. Rendered into the example block and its explanation below.
 $langModeLine = if ($Sandbox) { "`n      language_mode      = ""constrained""" } else { "" }
-$langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required against a -Sandbox endpoint: it runs in`nConstrainedLanguage, so the provider delivers each operation without the`nfull-language constructs a normal (full) endpoint allows. ACL delegation is not`navailable in constrained mode; use a full-language endpoint for that." } else { "" }
+$aclSandboxNote = if ($caps -contains 'acl') { "ACL delegation is available here via the synced Set-AdAce/Remove-AdAce/Get-AdAce FunctionDefinitions (registered with -Capability acl)." } else { "ACL delegation is not enabled on this endpoint; re-register with -Capability acl to add it." }
+$langModeNote = if ($Sandbox) { "`n`nlanguage_mode = ""constrained"" is required against a -Sandbox endpoint: it runs in`nConstrainedLanguage, so the provider delivers each operation without the`nfull-language constructs a normal (full) endpoint allows. $aclSandboxNote" } else { "" }
 
 Write-Host ''
 if ($Sandbox) {
-    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, stock cmdlets only). Teams must set the provider's winrm.language_mode = `"constrained`". ACL delegation is not available here." -f $TierName) -ForegroundColor Green
+    Write-Host ("Sandbox endpoint {0} registered (ConstrainedLanguage, runs as the connecting account, stock cmdlets only). Teams must set the provider's winrm.language_mode = `"constrained`". {1}" -f $TierName, $aclSandboxNote) -ForegroundColor Green
 } elseif ($RestrictCmdlets) {
     Write-Host ("Endpoint {0} registered with -RestrictCmdlets (FullLanguage -- a guardrail, not a sandbox; use -Sandbox for a real ConstrainedLanguage sandbox). Requires the go-adpwsh release that guards Import-Module in the preamble." -f $TierName) -ForegroundColor Yellow
 } else {
