@@ -307,6 +307,17 @@ func accTransport(t *testing.T) adpwsh.Transport {
 			CCachePath:   strings.TrimPrefix(os.Getenv("KRB5CCNAME"), "FILE:"),
 			Concurrency:  1,
 		}
+		// Mirror the provider's failover config: when a second host is
+		// configured, the verification client must probe the same ordered
+		// endpoint list, or a run whose primary is down would fail here
+		// (in the verifier) rather than exercising the provider's failover.
+		if h2 := os.Getenv(envWinrmHost2); h2 != "" {
+			cfg.Endpoints = []adwinrm.Endpoint{
+				{Host: os.Getenv(envWinrmHost), SPN: os.Getenv(envWinrmSPN)},
+				{Host: h2, SPN: os.Getenv(envWinrmSPN2)},
+			}
+			cfg.Host, cfg.SPN = "", "" // the endpoint list is authoritative (Validate requires Host empty when Endpoints set)
+		}
 		var tr adpwsh.Transport
 		var err error
 		if strings.EqualFold(os.Getenv(envMode), "cold") {
