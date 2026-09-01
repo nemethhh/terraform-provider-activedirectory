@@ -73,6 +73,9 @@ if [[ -n ${LAB_PSRP_HOST2:-} ]]; then
   export AD_ACC_WINRM_HOST2="$LAB_PSRP_HOST2"
   export AD_ACC_WINRM_SPN2="${LAB_PSRP_SPN2:-}"
 fi
+if [[ -n ${LAB_PSRP_SERVER_SELECTION:-} ]]; then
+  export AD_ACC_WINRM_SERVER_SELECTION="$LAB_PSRP_SERVER_SELECTION"
+fi
 export AD_ACC_CONTAINER="$container"
 export AD_ACC_DENIED_CONTAINER="$denied"
 export AD_ACC_SERVER="$dc"

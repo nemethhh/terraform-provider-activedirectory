@@ -68,6 +68,11 @@ const (
 	// Everything else in the winrm block stays shared between the two DCs.
 	envWinrmHost2 = "AD_ACC_WINRM_HOST2"
 	envWinrmSPN2  = "AD_ACC_WINRM_SPN2"
+
+	// envWinrmServerSelection sets the winrm block's server_selection attribute
+	// (failover | round_robin) so the lab can exercise round_robin without a
+	// change to the generated config in every other run.
+	envWinrmServerSelection = "AD_ACC_WINRM_SERVER_SELECTION"
 )
 
 // accPreCheck fails the test when a required variable is missing. t.Fatal, not
@@ -162,6 +167,9 @@ func accTransportBlock() string {
 			if v := os.Getenv(envWinrmSPN); v != "" {
 				fmt.Fprintf(&b, "    spn = %q\n", v)
 			}
+		}
+		if v := os.Getenv(envWinrmServerSelection); v != "" {
+			fmt.Fprintf(&b, "    server_selection = %q\n", v)
 		}
 		if v := os.Getenv(envWinrmUser); v != "" {
 			fmt.Fprintf(&b, "    user = %q\n", v)

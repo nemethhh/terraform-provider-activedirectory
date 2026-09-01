@@ -187,6 +187,18 @@ func TestProviderConfigWinrmTwoServers(t *testing.T) {
 	}
 }
 
+func TestProviderConfigWinrmServerSelection(t *testing.T) {
+	t.Setenv("AD_ACC_TRANSPORT", "winrm")
+	t.Setenv("AD_ACC_WINRM_HOST", "dc1.corp.local")
+	t.Setenv("AD_ACC_WINRM_HOST2", "dc2.corp.local")
+	t.Setenv("AD_ACC_WINRM_USER", "svc")
+	t.Setenv("AD_ACC_WINRM_SERVER_SELECTION", "round_robin")
+	got := accProviderConfig()
+	if !strings.Contains(got, `server_selection = "round_robin"`) {
+		t.Errorf("winrm block missing server_selection line:\n%s", got)
+	}
+}
+
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(dir.Transport())),
