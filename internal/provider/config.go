@@ -52,23 +52,34 @@ type sshModel struct {
 }
 
 type winrmModel struct {
-	Host               types.String `tfsdk:"host"`
-	Port               types.Int64  `tfsdk:"port"`
-	UseTLS             types.Bool   `tfsdk:"use_tls"`
-	InsecureSkipVerify types.Bool   `tfsdk:"insecure_skip_verify"`
-	User               types.String `tfsdk:"user"`
-	Password           types.String `tfsdk:"password"`
-	Domain             types.String `tfsdk:"domain"`
-	SPN                types.String `tfsdk:"spn"`
-	Realm              types.String `tfsdk:"realm"`
-	Krb5ConfPath       types.String `tfsdk:"krb5_conf_path"`
-	CCachePath         types.String `tfsdk:"ccache_path"`
-	KeytabPath         types.String `tfsdk:"keytab_path"`
-	ConfigurationName  types.String `tfsdk:"configuration_name"`
-	LanguageMode       types.String `tfsdk:"language_mode"`
-	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
-	Timeout            types.String `tfsdk:"timeout"`
-	Mode               types.String `tfsdk:"mode"`
+	Host               types.String       `tfsdk:"host"`
+	Port               types.Int64        `tfsdk:"port"`
+	UseTLS             types.Bool         `tfsdk:"use_tls"`
+	InsecureSkipVerify types.Bool         `tfsdk:"insecure_skip_verify"`
+	User               types.String       `tfsdk:"user"`
+	Password           types.String       `tfsdk:"password"`
+	Domain             types.String       `tfsdk:"domain"`
+	SPN                types.String       `tfsdk:"spn"`
+	Realm              types.String       `tfsdk:"realm"`
+	Krb5ConfPath       types.String       `tfsdk:"krb5_conf_path"`
+	CCachePath         types.String       `tfsdk:"ccache_path"`
+	KeytabPath         types.String       `tfsdk:"keytab_path"`
+	ConfigurationName  types.String       `tfsdk:"configuration_name"`
+	LanguageMode       types.String       `tfsdk:"language_mode"`
+	MaxConcurrency     types.Int64        `tfsdk:"max_concurrency"`
+	Timeout            types.String       `tfsdk:"timeout"`
+	Mode               types.String       `tfsdk:"mode"`
+	Servers            []winrmServerModel `tfsdk:"server"`
+}
+
+// winrmServerModel is one repeatable `server{}` sub-block: a host in the
+// ordered failover list. Only addressing varies per host; every other
+// setting (auth/TLS/Kerberos/configuration_name/language_mode/mode/
+// max_concurrency/timeout) stays on the shared winrm block.
+type winrmServerModel struct {
+	Host types.String `tfsdk:"host"`
+	Port types.Int64  `tfsdk:"port"`
+	SPN  types.String `tfsdk:"spn"`
 }
 
 type domainModel struct {
@@ -252,15 +263,40 @@ func resolveWinrm(m providerModel, getenv func(string) string) (adwinrm.Config, 
 		cfg.Concurrency = n
 	}
 
+	// Repeatable server{} blocks become the ordered failover list. Mutually
+	// exclusive with the single winrm-level host; per-block host is required.
+	if len(s.Servers) > 0 {
+		if v := str(s.Host, nil, ""); v != "" {
+			diags.AddAttributeError(root.AtName("server"), "Set host or server blocks, not both",
+				"Use either a single `winrm.host` or one-or-more `winrm.server` blocks — not both.")
+		}
+		eps := make([]adwinrm.Endpoint, 0, len(s.Servers))
+		for i, sv := range s.Servers {
+			host := str(sv.Host, nil, "")
+			if host == "" {
+				diags.AddAttributeError(root.AtName("server").AtListIndex(i).AtName("host"),
+					"Missing server host", "Each `winrm.server` block requires a `host`.")
+				continue
+			}
+			ep := adwinrm.Endpoint{Host: host, SPN: str(sv.SPN, nil, "")}
+			if !sv.Port.IsNull() && !sv.Port.IsUnknown() {
+				ep.Port = int(sv.Port.ValueInt64())
+			}
+			eps = append(eps, ep)
+		}
+		cfg.Endpoints = eps
+		cfg.Host = "" // the list is authoritative
+	}
+
 	// Validate the raw config (catches a negative concurrency) before defaults.
 	if err := cfg.Validate(); err != nil {
 		diags.AddAttributeError(root, "Invalid WinRM configuration", err.Error())
 	}
 	cfg = cfg.WithDefaults()
 
-	if cfg.Host == "" {
+	if len(cfg.Endpoints) == 0 && cfg.Host == "" {
 		diags.AddAttributeError(root.AtName("host"), "Missing WinRM host",
-			"Set winrm.host or the AD_WINRM_HOST environment variable.")
+			"Set winrm.host, one-or-more winrm.server blocks, or the AD_WINRM_HOST environment variable.")
 	}
 	return cfg, diags
 }

@@ -224,6 +224,50 @@ func TestResolveWinrmLanguageModeEnv(t *testing.T) {
 	}
 }
 
+func TestResolveWinrmServerBlocks(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{
+		User: types.StringValue("svc"),
+		Servers: []winrmServerModel{
+			{Host: types.StringValue("dc1.corp.local")},
+			{Host: types.StringValue("dc2.corp.local"), Port: types.Int64Value(5986)},
+		},
+	}}
+	cfg, diags := resolveWinrm(m, func(string) string { return "" })
+	if diags.HasError() {
+		t.Fatalf("unexpected diags: %v", diags)
+	}
+	if len(cfg.Endpoints) != 2 {
+		t.Fatalf("Endpoints = %d, want 2", len(cfg.Endpoints))
+	}
+	if cfg.Endpoints[0].Host != "dc1.corp.local" || cfg.Endpoints[1].Port != 5986 {
+		t.Errorf("endpoints mapped wrong: %+v", cfg.Endpoints)
+	}
+	if cfg.Host != "" {
+		t.Errorf("Host = %q, want empty when server blocks are used", cfg.Host)
+	}
+}
+
+func TestResolveWinrmHostAndServerBlocksConflict(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{
+		Host:    types.StringValue("dc0.corp.local"),
+		Servers: []winrmServerModel{{Host: types.StringValue("dc1.corp.local")}},
+	}}
+	_, diags := resolveWinrm(m, func(string) string { return "" })
+	if !diags.HasError() {
+		t.Error("host + server blocks: want a diagnostic")
+	}
+}
+
+func TestResolveWinrmServerBlockEmptyHost(t *testing.T) {
+	m := providerModel{Winrm: &winrmModel{
+		Servers: []winrmServerModel{{Host: types.StringValue("")}},
+	}}
+	_, diags := resolveWinrm(m, func(string) string { return "" })
+	if !diags.HasError() {
+		t.Error("empty server host: want a diagnostic")
+	}
+}
+
 func localOnly(l localModel) providerModel { return providerModel{Local: &l} }
 
 func TestResolveLocalDefaults(t *testing.T) {

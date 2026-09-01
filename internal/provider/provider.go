@@ -230,6 +230,26 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"`user` here must have WinRS shell access (Remote Management Users, or " +
 							"admin)."},
 				},
+				Blocks: map[string]schema.Block{
+					"server": schema.ListNestedBlock{
+						MarkdownDescription: "A WinRM host in an ordered failover list. Give two or more " +
+							"`server` blocks to have the provider connect to the first reachable host and " +
+							"re-probe the list whenever it reconnects during a run. Mutually exclusive with " +
+							"`host`; all auth/TLS/Kerberos/`configuration_name`/`language_mode`/`mode`/" +
+							"`max_concurrency`/`timeout` settings stay on the `winrm` block and are shared. " +
+							"Requires `mode = \"warm\"`.",
+						NestedObject: schema.NestedBlockObject{
+							Attributes: map[string]schema.Attribute{
+								"host": schema.StringAttribute{Required: true,
+									MarkdownDescription: "Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`)."},
+								"port": schema.Int64Attribute{Optional: true,
+									MarkdownDescription: "WinRM port for this host. Defaults to the `winrm` block's `port`, then `5985`/`5986`."},
+								"spn": schema.StringAttribute{Optional: true,
+									MarkdownDescription: "Kerberos SPN for this host. Defaults to `HTTP/<host>`."},
+							},
+						},
+					},
+				},
 			},
 			"domain": schema.SingleNestedBlock{
 				MarkdownDescription: "Domain targeting.",
