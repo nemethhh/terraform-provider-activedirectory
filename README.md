@@ -22,7 +22,8 @@ the third.
 - **First-apply convergence** — each write pins a domain controller and reads
   the object back from that same replica; no second apply to settle drift.
 - **Three transports** — run the AD cmdlets locally on a domain-joined host,
-  over SSH to a jump box, or over PSRP/WinRM from anywhere (including Linux).
+  over SSH to a jump box, or over WinRM from anywhere (including Linux); each
+  keeps a persistent PowerShell 7 runspace (`mode = "warm"`) by default.
 - **Write-only passwords** — a user's `password` never touches state or a plan
   file (Terraform 1.11+); rotation is driven by a version counter.
 - **Adoption is first-class** — import by GUID, DN, SID or sAMAccountName, and a
@@ -41,7 +42,7 @@ terraform {
   required_providers {
     activedirectory = {
       source  = "nemethhh/activedirectory"
-      version = "~> 0.9"
+      version = "~> 0.12"
     }
   }
   required_version = ">= 1.11"
@@ -74,14 +75,14 @@ this README covers the shape and the conventions.
 |---|---|
 | **Terraform** | 1.11 or later — the write-only `password` attribute requires it |
 | **PowerShell host** | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 |
-| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `psrp` |
+| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm` |
 
 Every setting can also come from the environment (`AD_PWSH_PATH`, `AD_SSH_*`,
-`AD_PSRP_*`, …), and configuration always wins over the environment.
+`AD_WINRM_*`, …), and configuration always wins over the environment.
 
 ## Connecting to Active Directory
 
-Exactly **one** of `local`, `ssh` or `psrp` is required — there is no implicit
+Exactly **one** of `local`, `ssh` or `winrm` is required — there is no implicit
 default, because guessing would let a mistyped block run against the wrong
 identity.
 
@@ -89,22 +90,32 @@ identity.
 |---|---|---|---|
 | `local` | a domain-joined Windows member server | the token of whoever launched Terraform | Terraform already runs on a domain-joined Windows host |
 | `ssh` | anywhere; reaches a Windows jump box over SSH | the SSH session's identity, or `domain.credential` | you want a Windows jump box and Terraform runs elsewhere |
-| `psrp` | anywhere, including Linux; reaches a Windows host over WinRM | an ambient Kerberos ticket, or `psrp.user` / `psrp.password` | you drive AD from Linux/CI, or want no jump box at all |
+| `winrm` | anywhere, including Linux; reaches a Windows host over WinRM | an ambient Kerberos ticket, or `winrm.user` / `winrm.password` | you drive AD from Linux/CI, or want no jump box at all |
 
 A few things worth knowing:
 
 - **Pin a DC with `domain.server`.** Omit it to discover one at configure time.
   Pinning is what keeps a write and its read-back on the same replica.
-- **The double hop.** Over `ssh` (public-key) or `psrp` against a *member* host,
+- **The double hop.** Over `ssh` (public-key) or `winrm` against a *member* host,
   the session carries no delegatable credentials, so onward auth to AD Web
   Services fails. Add a `domain.credential { username = …, password = … }` block
   to work around it. Against a domain controller directly, or on `local`, it
   never arises.
-- **PSRP is a first-class transport.** Kerberos over HTTP (5985) by default, or
+- **WinRM is a first-class transport.** Kerberos over HTTP (5985) by default, or
   `use_tls` for HTTPS (5986); it can also target a locked-down
   ConstrainedLanguage sandbox endpoint (`language_mode = "constrained"`). See
   [`scripts/host/`](./scripts/host/) for provisioning an endpoint a delegated
   account can use without local-administrator rights.
+- **Warm or cold execution.** Every transport takes a `mode`. `warm` (the
+  default) keeps a persistent PowerShell 7 runspace, so process start-up and
+  `Import-Module ActiveDirectory` are paid once and amortized across operations;
+  `cold` runs a fresh `pwsh` per operation and works on a Windows PowerShell 5.1
+  host with no persistent runspace.
+- **WinRM can fail over across hosts.** Give two or more `winrm.server` blocks
+  instead of a single `host`: the provider connects to the first reachable one
+  and re-probes the list when it reconnects mid-run. `server_selection =
+  "round_robin"` rotates the starting host to avoid a hot primary; the default
+  `"failover"` always prefers the first.
 - **Replication waits are opt-in.** By default the provider does not block on a
   write reaching other DCs; set `replication { wait = true }` when a downstream
   read on a different DC needs it.

@@ -2,7 +2,7 @@ terraform {
   required_providers {
     activedirectory = {
       source  = "nemethhh/activedirectory"
-      version = "~> 0.9"
+      version = "~> 0.12"
     }
   }
   required_version = ">= 1.11"
