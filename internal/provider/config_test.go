@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
-
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
 func env(pairs map[string]string) func(string) string {
