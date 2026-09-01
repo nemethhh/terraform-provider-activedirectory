@@ -386,6 +386,13 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 				// configuration_name / language_mode are PSRP session-configuration
 				// concerns; cold uses the default WinRS shell, so they are a
 				// misconfiguration rather than a silent no-op.
+				if w := cfg.Winrm; w != nil && len(w.Servers) > 0 {
+					resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("server"),
+						"Multiple servers require warm mode",
+						"`winrm.server` blocks configure failover across hosts, which winrm "+
+							"`mode = \"cold\"` does not support. Use a single `winrm.host` with cold, "+
+							"or switch to `mode = \"warm\"`.")
+				}
 				if w := cfg.Winrm; w != nil {
 					if !w.ConfigurationName.IsNull() && w.ConfigurationName.ValueString() != "" {
 						resp.Diagnostics.AddAttributeError(path.Root("winrm").AtName("configuration_name"),

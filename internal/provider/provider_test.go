@@ -145,6 +145,28 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
+func TestConfigureRejectsWinrmServersWithColdMode(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  winrm {
+    mode = "cold"
+    server { host = "dc1.corp.local" }
+    server { host = "dc2.corp.local" }
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`(?i)multiple.*servers.*require.*warm`),
+		}},
+	})
+}
+
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(dir.Transport())),
