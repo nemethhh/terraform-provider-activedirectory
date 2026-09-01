@@ -945,3 +945,63 @@ endpoint helpers. A spike first proved a `member`-attribute ACE granted to
 Authenticated Users hits an AD validated-write `Access is denied` on revoke, but
 that is an AD ACL-evaluation quirk of that specific ACE, not the mechanism — the
 suite's ordinary delegation ACEs grant and revoke cleanly.
+
+## WinRM multi-server failover (2026-09-01)
+
+A second WinRM management host now exists: the new `s-client2`
+(`192.168.50.33`), a `corp.local` member with an `AdObjects51` endpoint
+identical to `s-client`'s (5.1, `FullLanguage`, **no RunAs**, granting
+`BUILTIN\Administrators` + `CORP\AD-Terraform-Objects`). It was provisioned from
+a fresh Windows Server 2025 the same way `s-client` was — SSH key (over WinRM,
+local admin) → rename → domain join as `CORP\svc_join` →
+`Initialize-AdProvisioningHost.ps1 -AllowedClientCidr 192.168.50.0/24 -ServiceAccountGroup 'CORP\AD-Terraform-Objects'`
+→ `New-AdProviderEndpoint.ps1 -TierName AdObjects51 -GrantTo 'CORP\AD-Terraform-Objects'`
+— from Windows PowerShell 5.1 (no pwsh 7 installed: failover is engine-agnostic,
+so the 5.1 endpoint exercises it). SSH alias `s-client2` added on the Linux box.
+
+**Feature.** The provider's `winrm {}` block accepts repeatable `server { host }`
+sub-blocks (optional per-host `port`/`spn`; all auth/TLS/Kerberos/mode/config
+stay `winrm`-level and shared). go-adpwsh's `transport/winrm` gained a
+`failoverExecutor` that probes the ordered endpoint list at connect time and
+binds to the first that connects, a per-endpoint connect-budget ceiling, and a
+pool-shared negative cache. Backed by go-adpwsh **v0.19.0**. Warm-only —
+`server{}` + `mode = "cold"` is a config error. Selection is strict list-order
+priority (prefer-primary), not load-balancing.
+
+**Runs.** Over psrp from the Linux box as `CORP\svc_tfacc`, `TestAccOULifecycle`,
+against the failover branch via `go.work`; the harness emits `server{}` blocks
+when `LAB_PSRP_HOST2` is set.
+
+| Scenario | Config | Result |
+|---|---|---|
+| Both healthy | `server{s-client} server{s-client2}` | PASS 34.9s (runs on the primary) |
+| Down at start (refused) | `server{192.168.50.99 dead} server{s-client2}` | PASS 247s — fails over to `s-client2` |
+| Dies mid-run | both, `Stop-Service WinRM` on `s-client` mid-op | one op errors (WSMan `995` "I/O aborted") |
+| Hung primary, whole run | `s-client` WinRM down for the whole run | PASS — full lifecycle on `s-client2` |
+
+The **mid-run** case is the fail-closed boundary, not a defect: a host dying
+mid-execution yields `KindTransport`, which is never retried (the write may have
+partially reached AD, so a silent re-run could double-apply). Terraform surfaces
+that one op's error and a re-apply completes it on the healthy host. New
+operations after the death fail over normally — only the in-flight one surfaces.
+
+**A lab-found bug, fixed.** The first connect-budget formula (`Timeout/n` = 45s)
+let a *hung* primary eat most of a 60s op deadline and starve the healthy
+secondary — both timed out. Capped at a 15s ceiling (the single-host `n=1` path
+is exempt, so its full connect deadline is preserved). A *refused/unreachable*
+primary was always cheap; only a *hung* one hit this.
+
+**Negative caching + a harness caveat.** A pool-shared negative cache skips a
+recently-failed endpoint for a 5-minute cooldown so a hung host is not re-probed
+on every reconnection. Its benefit is invisible under `resource.Test`: `TF_LOG`
+shows the provider is **Configured ~21× per lifecycle**, and each Configure
+builds a fresh transport + cache, so the harness re-probes a hung primary
+~21×15s (≈430s, and cooldown-invariant — 30s and 5m produced identical times).
+A real single `terraform apply` configures **once**, so a hung primary is probed
+once (~15s) and the cache holds for the whole apply — the acc-suite hung-primary
+latency is a harness artifact, not the real cost. (`s-client2` also runs ~3×
+slower than `s-client` as a freshly built box, inflating every secondary-host
+number.)
+
+**Target.** `make lab-acc-winrm-failover` (`LAB_PSRP_HOST2` / `LAB_PSRP_SPN2`
+default to `s-client2`) runs the suite against both hosts.
