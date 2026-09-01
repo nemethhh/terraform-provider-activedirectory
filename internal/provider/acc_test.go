@@ -61,6 +61,13 @@ const (
 	envWinrmSPN          = "AD_ACC_WINRM_SPN"
 	envWinrmConfigName   = "AD_ACC_WINRM_CONFIGURATION_NAME"
 	envWinrmLanguageMode = "AD_ACC_WINRM_LANGUAGE_MODE"
+
+	// envWinrmHost2/envWinrmSPN2 select a second endpoint for the failover
+	// schema (Task 4): when host2 is set, accTransportBlock emits two server{}
+	// sub-blocks (host1/spn1, host2/spn2) instead of the flat host/spn lines.
+	// Everything else in the winrm block stays shared between the two DCs.
+	envWinrmHost2 = "AD_ACC_WINRM_HOST2"
+	envWinrmSPN2  = "AD_ACC_WINRM_SPN2"
 )
 
 // accPreCheck fails the test when a required variable is missing. t.Fatal, not
@@ -140,15 +147,27 @@ func accTransportBlock() string {
 		b.WriteString("  }\n")
 	case "winrm":
 		b.WriteString("  winrm {\n")
-		fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envWinrmHost))
+		if h2 := os.Getenv(envWinrmHost2); h2 != "" {
+			emitServer := func(host, spn string) {
+				fmt.Fprintf(&b, "    server {\n      host = %q\n", host)
+				if spn != "" {
+					fmt.Fprintf(&b, "      spn = %q\n", spn)
+				}
+				b.WriteString("    }\n")
+			}
+			emitServer(os.Getenv(envWinrmHost), os.Getenv(envWinrmSPN))
+			emitServer(h2, os.Getenv(envWinrmSPN2))
+		} else {
+			fmt.Fprintf(&b, "    host = %q\n", os.Getenv(envWinrmHost))
+			if v := os.Getenv(envWinrmSPN); v != "" {
+				fmt.Fprintf(&b, "    spn = %q\n", v)
+			}
+		}
 		if v := os.Getenv(envWinrmUser); v != "" {
 			fmt.Fprintf(&b, "    user = %q\n", v)
 		}
 		if v := os.Getenv(envWinrmPassword); v != "" {
 			fmt.Fprintf(&b, "    password = %q\n", v)
-		}
-		if v := os.Getenv(envWinrmSPN); v != "" {
-			fmt.Fprintf(&b, "    spn = %q\n", v)
 		}
 		if v := os.Getenv(envWinrmConfigName); v != "" {
 			fmt.Fprintf(&b, "    configuration_name = %q\n", v)

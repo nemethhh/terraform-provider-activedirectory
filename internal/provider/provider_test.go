@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	fwprovider "github.com/hashicorp/terraform-plugin-framework/provider"
@@ -165,6 +166,25 @@ resource "activedirectory_ou" "unreachable" {
 			ExpectError: regexp.MustCompile(`(?i)multiple.*servers.*require.*warm`),
 		}},
 	})
+}
+
+// accTransportBlock's winrm branch emits two server{} sub-blocks instead of a
+// flat host/spn when AD_ACC_WINRM_HOST2 is set, so the acceptance harness can
+// exercise the failover schema (Task 4) against a real two-DC lab.
+func TestProviderConfigWinrmTwoServers(t *testing.T) {
+	t.Setenv("AD_ACC_TRANSPORT", "winrm")
+	t.Setenv("AD_ACC_WINRM_HOST", "dc1.corp.local")
+	t.Setenv("AD_ACC_WINRM_HOST2", "dc2.corp.local")
+	t.Setenv("AD_ACC_WINRM_USER", "svc")
+	got := accProviderConfig()
+	for _, want := range []string{"server {", `host = "dc1.corp.local"`, `host = "dc2.corp.local"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "    host = \"dc1.corp.local\"\n") && strings.Contains(got, "  winrm {\n    host") {
+		t.Error("two-host mode must not also emit a flat winrm host")
+	}
 }
 
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
