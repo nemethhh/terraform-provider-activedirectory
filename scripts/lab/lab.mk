@@ -63,7 +63,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
-        lab-acc-winrm-cold lab-acc-winrm-failover \
+        lab-acc-winrm-cold lab-acc-winrm-failover lab-acc-winrm-roundrobin \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -289,6 +289,15 @@ lab-acc-winrm-cold:
 lab-acc-winrm-failover:
 	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_PSRP_CONFIG) \
 	  LAB_PSRP_HOST2=$(LAB_PSRP_HOST2) LAB_PSRP_SPN2=$(LAB_PSRP_SPN2) \
+	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAccOULifecycle) $(or $(MINUTES),40)
+
+# Two winrm servers (s-client + s-client2) with round-robin selection: the
+# provider rotates connections across them (winrm.server_selection = "round_robin")
+# instead of always preferring the first, still failing through when one is down.
+lab-acc-winrm-roundrobin:
+	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_PSRP_CONFIG) \
+	  LAB_PSRP_HOST2=$(LAB_PSRP_HOST2) LAB_PSRP_SPN2=$(LAB_PSRP_SPN2) \
+	  LAB_PSRP_SERVER_SELECTION=round_robin \
 	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAccOULifecycle) $(or $(MINUTES),40)
 
 # Run every matrix cell in turn, continuing past a failure and printing a

@@ -1005,3 +1005,59 @@ number.)
 
 **Target.** `make lab-acc-winrm-failover` (`LAB_PSRP_HOST2` / `LAB_PSRP_SPN2`
 default to `s-client2`) runs the suite against both hosts.
+
+## WinRM server selection — round_robin (2026-09-01)
+
+Follow-up to the multi-server failover above. The `winrm {}` block now takes
+`server_selection = "failover" | "round_robin"` (default `failover` = the
+strict-priority behaviour above). `round_robin` rotates which endpoint each
+pooled connection binds to as connections are (re)established, spreading
+PowerShell-execution load across the peer hosts to avoid a hot primary; it still
+fails through to the next host when the chosen one is down. Implemented in
+go-adpwsh **v0.20.0** as "failover with a rotating start index": a pool-shared
+`sync/atomic` counter offsets the endpoint probe order per connect, reusing the
+existing negative-cache / connect-budget / bind-first machinery unchanged.
+Per-connection, not per-operation (the warm pool binds a persistent runspace per
+host); no effect with a single host. `server_selection` maps to the library's
+`Config.Strategy`; the schema `OneOf`-validates it. Design:
+`docs/superpowers/specs/2026-09-01-winrm-server-selection-design.md`.
+
+**Runs.** Over psrp from the Linux box as `CORP\svc_tfacc`, `TestAccOULifecycle`,
+**`GOWORK=off` against the released v0.20.0** (not the local checkout); two
+servers `s-client` (192.168.50.31) + `s-client2` (192.168.50.33), `AdObjects51`
+(5.1) endpoints.
+
+| Scenario | Config | Result |
+|---|---|---|
+| Round-robin, both healthy | `server_selection=round_robin`, 2 hosts | PASS 56.8s |
+| Failover regression, both healthy | `server_selection=failover` (default), 2 hosts | PASS 33.3s (primary only) |
+| **Server unavailable DURING execution** | failover mode, `Stop-Service WinRM` on `s-client` ~14s into the run | PASS 219s — run completes on `s-client2` |
+
+**The unavailable-during-execution run (the key new evidence).** In failover
+mode all connections bind the primary (`s-client`). ~14s into the lifecycle its
+WinRM was stopped (`Stop-Service WinRM -Force`) — verified down (service
+`Stopped`, `:5985` refused) from 12:31:14 until the 12:34:42 restore. The suite
+kept running the whole time `s-client` was down and **PASSED** (219s vs. a ~40s
+both-healthy baseline; the elongation is reconnect plus the ~3× slower secondary
+box). Because the primary was down for the entire remainder of the run, the
+surviving create/read/rename/move/destroy operations could only complete on
+`s-client2` — corroborated by its Security log: **33 `svc_tfacc` network logons
+(4624) on `s-client2`** in the window (its WinRM/Operational log is enabled,
+2313 records). `s-client`'s WinRM was restored cleanly afterward (Running,
+`:5985` open). This exercised the transparent-reconnect path of the failover
+safety spine — distinct from the in-flight-op boundary in the table above (a
+death caught mid-op still surfaces one `KindTransport` error and re-applies);
+here the stop landed such that reconnection carried the run through to
+`s-client2` with no fatal op error.
+
+**Distribution.** Even spread is proven deterministically by go-adpwsh unit tests
+(`TestRoundRobinRotatesStartAcrossConnects` and the concurrent
+`TestRoundRobinConcurrentConnectsDistribute`). On the lab, the round_robin
+lifecycle passes and both hosts serve the service account; the acc harness
+reconfigures ~21×/lifecycle with a small pool, so exact per-host counts are an
+observation, not a suite assertion (same caveat as the negative cache above).
+
+**Targets.** `make lab-acc-winrm-roundrobin` (new — sets
+`LAB_PSRP_SERVER_SELECTION=round_robin` on top of the `LAB_PSRP_HOST2` /
+`LAB_PSRP_SPN2` two-host wiring) and the existing `make lab-acc-winrm-failover`.
+Backed by go-adpwsh v0.20.0; provider pin bumped to v0.20.0.
