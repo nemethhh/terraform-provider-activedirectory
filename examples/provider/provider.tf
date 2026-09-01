@@ -67,6 +67,23 @@ provider "activedirectory" {
 #   }
 # }
 #
+# Give two or more `server` blocks instead of a single `host` to fail over
+# across WinRM hosts: the provider connects to the first reachable one and
+# re-probes the list whenever it reconnects mid-run. The blocks are ordered,
+# warm-only (the default `mode`), and share one auth/TLS/Kerberos/
+# configuration_name config across every host; each block can still override
+# its own port or SPN.
+# provider "activedirectory" {
+#   winrm {
+#     server {
+#       host = "dc1.corp.local"
+#     }
+#     server {
+#       host = "dc2.corp.local"
+#     }
+#   }
+# }
+#
 # From a member/management host, add domain.credential to cross the double hop:
 # provider "activedirectory" {
 #   winrm { host = "mgmt.corp.local" }

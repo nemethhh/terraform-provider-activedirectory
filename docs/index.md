@@ -81,6 +81,23 @@ provider "activedirectory" {
 #   }
 # }
 #
+# Give two or more `server` blocks instead of a single `host` to fail over
+# across WinRM hosts: the provider connects to the first reachable one and
+# re-probes the list whenever it reconnects mid-run. The blocks are ordered,
+# warm-only (the default `mode`), and share one auth/TLS/Kerberos/
+# configuration_name config across every host; each block can still override
+# its own port or SPN.
+# provider "activedirectory" {
+#   winrm {
+#     server {
+#       host = "dc1.corp.local"
+#     }
+#     server {
+#       host = "dc2.corp.local"
+#     }
+#   }
+# }
+#
 # From a member/management host, add domain.credential to cross the double hop:
 # provider "activedirectory" {
 #   winrm { host = "mgmt.corp.local" }
@@ -212,7 +229,20 @@ Point this at a purpose-made Windows PowerShell 5.1 endpoint — see `scripts/ho
 - `password` (String, Sensitive) WinRM auth password. Environment: `AD_WINRM_PASSWORD`. Never written to state or a log line.
 - `port` (Number) WinRM port. Environment: `AD_WINRM_PORT`. Defaults to `5985` (HTTP) or `5986` when `use_tls` is set.
 - `realm` (String) Kerberos realm; defaults to krb5.conf's `default_realm`. Environment: `AD_WINRM_REALM`.
+- `server` (Block List) A WinRM host in an ordered failover list. Give two or more `server` blocks to have the provider connect to the first reachable host and re-probe the list whenever it reconnects during a run. Mutually exclusive with `host`; all auth/TLS/Kerberos/`configuration_name`/`language_mode`/`mode`/`max_concurrency`/`timeout` settings stay on the `winrm` block and are shared. Requires `mode = "warm"`. (see [below for nested schema](#nestedblock--winrm--server))
 - `spn` (String) Kerberos service principal name. Defaults to `HTTP/<host>` (AD's sPNMappings alias it to the host's HOST SPN). Environment: `AD_WINRM_SPN`.
 - `timeout` (String) Per-operation transport timeout. Defaults to `90s` — deliberately longer than a resource's own default 60s operation budget (see the `timeouts` block on each resource), so that when both are left at their default, the caller's deadline expires first rather than racing the transport's.
 - `use_tls` (Boolean) Use HTTPS/WinRM-over-TLS. Environment: `AD_WINRM_USE_TLS`. Required for NTLM auth; Kerberos encrypts over plain HTTP without it.
 - `user` (String) WinRM auth user in `DOMAIN\user` or UPN form. Required: go-psrp needs the principal name even when an ambient Kerberos ticket cache supplies the credentials, because Linux has no SSPI single sign-on. Only on Windows, authenticating via SSPI SSO, can this be omitted. Environment: `AD_WINRM_USER`.
+
+<a id="nestedblock--winrm--server"></a>
+### Nested Schema for `winrm.server`
+
+Required:
+
+- `host` (String) Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`).
+
+Optional:
+
+- `port` (Number) WinRM port for this host. Defaults to the `winrm` block's `port`, then `5985`/`5986`.
+- `spn` (String) Kerberos SPN for this host. Defaults to `HTTP/<host>`.
