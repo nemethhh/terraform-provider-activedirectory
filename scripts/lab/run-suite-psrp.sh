@@ -69,6 +69,10 @@ export AD_ACC_WINRM_CONFIGURATION_NAME="$config"
 # harness emits `language_mode = "constrained"` into the provider's winrm block so
 # the suite runs against a ConstrainedLanguage sandbox endpoint.
 export AD_ACC_WINRM_LANGUAGE_MODE="$langmode"
+if [[ -n ${LAB_PSRP_HOST2:-} ]]; then
+  export AD_ACC_WINRM_HOST2="$LAB_PSRP_HOST2"
+  export AD_ACC_WINRM_SPN2="${LAB_PSRP_SPN2:-}"
+fi
 export AD_ACC_CONTAINER="$container"
 export AD_ACC_DENIED_CONTAINER="$denied"
 export AD_ACC_SERVER="$dc"

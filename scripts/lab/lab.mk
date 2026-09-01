@@ -38,6 +38,8 @@ LAB_PWSH51           ?= C:\Windows\System32\WindowsPowerShell\v1.0\powershell.ex
 # group CORP\AD-Terraform-Objects.
 LAB_PSRP_HOST   ?= 192.168.50.31
 LAB_PSRP_SPN    ?= HTTP/s-client.corp.local
+LAB_PSRP_HOST2  ?= 192.168.50.33
+LAB_PSRP_SPN2   ?= HTTP/s-client2.corp.local
 LAB_PSRP_CONFIG ?= AdObjects51
 # The PowerShell 7 WinRM endpoint, the winrm+warm+7 matrix cell's engine.
 LAB_WINRM_CONFIG7 ?= AdObjects7
@@ -50,7 +52,7 @@ LAB_DC2_FQDN    ?= s-server2.corp.local
 # child process. Without this export, editing the defaults above does nothing;
 # only command-line and environment overrides (`make lab-acc-psrp LAB_PSRP_HOST=...`
 # or an exported shell variable) reach the script today.
-export LAB_PSRP_HOST LAB_PSRP_SPN LAB_PSRP_CONFIG LAB_REALM LAB_DC_FQDN LAB_DC2_FQDN
+export LAB_PSRP_HOST LAB_PSRP_SPN LAB_PSRP_HOST2 LAB_PSRP_SPN2 LAB_PSRP_CONFIG LAB_REALM LAB_DC_FQDN LAB_DC2_FQDN
 
 # One awk per lookup, evaluated only when a recipe runs, so no secret is read
 # into make's memory for targets that do not need one.
@@ -61,7 +63,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
-        lab-acc-winrm-cold \
+        lab-acc-winrm-cold lab-acc-winrm-failover \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -282,6 +284,12 @@ lab-acc-winrm-7:
 lab-acc-winrm-cold:
 	GOWORK=off \
 	  $(LAB_DIR)/run-suite-winrm-cold.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+# Two winrm servers (s-client + s-client2); the provider fails over between them.
+lab-acc-winrm-failover:
+	GOWORK=off LAB_MODE=warm LAB_PSRP_CONFIG=$(LAB_PSRP_CONFIG) \
+	  LAB_PSRP_HOST2=$(LAB_PSRP_HOST2) LAB_PSRP_SPN2=$(LAB_PSRP_SPN2) \
+	  $(LAB_DIR)/run-suite-psrp.sh $(or $(PATTERN),TestAccOULifecycle) $(or $(MINUTES),40)
 
 # Run every matrix cell in turn, continuing past a failure and printing a
 # pass/fail summary at the end (exit non-zero if any cell failed). The single
