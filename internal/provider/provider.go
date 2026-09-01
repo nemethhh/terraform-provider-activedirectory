@@ -229,6 +229,17 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"WinRS shell, so `configuration_name`/`language_mode` do not apply; the " +
 							"`user` here must have WinRS shell access (Remote Management Users, or " +
 							"admin)."},
+					"server_selection": schema.StringAttribute{Optional: true,
+						Validators: []validator.String{stringvalidator.OneOf("failover", "round_robin")},
+						MarkdownDescription: "How the provider picks among multiple `server` blocks at " +
+							"connect time. `failover` (default) always prefers the first reachable host " +
+							"in order, leaving the rest on standby. `round_robin` rotates across the hosts " +
+							"as connections are (re)established, spreading PowerShell-execution load so no " +
+							"single host stays hot; it still fails through to the next host when the chosen " +
+							"one is down. Selection is per-connection, not per-operation, and changes only " +
+							"**where `pwsh` runs** — each Active Directory write and its read-back stay " +
+							"pinned to one domain controller regardless. No effect with a single `host` or " +
+							"one `server`. Requires `mode = \"warm\"`."},
 				},
 				Blocks: map[string]schema.Block{
 					"server": schema.ListNestedBlock{

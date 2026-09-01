@@ -87,8 +87,11 @@ provider "activedirectory" {
 # warm-only (the default `mode`), and share one auth/TLS/Kerberos/
 # configuration_name config across every host; each block can still override
 # its own port or SPN.
+# Set server_selection = "round_robin" to spread connections across the hosts
+# instead of always preferring the first; it still fails through when one is down.
 # provider "activedirectory" {
 #   winrm {
+#     server_selection = "round_robin" # default "failover"; rotate across hosts to avoid a hot primary
 #     server {
 #       host = "dc1.corp.local"
 #     }
@@ -230,6 +233,7 @@ Point this at a purpose-made Windows PowerShell 5.1 endpoint — see `scripts/ho
 - `port` (Number) WinRM port. Environment: `AD_WINRM_PORT`. Defaults to `5985` (HTTP) or `5986` when `use_tls` is set.
 - `realm` (String) Kerberos realm; defaults to krb5.conf's `default_realm`. Environment: `AD_WINRM_REALM`.
 - `server` (Block List) A WinRM host in an ordered failover list. Give two or more `server` blocks to have the provider connect to the first reachable host and re-probe the list whenever it reconnects during a run. Mutually exclusive with `host`; all auth/TLS/Kerberos/`configuration_name`/`language_mode`/`mode`/`max_concurrency`/`timeout` settings stay on the `winrm` block and are shared. Requires `mode = "warm"`. (see [below for nested schema](#nestedblock--winrm--server))
+- `server_selection` (String) How the provider picks among multiple `server` blocks at connect time. `failover` (default) always prefers the first reachable host in order, leaving the rest on standby. `round_robin` rotates across the hosts as connections are (re)established, spreading PowerShell-execution load so no single host stays hot; it still fails through to the next host when the chosen one is down. Selection is per-connection, not per-operation, and changes only **where `pwsh` runs** — each Active Directory write and its read-back stay pinned to one domain controller regardless. No effect with a single `host` or one `server`. Requires `mode = "warm"`.
 - `spn` (String) Kerberos service principal name. Defaults to `HTTP/<host>` (AD's sPNMappings alias it to the host's HOST SPN). Environment: `AD_WINRM_SPN`.
 - `timeout` (String) Per-operation transport timeout. Defaults to `90s` — deliberately longer than a resource's own default 60s operation budget (see the `timeouts` block on each resource), so that when both are left at their default, the caller's deadline expires first rather than racing the transport's.
 - `use_tls` (Boolean) Use HTTPS/WinRM-over-TLS. Environment: `AD_WINRM_USE_TLS`. Required for NTLM auth; Kerberos encrypts over plain HTTP without it.

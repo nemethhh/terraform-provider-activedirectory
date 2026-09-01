@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
+
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -577,5 +579,33 @@ func TestResolveLocalWarmCarriesLocalFields(t *testing.T) {
 	}
 	if cfg.Concurrency != 6 || cfg.Timeout != 10*time.Second || cfg.PwshPath != "pwsh" {
 		t.Fatalf("local fields not carried into warm config: %+v", cfg)
+	}
+}
+
+func TestResolveWinrmServerSelection(t *testing.T) {
+	cases := []struct {
+		name string
+		set  bool
+		val  string
+		want adwinrm.SelectionStrategy
+	}{
+		{"unset defaults to failover", false, "", adwinrm.StrategyFailover},
+		{"failover", true, "failover", adwinrm.StrategyFailover},
+		{"round_robin", true, "round_robin", adwinrm.StrategyRoundRobin},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &winrmModel{Host: types.StringValue("dc1.corp.local")}
+			if tc.set {
+				w.ServerSelection = types.StringValue(tc.val)
+			}
+			cfg, diags := resolveWinrm(providerModel{Winrm: w}, func(string) string { return "" })
+			if diags.HasError() {
+				t.Fatalf("unexpected diags: %v", diags)
+			}
+			if cfg.Strategy != tc.want {
+				t.Errorf("Strategy = %v, want %v", cfg.Strategy, tc.want)
+			}
+		})
 	}
 }

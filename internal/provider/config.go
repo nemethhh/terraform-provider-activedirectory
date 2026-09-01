@@ -69,13 +69,14 @@ type winrmModel struct {
 	MaxConcurrency     types.Int64        `tfsdk:"max_concurrency"`
 	Timeout            types.String       `tfsdk:"timeout"`
 	Mode               types.String       `tfsdk:"mode"`
+	ServerSelection    types.String       `tfsdk:"server_selection"`
 	Servers            []winrmServerModel `tfsdk:"server"`
 }
 
 // winrmServerModel is one repeatable `server{}` sub-block: a host in the
 // ordered failover list. Only addressing varies per host; every other
 // setting (auth/TLS/Kerberos/configuration_name/language_mode/mode/
-// max_concurrency/timeout) stays on the shared winrm block.
+// server_selection/max_concurrency/timeout) stays on the shared winrm block.
 type winrmServerModel struct {
 	Host types.String `tfsdk:"host"`
 	Port types.Int64  `tfsdk:"port"`
@@ -286,6 +287,16 @@ func resolveWinrm(m providerModel, getenv func(string) string) (adwinrm.Config, 
 		}
 		cfg.Endpoints = eps
 		cfg.Host = "" // the list is authoritative
+	}
+
+	// server_selection maps to the library's connect-time ordering. The schema's
+	// OneOf validator (provider.go) already rejects any other value, so an
+	// unrecognised string never reaches here; default covers "" and "failover".
+	switch str(s.ServerSelection, nil, "") {
+	case "round_robin":
+		cfg.Strategy = adwinrm.StrategyRoundRobin
+	default:
+		cfg.Strategy = adwinrm.StrategyFailover
 	}
 
 	// Validate the raw config (catches a negative concurrency) before defaults.

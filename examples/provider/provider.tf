@@ -73,8 +73,11 @@ provider "activedirectory" {
 # warm-only (the default `mode`), and share one auth/TLS/Kerberos/
 # configuration_name config across every host; each block can still override
 # its own port or SPN.
+# Set server_selection = "round_robin" to spread connections across the hosts
+# instead of always preferring the first; it still fails through when one is down.
 # provider "activedirectory" {
 #   winrm {
+#     server_selection = "round_robin" # default "failover"; rotate across hosts to avoid a hot primary
 #     server {
 #       host = "dc1.corp.local"
 #     }
