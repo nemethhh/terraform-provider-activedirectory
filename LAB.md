@@ -1155,7 +1155,10 @@ at fault — a computer created through PSOpenAD with `servicePrincipalName` rea
 back exactly, verified by hand against this lab. gMSA over psopenad is the one
 object class this cell does not yet cover.
 
-**Pin.** Validated against the `go-adpwsh` working tree, not a release: the five
-fixes are unreleased. `GOWORK=off` (what `run-suite-psopenad.sh` uses) would run
-the pinned v0.21.0, which still carries all five. The provider's pin must move to a
-release carrying them before `dialect = "psopenad"` is usable.
+**Pin.** Fixes 1 and 3-5 shipped as `go-adpwsh` **v0.21.1**, and the provider is
+pinned to it. The cell was then re-run against that release through
+`make lab-acc-psopenad` — which uses `GOWORK=off`, so it exercises the published
+module rather than the sibling checkout — and reproduced the working-tree result
+exactly: **32 pass, 2 fail, 47 skip in 551s**, the two failures being the gMSA
+pair above. v0.21.0 must not be used with `dialect = "psopenad"`: it carries all
+five defects, and three of them are silent wrong reads rather than failures.
