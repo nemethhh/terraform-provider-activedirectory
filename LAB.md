@@ -1119,21 +1119,24 @@ Windows host that already uses the DC for DNS.
    ~7 hours to **554s**. Nothing in the provider, go-adpwsh or PSOpenAD is slow —
    the resolver was.
 
-**Result.** Full cell, `make lab-acc-psopenad`, 554s: **32 pass, 2 fail, 47 skip**
-(81 entry points). The 47 skips are all by design — 39 `TestAccE2E*` gated on
-`AD_E2E_CONTAINER`, the large-set suites, and the three replication suites (below).
-An earlier run of the same cell, before the last three library fixes, was 25 pass /
-9 fail / 47 skip in 448s.
+**Result.** Full cell, `make lab-acc-psopenad`, against released go-adpwsh
+**v0.21.2**: **34 pass, 0 fail, 47 skip** (81 entry points) in 596s, exit 0. The 47
+skips are all by design — 39 `TestAccE2E*` gated on `AD_E2E_CONTAINER`, the
+large-set suites, and the three replication suites (below).
+
+Getting there took three passes, and the progression is the point: **25/9/47**
+(448s) on the dialect as released in v0.21.0, **32/2/47** (554s) once the first
+five defects were fixed, then **34/0/47** once the two gMSA defects were.
 
 **Skipped by design.** The three replication suites each assert a *forced* sync,
 which the provider refuses on this dialect (a rootDSE modify PSOpenAD cannot
 express). They skip with that reason via `accSkipIfForcedSyncUnsupported`; the
 polling wait itself is unaffected.
 
-**What the real domain rejected that the fake accepted — six defects, and every
+**What the real domain rejected that the fake accepted — seven defects, and every
 one of them invisible to the fake.** The fake answers on the payload `op`, which
 is identical in both dialects, so it cannot see a script-set divergence at all.
-Five are in `go-adpwsh`'s psopenad fragments and one was in this repo's harness.
+Six are in `go-adpwsh`'s psopenad fragments and one was in this repo's harness.
 
 | # | Where | Defect | Why it survived until now |
 |---|---|---|---|
@@ -1142,23 +1145,21 @@ Five are in `go-adpwsh`'s psopenad fragments and one was in this repo's harness.
 | 3 | `Convert-AdUser` | `pwdLastSet` compared `-eq 0`, but PSOpenAD decodes interval attributes to `DateTimeOffset`, so FILETIME 0 arrives as 1601-01-01 and never matched | The library's own live user lifecycle does not assert `ChangePasswordAtLogon`; the provider's does |
 | 4 | `computer_create.ps1`, `gmsa_create.ps1` | `sAMAccountName` written unsuffixed. `New-ADComputer`/`New-ADServiceAccount` append the `$`; `New-OpenADObject` writes what it is given, and AD refuses with `0x523` | The Go side never suffixes it by design (see `Computer.Update`), so only the raw-LDAP path is affected |
 | 5 | `group_members_read.ps1` | Iterated `@($g.Member)`. On an **empty** group that is a one-element array holding null, so `Get-OpenADObject -Identity` got `$null` | The ADWS fragment iterates the bare property and runs zero times. The preamble's own `ConvertTo-AdArray` comment already warned about this exact trap |
-| 6 | `gmsa_create.ps1` | **Still open.** Writes `msDS-ManagedPasswordInterval` and `msDS-GroupMSAMembership` only when the config states them, so a gMSA created without either is an incomplete object — AD rejects it with `0x207C OBJ_CLASS_VIOLATION`. `New-ADServiceAccount` supplies the defaults | — |
+| 6 | `gmsa_create.ps1` | Wrote `msDS-ManagedPasswordInterval` only when the config stated it. It is the class's **only** `systemMustContain` attribute (read off the live schema), so a gMSA created without one is incomplete and AD rejects it with `0x207C OBJ_CLASS_VIOLATION`. `New-ADServiceAccount` supplies AD's default; raw LDAP does not | Only reachable by omitting the interval, which just one suite does |
+| 7 | `Convert-AdServiceAccount` | Read SPNs as `ServicePrincipalName`, but **`Get-OpenADServiceAccount` surfaces `ServicePrincipalNames`** — plural — while `Get-OpenADComputer` uses the singular. The read returned null and emitted an empty set, so a gMSA's SPNs never round-tripped | Surfaced only as "provider produced inconsistent result after apply", which names no attribute. Computers were unaffected, and no suite covers a computer's SPNs at all |
 
-1–5 are fixed on `go-adpwsh` branch `fix/psopenad-sd-read-mask`, each with a static
-gate in `internal/adscript/script_test.go` so the script text cannot regress.
+All seven are fixed and released: 1 and 3–5 in **v0.21.1**, 6–7 in **v0.21.2**.
+Each carries a static gate in `internal/adscript/script_test.go` so the script text
+cannot regress, and two of those gates were checked by restoring the old line and
+confirming they fail.
 
-**Still failing (2).** `TestAccGMSADataSource` on defect 6 above, and
-`TestAccGMSALifecycle` on a separate one: the gMSA creates, but
-`service_principal_names` does not round-trip ("planned set element … does not
-correlate with any element in actual"). The shared SPN write/read path is **not**
-at fault — a computer created through PSOpenAD with `servicePrincipalName` reads
-back exactly, verified by hand against this lab. gMSA over psopenad is the one
-object class this cell does not yet cover.
+**Pin.** The provider pins `go-adpwsh` **v0.21.2**, and the green result above is
+from `make lab-acc-psopenad` — which uses `GOWORK=off`, so it exercises the
+published module rather than the sibling checkout, and is therefore evidence about
+the release itself rather than a working tree.
 
-**Pin.** Fixes 1 and 3-5 shipped as `go-adpwsh` **v0.21.1**, and the provider is
-pinned to it. The cell was then re-run against that release through
-`make lab-acc-psopenad` — which uses `GOWORK=off`, so it exercises the published
-module rather than the sibling checkout — and reproduced the working-tree result
-exactly: **32 pass, 2 fail, 47 skip in 551s**, the two failures being the gMSA
-pair above. v0.21.0 must not be used with `dialect = "psopenad"`: it carries all
-five defects, and three of them are silent wrong reads rather than failures.
+**v0.21.0 must not be used with `dialect = "psopenad"`.** It carries five of the
+seven defects, and three of those are silent wrong reads rather than failures:
+`protected`, `can_change_password` and `change_password_at_logon` come back false
+whatever the directory holds, which is a permanent false diff rather than an
+error.
