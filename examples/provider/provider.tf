@@ -8,16 +8,20 @@ terraform {
   required_version = ">= 1.11"
 }
 
-# Two independent axes decide how the AD cmdlets run:
+# Three independent axes decide how the AD operations run:
 #
 #   * transport — where pwsh runs and how bytes reach it: local, ssh or winrm.
 #                 Exactly one block is required; there is no implicit default.
 #   * mode      — how pwsh is driven once a channel exists. "warm" (default)
 #                 keeps a persistent PowerShell 7 runspace so process startup and
-#                 Import-Module ActiveDirectory are paid once and amortized;
-#                 "cold" runs a fresh pwsh -EncodedCommand for every operation.
+#                 the module import are paid once and amortized; "cold" runs a
+#                 fresh pwsh -EncodedCommand for every operation.
+#   * dialect   — which PowerShell module runs. "adws" (default) is Microsoft's
+#                 ActiveDirectory module over AD Web Services, which needs a
+#                 Windows host; "psopenad" is the PSOpenAD module over LDAP,
+#                 which runs anywhere PowerShell 7.4 does.
 #
-# The domain block is a third, orthogonal axis: it pins a DC and supplies the
+# The domain block is a further, orthogonal axis: it pins a DC and supplies the
 # AD credential, independent of which transport carries the session.
 
 # Terraform runs on a domain-joined Windows host and spawns pwsh there. The
@@ -121,5 +125,33 @@ provider "activedirectory" {
 #       username = "CORP\\svc_teamx"
 #       password = var.svc_password
 #     }
+#   }
+# }
+
+# The psopenad dialect drives the PSOpenAD module over LDAP instead of the
+# ActiveDirectory module over AD Web Services, so pwsh needs no RSAT and no
+# Windows — the local transport can run it on the Linux host Terraform itself
+# runs on. Authentication is the session's own Kerberos ticket unless
+# domain.credential says otherwise.
+#
+# EXPERIMENTAL. It needs PSOpenAD 0.8.0 or newer for the security-descriptor
+# writes behind activedirectory_access_rule, an OU's
+# protected_from_accidental_deletion and a user's can_change_password; those
+# fixes currently ship only from github.com/nemethhh/PSOpenAD and are pending
+# upstream.
+#
+# Two combinations are refused: replication.force_sync = true (the polling wait
+# works; forcing one needs a rootDSE modify PSOpenAD cannot express) and
+# winrm.language_mode = "constrained" (the script set constructs .NET types,
+# which ConstrainedLanguage forbids).
+# provider "activedirectory" {
+#   dialect = "psopenad"
+#
+#   local {
+#     pwsh_path = "pwsh" # PowerShell 7.4+, with the PSOpenAD module installed
+#   }
+#
+#   domain {
+#     server = "dc01.corp.local"
 #   }
 # }

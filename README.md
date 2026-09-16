@@ -74,8 +74,8 @@ this README covers the shape and the conventions.
 | | |
 |---|---|
 | **Terraform** | 1.11 or later — the write-only `password` attribute requires it |
-| **PowerShell host** | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 |
-| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm` |
+| **PowerShell host** | `adws` (default): a Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1. `psopenad`: any host with PowerShell 7.4+ and the PSOpenAD module — Linux included |
+| **Network** | `adws`: TCP 9389 (AD Web Services) to the domain controller. `psopenad`: TCP 389, or 636 for LDAPS. Plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm` |
 
 Every setting can also come from the environment (`AD_PWSH_PATH`, `AD_SSH_*`,
 `AD_WINRM_*`, …), and configuration always wins over the environment.
@@ -119,6 +119,17 @@ A few things worth knowing:
 - **Replication waits are opt-in.** By default the provider does not block on a
   write reaching other DCs; set `replication { wait = true }` when a downstream
   read on a different DC needs it.
+- **Two dialects (experimental).** `dialect` picks which PowerShell module runs:
+  `adws` (the default) is Microsoft's `ActiveDirectory` module over AD Web
+  Services; `psopenad` is the [PSOpenAD](https://github.com/jborean93/PSOpenAD)
+  module over LDAP, which needs no RSAT and no Windows — with the `local`
+  transport it runs on the Linux host Terraform itself runs on. It requires
+  PSOpenAD 0.8.0+ (currently only from
+  [`nemethhh/PSOpenAD`](https://github.com/nemethhh/PSOpenAD), pending upstream)
+  for the security-descriptor writes behind `activedirectory_access_rule`, an
+  OU's `protected_from_accidental_deletion` and a user's `can_change_password`.
+  `replication.force_sync = true` and `winrm.language_mode = "constrained"` are
+  refused on it.
 
 The full attribute list for each block is in the
 [provider docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs).

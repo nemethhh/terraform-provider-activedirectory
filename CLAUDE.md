@@ -72,6 +72,20 @@ the library's transport config — configuration always wins over the environmen
 `NewWithTransport` is the test-only hook that substitutes a transport and skips
 selection, so the fake-backed suites run a full resource cycle with no jump box.
 
+**The dialect is a third axis, and it does have a default**
+
+`chooseDialect` (`config.go`) reads the top-level `dialect` attribute: `adws`
+(the default) runs the ActiveDirectory module over AD Web Services, `psopenad`
+runs the PSOpenAD module over LDAP. Unlike the transport it defaults, because
+`adws` is what every released configuration already ran — and unlike a guessed
+transport, a defaulted dialect cannot run as the wrong identity. `dialectGuards`
+owns the refusals that belong to the *pair* rather than to either half:
+`psopenad` has no ConstrainedLanguage cell (its preamble constructs .NET types),
+and `replication.force_sync` is refused on it (forcing a sync needs a rootDSE
+modify PSOpenAD cannot express — only the unstated default moves; a stated
+`true` is still an error). `go-adpwsh`'s script layer assumes both, so the
+provider is the only place either is enforced.
+
 ## Two gotchas
 
 - **Never run a bare `gofmt -l .` or `gofmt -w .` here.** It walks
