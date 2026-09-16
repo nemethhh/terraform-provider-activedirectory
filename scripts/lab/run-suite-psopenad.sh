@@ -65,8 +65,17 @@ fi
 # so EVERY pwsh the transport spawns pays that 15s -- a single data-source read
 # measured 274s, and the full suite would run for hours.
 #
-# A warning, not a refusal: the cell is correct either way, just slow. Route the
-# zone at the DC, or add the domain itself to /etc/hosts alongside the DCs.
+# /etc/hosts entries for the DCs are NOT enough: they fix only the exact names
+# listed, while the lookup behind this is an arbitrary name under the domain -
+# the local host's FQDN, and SRV records a hosts file cannot serve at all.
+# Measured on the lab host: an unknown corp.local name and
+# _ldap._tcp.corp.local both take ~15.2s, while the same lookups under a
+# non-.local domain take ~36ms.
+#
+# The fix is to stop .local resolving by multicast on the link that reaches the
+# lab - `resolvectl mdns <link> no` - or to give the zone a real unicast server.
+#
+# A warning, not a refusal: the cell is correct either way, just slow.
 domain=${realm,,}
 probe_start=$(date +%s%N)
 getent hosts "tfacc-mdns-probe.$domain" >/dev/null 2>&1 || true
@@ -74,7 +83,8 @@ probe_ms=$(( ($(date +%s%N) - probe_start) / 1000000 ))
 if [[ $probe_ms -gt 2000 ]]; then
   echo "WARNING: an unknown name under $domain took ${probe_ms}ms to fail to resolve." >&2
   echo "  .local is mDNS territory; every pwsh start pays this, so the suite will crawl." >&2
-  echo "  Add '$domain' to /etc/hosts, or disable mDNS on the link. See LAB.md." >&2
+  echo "  /etc/hosts for the DCs does not fix it (SRV and the host FQDN still miss)." >&2
+  echo "  Disable mDNS on the link that reaches the lab, or serve the zone. See LAB.md." >&2
 fi
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
