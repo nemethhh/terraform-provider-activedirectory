@@ -58,6 +58,25 @@ if ! getent hosts "$dc" >/dev/null; then
   exit 1
 fi
 
+# A performance trap specific to a .local domain, and it is brutal: RFC 6762
+# reserves .local for multicast DNS, so systemd-resolved sends every corp.local
+# query that /etc/hosts does not answer to mDNS and waits the full ~15s timeout
+# when nothing replies. PSOpenAD resolves the realm's domain once as it loads,
+# so EVERY pwsh the transport spawns pays that 15s -- a single data-source read
+# measured 274s, and the full suite would run for hours.
+#
+# A warning, not a refusal: the cell is correct either way, just slow. Route the
+# zone at the DC, or add the domain itself to /etc/hosts alongside the DCs.
+domain=${realm,,}
+probe_start=$(date +%s%N)
+getent hosts "tfacc-mdns-probe.$domain" >/dev/null 2>&1 || true
+probe_ms=$(( ($(date +%s%N) - probe_start) / 1000000 ))
+if [[ $probe_ms -gt 2000 ]]; then
+  echo "WARNING: an unknown name under $domain took ${probe_ms}ms to fail to resolve." >&2
+  echo "  .local is mDNS territory; every pwsh start pays this, so the suite will crawl." >&2
+  echo "  Add '$domain' to /etc/hosts, or disable mDNS on the link. See LAB.md." >&2
+fi
+
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cat > "$work/krb5.conf" <<EOF
 [libdefaults]
