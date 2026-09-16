@@ -41,6 +41,23 @@ if ! "$pwsh_path" -NoProfile -c '(Get-Command Set-OpenADObject -ErrorAction Stop
   exit 1
 fi
 
+# The other prerequisite no other cell has: this cell resolves AD names from
+# LINUX. Every other cell runs the AD cmdlets on a Windows host that already
+# uses the DC for DNS, so a workstation with no route to the corp.local zone
+# surfaces only here -- and getaddrinfo's EAGAIN reaches the provider as a bare
+# "Resource temporarily unavailable", 20 seconds into the first operation.
+#
+# An IP is not a workaround: Kerberos needs the SPN ldap/$dc, and dialing
+# 192.168.50.x asks the KDC for ldap/192.168.50.x, which is not in the directory.
+# Only $dc is checked -- $dc2 belongs to the replication suites, which this
+# dialect skips.
+if ! getent hosts "$dc" >/dev/null; then
+  echo "cannot resolve $dc from this machine." >&2
+  echo "PSOpenAD dials the DC by name; an IP fails Kerberos (SPN ldap/$dc)." >&2
+  echo "Add the lab DCs to /etc/hosts, or route corp.local at $dc_ip. See LAB.md." >&2
+  exit 1
+fi
+
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cat > "$work/krb5.conf" <<EOF
 [libdefaults]
