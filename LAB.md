@@ -1061,3 +1061,101 @@ observation, not a suite assertion (same caveat as the negative cache above).
 `LAB_PSRP_SERVER_SELECTION=round_robin` on top of the `LAB_PSRP_HOST2` /
 `LAB_PSRP_SPN2` two-host wiring) and the existing `make lab-acc-winrm-failover`.
 Backed by go-adpwsh v0.20.0; provider pin bumped to v0.20.0.
+
+## PSOpenAD dialect (2026-09-16)
+
+The provider's `dialect = "psopenad"` cell: the `local` transport running **here**
+on Linux, PSOpenAD over LDAP to `s-server.corp.local`, no Windows host in the path
+at all. `make lab-acc-psopenad`.
+
+**Prerequisite, and it bites immediately.** Upstream PSOpenAD 0.7.0 has no
+`Set-OpenADObject -SecurityMask`, which every security-descriptor write needs:
+`activedirectory_access_rule`, an OU's `protected_from_accidental_deletion`, and a
+user's `can_change_password`. Build and install 0.8.0+ from
+`github.com/nemethhh/PSOpenAD`:
+
+```bash
+cd ~/Fun/PSOpenAD && pwsh -NoProfile -File ./build.ps1 -Task Build
+cp -r output/PSOpenAD/0.8.0 ~/.local/share/powershell/Modules/PSOpenAD/0.8.0
+```
+
+`run-suite-psopenad.sh` checks for the parameter and refuses to start without it,
+rather than failing an hour in.
+
+**Authentication.** The runner kinits into a private ticket cache and exports
+`KRB5CCNAME`; the local transport's `pwsh` child inherits it and
+`New-OpenADSession` authenticates with the ticket. No `domain.credential` is
+emitted and no secret reaches the generated configuration.
+
+**Two host prerequisites this cell has that no other cell has.** It is the first
+cell that resolves AD names *from Linux* — every other cell runs the cmdlets on a
+Windows host that already uses the DC for DNS.
+
+1. **The DCs must resolve.** `getaddrinfo` failure reaches the provider as a bare
+   "Resource temporarily unavailable". An IP is not a workaround: Kerberos then
+   asks for `ldap/<ip>`, which is not in the directory. `/etc/hosts` entries for
+   `s-server` and `s-server2` suffice; the runner pre-flights this.
+2. **`corp.local` must not fall through to mDNS, and this one is brutal.** RFC 6762
+   reserves `.local` for multicast DNS, so systemd-resolved sent every `corp.local`
+   query `/etc/hosts` did not answer to mDNS and waited the full ~15s timeout.
+   PSOpenAD resolves a name under the realm's domain as it loads, so **every pwsh
+   the transport spawns paid 15s**. Measured: an unknown name under the domain
+   15086ms; `_ldap._tcp.corp.local` 15248ms; the same lookups under a non-`.local`
+   domain ~36ms. A single data-source suite took **274s** and the lifecycles
+   740–822s each; the full cell would have run for about seven hours.
+
+   `/etc/hosts` does **not** fix it — it covers only the exact names listed, while
+   the lookups include the local host's FQDN and SRV records a hosts file cannot
+   serve at all. `resolvectl mdns <link> no` does not either: other links still
+   answer mDNS and NetworkManager reverts it. What works is an explicit **routing
+   domain**, which makes the zone a unicast query and bypasses the `.local`
+   special case:
+
+   ```bash
+   sudo resolvectl domain wlan0 lan '~corp.local'
+   ```
+
+   Module import went **15653ms → 134ms**, and the full cell from an estimated
+   ~7 hours to **554s**. Nothing in the provider, go-adpwsh or PSOpenAD is slow —
+   the resolver was.
+
+**Result.** Full cell, `make lab-acc-psopenad`, 554s: **32 pass, 2 fail, 47 skip**
+(81 entry points). The 47 skips are all by design — 39 `TestAccE2E*` gated on
+`AD_E2E_CONTAINER`, the large-set suites, and the three replication suites (below).
+An earlier run of the same cell, before the last three library fixes, was 25 pass /
+9 fail / 47 skip in 448s.
+
+**Skipped by design.** The three replication suites each assert a *forced* sync,
+which the provider refuses on this dialect (a rootDSE modify PSOpenAD cannot
+express). They skip with that reason via `accSkipIfForcedSyncUnsupported`; the
+polling wait itself is unaffected.
+
+**What the real domain rejected that the fake accepted — six defects, and every
+one of them invisible to the fake.** The fake answers on the payload `op`, which
+is identical in both dialects, so it cannot see a script-set divergence at all.
+Five are in `go-adpwsh`'s psopenad fragments and one was in this repo's harness.
+
+| # | Where | Defect | Why it survived until now |
+|---|---|---|---|
+| 1 | `ops_psopenad/preamble.ps1` + 8 fragments | Nine `nTSecurityDescriptor` reads with no `-SecurityMask`. Without the SD-flags control the request includes the SACL, and a caller without `SeSecurityPrivilege` gets the attribute **empty, not refused** | Works for a Domain Admin; the lab's `svc_tfacc` is deliberately not one. Crashed `Set-AdProtected` with `InvokeMethodOnNull`, **and** made `protected` / `canChangePassword` read back false whatever the directory held |
+| 2 | this repo, `acc_test.go` and 3 others | `adpwsh.Config` built without `Dialect`, so `CheckDestroy`, the sweeper, the e2e layer and the large-group suite verified over **ADWS on Linux** while the resources ran PSOpenAD | Needs a real domain *and* the resource steps to get far enough to reach `CheckDestroy` |
+| 3 | `Convert-AdUser` | `pwdLastSet` compared `-eq 0`, but PSOpenAD decodes interval attributes to `DateTimeOffset`, so FILETIME 0 arrives as 1601-01-01 and never matched | The library's own live user lifecycle does not assert `ChangePasswordAtLogon`; the provider's does |
+| 4 | `computer_create.ps1`, `gmsa_create.ps1` | `sAMAccountName` written unsuffixed. `New-ADComputer`/`New-ADServiceAccount` append the `$`; `New-OpenADObject` writes what it is given, and AD refuses with `0x523` | The Go side never suffixes it by design (see `Computer.Update`), so only the raw-LDAP path is affected |
+| 5 | `group_members_read.ps1` | Iterated `@($g.Member)`. On an **empty** group that is a one-element array holding null, so `Get-OpenADObject -Identity` got `$null` | The ADWS fragment iterates the bare property and runs zero times. The preamble's own `ConvertTo-AdArray` comment already warned about this exact trap |
+| 6 | `gmsa_create.ps1` | **Still open.** Writes `msDS-ManagedPasswordInterval` and `msDS-GroupMSAMembership` only when the config states them, so a gMSA created without either is an incomplete object — AD rejects it with `0x207C OBJ_CLASS_VIOLATION`. `New-ADServiceAccount` supplies the defaults | — |
+
+1–5 are fixed on `go-adpwsh` branch `fix/psopenad-sd-read-mask`, each with a static
+gate in `internal/adscript/script_test.go` so the script text cannot regress.
+
+**Still failing (2).** `TestAccGMSADataSource` on defect 6 above, and
+`TestAccGMSALifecycle` on a separate one: the gMSA creates, but
+`service_principal_names` does not round-trip ("planned set element … does not
+correlate with any element in actual"). The shared SPN write/read path is **not**
+at fault — a computer created through PSOpenAD with `servicePrincipalName` reads
+back exactly, verified by hand against this lab. gMSA over psopenad is the one
+object class this cell does not yet cover.
+
+**Pin.** Validated against the `go-adpwsh` working tree, not a release: the five
+fixes are unreleased. `GOWORK=off` (what `run-suite-psopenad.sh` uses) would run
+the pinned v0.21.0, which still carries all five. The provider's pin must move to a
+release carrying them before `dialect = "psopenad"` is usable.
