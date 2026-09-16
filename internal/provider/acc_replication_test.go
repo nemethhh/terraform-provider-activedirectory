@@ -9,6 +9,25 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
+// accSkipIfForcedSyncUnsupported skips a suite whose assertion is specifically
+// about a FORCED sync, on a cell that cannot force one. All three suites here
+// state force_sync = true in their own replication block, and the provider
+// refuses that under dialect = "psopenad" by design.
+//
+// This is a deliberate exception to the harness rule that a missing variable is
+// fatal rather than a skip. That rule exists so a half-configured run cannot
+// report success having proven nothing; this is a cell the design says does not
+// exist — the same status winrm + cold has in the matrix. The skip names its
+// reason in the log, where a negative -run regex in lab.mk would be both
+// fragile (RE2 has no negative lookahead) and invisible.
+func accSkipIfForcedSyncUnsupported(t *testing.T) {
+	t.Helper()
+	if os.Getenv(envDialect) == "psopenad" {
+		t.Skip("dialect = psopenad refuses force_sync (a rootDSE modify PSOpenAD cannot " +
+			"express); this suite asserts a forced sync specifically")
+	}
+}
+
 // What only real AD proves here: force_sync actually shortens the wait, and the
 // timeout-saves-state contract holds. Replication is a property of domain
 // topology, so there is nothing for the fake to model.
@@ -19,6 +38,7 @@ import (
 // arrived by the first verification poll, so the wait fails on purpose — which
 // is the only way to observe that the state was nonetheless saved.
 func TestAccReplicationTimeoutSavesState(t *testing.T) {
+	accSkipIfForcedSyncUnsupported(t)
 	container := os.Getenv(envContainer)
 	second := os.Getenv(envSecondDC)
 	ou := accNamePrefix + "repl"
@@ -79,6 +99,7 @@ resource "activedirectory_ou" "repl" {
 // finish in seconds rather than the quarter-hour passive replication is entitled
 // to take.
 func TestAccReplicationWaitSucceedsWithAForcedSync(t *testing.T) {
+	accSkipIfForcedSyncUnsupported(t)
 	container := os.Getenv(envContainer)
 	second := os.Getenv(envSecondDC)
 	ou := accNamePrefix + "repl-sync"
@@ -115,6 +136,7 @@ resource "activedirectory_ou" "repl" {
 // pinned source. On a two-DC domain that is the same wait as naming the second
 // DC, and it exercises the expansion path an operator is most likely to write.
 func TestAccReplicationWaitForAllControllers(t *testing.T) {
+	accSkipIfForcedSyncUnsupported(t)
 	container := os.Getenv(envContainer)
 	ou := accNamePrefix + "repl-all"
 

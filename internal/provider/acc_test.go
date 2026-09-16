@@ -48,6 +48,11 @@ const (
 	// default (warm) applies — which is what the pre-two-axis runs expect.
 	envMode = "AD_ACC_MODE"
 
+	// envDialect selects the script set the suite exercises: "psopenad" for the
+	// PSOpenAD module over LDAP, unset or "adws" for the ActiveDirectory module
+	// over AD Web Services.
+	envDialect = "AD_ACC_DIALECT"
+
 	// The ssh transport's own settings.
 	envSSHHost    = "AD_ACC_SSH_HOST"
 	envSSHUser    = "AD_ACC_SSH_USER"
@@ -208,6 +213,16 @@ func accModeLine() string {
 	return ""
 }
 
+// accDialectLine renders the provider's `dialect` attribute from AD_ACC_DIALECT.
+// Empty emits nothing, leaving the provider's default (adws) in force — so a run
+// that predates the dialect axis behaves exactly as it did before.
+func accDialectLine() string {
+	if v := os.Getenv(envDialect); v != "" {
+		return fmt.Sprintf("  dialect = %q\n", v)
+	}
+	return ""
+}
+
 // accProviderConfig is the provider block the acceptance suite runs against.
 //
 // The transport block is written literally: it is the deployment being tested,
@@ -221,6 +236,7 @@ func accModeLine() string {
 func accProviderConfig(extraBlocks ...string) string {
 	var b strings.Builder
 	b.WriteString("provider \"activedirectory\" {\n")
+	b.WriteString(accDialectLine())
 	// The ssh transport reads the top-level pwsh_path (the ssh block has none),
 	// so emitting it here selects the jump box's PowerShell — Windows PowerShell
 	// 5.1 vs 7 — for the cold path. Warm ssh ignores it: the sshd `powershell`

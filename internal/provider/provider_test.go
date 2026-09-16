@@ -199,6 +199,26 @@ func TestProviderConfigWinrmServerSelection(t *testing.T) {
 	}
 }
 
+// AD_ACC_DIALECT puts the dialect into the generated provider block, so setting
+// one variable runs every existing suite against the other script set. Unset
+// emits nothing, which is what keeps a run that predates the dialect axis
+// behaving exactly as it did.
+func TestProviderConfigDialect(t *testing.T) {
+	t.Setenv("AD_ACC_TRANSPORT", "local")
+	t.Setenv("AD_ACC_DIALECT", "psopenad")
+	if got := accProviderConfig(); !strings.Contains(got, `dialect = "psopenad"`) {
+		t.Errorf("provider block missing the dialect line:\n%s", got)
+	}
+}
+
+func TestProviderConfigDialectOmittedWhenUnset(t *testing.T) {
+	t.Setenv("AD_ACC_TRANSPORT", "local")
+	t.Setenv("AD_ACC_DIALECT", "")
+	if got := accProviderConfig(); strings.Contains(got, "dialect") {
+		t.Errorf("provider block emitted a dialect line with the variable unset:\n%s", got)
+	}
+}
+
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(dir.Transport())),
