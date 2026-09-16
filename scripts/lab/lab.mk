@@ -61,6 +61,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
+        lab-acc-psopenad lab-acc-psopenad-only \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
         lab-acc-winrm-cold lab-acc-winrm-failover lab-acc-winrm-roundrobin \
@@ -89,6 +90,8 @@ lab-help:
 	@echo '    lab-acc-only PATTERN=<re>  run one suite, or any -run pattern'
 	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
 	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
+	@echo '    lab-acc-psopenad           run the suite from here over the psopenad dialect (LDAP, no Windows host)'
+	@echo '    lab-acc-psopenad-only PATTERN=<re>  one suite over psopenad'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
 	@echo ''
 	@echo '  Transport x mode x pwsh matrix (PATTERN=<re> MINUTES=<n> override; full TestAcc by default):'
@@ -221,6 +224,16 @@ lab-acc-psrp-only:
 	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
 	$(LAB_DIR)/run-suite-psrp.sh '$(PATTERN)' $(or $(MINUTES),40)
 
+# Runs here on Linux, not on the member: the psopenad dialect drives PSOpenAD
+# over LDAP, which needs no Windows host at all. Needs PSOpenAD 0.8.0+ from the
+# nemethhh fork installed for the local pwsh (the runner checks and says so).
+lab-acc-psopenad:
+	$(LAB_DIR)/run-suite-psopenad.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
+
+lab-acc-psopenad-only:
+	@test -n "$(PATTERN)" || { echo 'PATTERN=<go test -run pattern> required'; exit 1; }
+	$(LAB_DIR)/run-suite-psopenad.sh '$(PATTERN)' $(or $(MINUTES),40)
+
 # --- transport x mode x powershell-version matrix ---------------------------
 #
 # One target per supported cell of the two-axis design (transport x mode), with
@@ -239,6 +252,12 @@ lab-acc-psrp-only:
 # | lab-acc-ssh-warm    | ssh       | warm | 7    | from here         |
 # | lab-acc-winrm-51    | winrm     | warm | 5.1  | from here         |
 # | lab-acc-winrm-7     | winrm     | warm | 7    | from here         |
+# | lab-acc-psopenad    | local     | warm | 7.4  | from here (Linux) |
+#
+# The psopenad cell is the one that runs the `local` transport from HERE: the
+# PSOpenAD module speaks LDAP and needs no Windows host, so there is nothing to
+# ship. It skips the three replication suites, which assert a FORCED sync the
+# provider refuses on this dialect.
 #
 # Each cell defaults to the full TestAcc suite; override with PATTERN=<re> and
 # MINUTES=<n>. Local cells ship the committed tree to the member and run there
@@ -249,7 +268,8 @@ lab-acc-psrp-only:
 # not for the local cells (they cross cmd.exe on the member) — use a prefix.
 MATRIX_CELLS := lab-acc-local-cold lab-acc-local-warm \
                 lab-acc-ssh-cold-51 lab-acc-ssh-cold-7 lab-acc-ssh-warm \
-                lab-acc-winrm-51 lab-acc-winrm-7 lab-acc-winrm-cold
+                lab-acc-winrm-51 lab-acc-winrm-7 lab-acc-winrm-cold \
+                lab-acc-psopenad
 
 lab-acc-local-cold: lab-ship
 	LAB_MODE=cold $(LAB_DIR)/run-suite.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),90)
