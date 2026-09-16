@@ -72,8 +72,17 @@ fi
 # _ldap._tcp.corp.local both take ~15.2s, while the same lookups under a
 # non-.local domain take ~36ms.
 #
-# The fix is to stop .local resolving by multicast on the link that reaches the
-# lab - `resolvectl mdns <link> no` - or to give the zone a real unicast server.
+# The fix that works is an explicit ROUTING DOMAIN on the link that reaches the
+# lab, which makes the domain a unicast query and bypasses the .local special
+# case altogether:
+#
+#     sudo resolvectl domain <link> <existing-domains> '~corp.local'
+#
+# It does not change which DNS server the link uses - a fast NXDOMAIN is all
+# this needs, because the names the run actually dials come from /etc/hosts.
+# Measured on the lab host: 15086ms -> 15ms for an unknown name, and the
+# PSOpenAD module import 15653ms -> 134ms. `resolvectl mdns <link> no` is NOT
+# enough: other links still answer mDNS, and NetworkManager reverts it.
 #
 # A warning, not a refusal: the cell is correct either way, just slow.
 domain=${realm,,}
@@ -84,7 +93,7 @@ if [[ $probe_ms -gt 2000 ]]; then
   echo "WARNING: an unknown name under $domain took ${probe_ms}ms to fail to resolve." >&2
   echo "  .local is mDNS territory; every pwsh start pays this, so the suite will crawl." >&2
   echo "  /etc/hosts for the DCs does not fix it (SRV and the host FQDN still miss)." >&2
-  echo "  Disable mDNS on the link that reaches the lab, or serve the zone. See LAB.md." >&2
+  echo "  Fix: sudo resolvectl domain <link> <existing> '~$domain'. See LAB.md." >&2
 fi
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
