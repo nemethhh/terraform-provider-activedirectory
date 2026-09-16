@@ -223,6 +223,18 @@ func accDialectLine() string {
 	return ""
 }
 
+// accDialect is accDialectLine's counterpart for the clients built from
+// adpwsh.Config directly — CheckDestroy's accClient, the sweeper, the e2e layer.
+// Those never see the generated provider block, and a Config with no Dialect is
+// DialectADWS, so without this the suite's own verification would run the
+// ActiveDirectory module while the resources under test ran PSOpenAD.
+func accDialect() adpwsh.Dialect {
+	if os.Getenv(envDialect) == "psopenad" {
+		return adpwsh.DialectPSOpenAD
+	}
+	return adpwsh.DialectADWS
+}
+
 // accProviderConfig is the provider block the acceptance suite runs against.
 //
 // The transport block is written literally: it is the deployment being tested,
@@ -372,7 +384,7 @@ func accTransport(t *testing.T) adpwsh.Transport {
 func accClient(t *testing.T) *adpwsh.Client {
 	t.Helper()
 	tr := accTransport(t)
-	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer)}
+	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer), Dialect: accDialect()}
 	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
 		cfg.Credential = &adpwsh.Credential{Username: u, Password: adpwsh.NewSecret(p)}
 	}

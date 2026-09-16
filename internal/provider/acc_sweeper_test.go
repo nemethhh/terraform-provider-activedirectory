@@ -143,7 +143,7 @@ func sweepBeneath(container string) error {
 		return dnDepth(objects[i].DN) > dnDepth(objects[j].DN)
 	})
 
-	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer)}
+	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer), Dialect: accDialect()}
 	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
 		cfg.Credential = &adpwsh.Credential{Username: u, Password: adpwsh.NewSecret(p)}
 	}

@@ -94,6 +94,7 @@ func e2eClient(t *testing.T, user, pass string) *adpwsh.Client {
 	}
 	cfg := adpwsh.Config{
 		Transport:  tr,
+		Dialect:    accDialect(),
 		Server:     os.Getenv(envServer),
 		Credential: &adpwsh.Credential{Username: user, Password: adpwsh.NewSecret(pass)},
 	}

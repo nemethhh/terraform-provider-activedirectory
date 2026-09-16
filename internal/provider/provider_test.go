@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -409,4 +410,44 @@ resource "activedirectory_ou" "unreachable" {
 			ExpectError: regexp.MustCompile(`(?i)cannot run the psopenad dialect`),
 		}},
 	})
+}
+
+// The out-of-band clients — CheckDestroy's accClient, the sweeper, the e2e
+// layer — are built from adpwsh.Config directly rather than from the generated
+// provider block, so accDialectLine() does not reach them. A Config without a
+// Dialect is DialectADWS, which on the psopenad cell means Linux trying to
+// Import-Module ActiveDirectory: the suite's own verification fails even though
+// every resource operation succeeded.
+//
+// This gate is a source scan because the omission is invisible at runtime until
+// a real domain is on the other end, and it cost a 13-minute lab run to find.
+func TestRealDomainClientsCarryTheDialect(t *testing.T) {
+	for _, name := range []string{
+		"acc_test.go", "acc_sweeper_test.go", "acc_e2e_common_test.go", "acc_large_group_test.go",
+	} {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		src := string(b)
+		for i, decl := range strings.Split(src, "adpwsh.Config{")[1:] {
+			// The literal ends at its closing brace; a Dialect line must appear
+			// inside it, or be assigned to the cfg before adpwsh.New is called.
+			end := strings.Index(decl, "}")
+			if end < 0 {
+				t.Fatalf("%s: unterminated adpwsh.Config literal #%d", name, i+1)
+			}
+			body := decl[:end]
+			// A multi-line literal that sets fields after construction is still
+			// fine, so widen to the following adpwsh.New call.
+			if n := strings.Index(decl, "adpwsh.New("); n > end {
+				body = decl[:n]
+			}
+			if !strings.Contains(body, "Dialect") {
+				t.Errorf("%s: adpwsh.Config #%d is built without a Dialect, so it runs adws "+
+					"regardless of AD_ACC_DIALECT:\n\t%s", name, i+1,
+					strings.TrimSpace(strings.SplitN(body, "\n", 2)[0]))
+			}
+		}
+	}
 }
