@@ -581,6 +581,39 @@ func chooseDialect(m providerModel, getenv func(string) string) (adpwsh.Dialect,
 	}
 }
 
+// dialectGuards refuses the (dialect, transport) combinations a dialect cannot
+// run. It is separate from chooseDialect because it needs the chosen transport,
+// which resolves later; and separate from resolveWinrm because the refusal is a
+// property of the pair, not of either half.
+//
+// go-adpwsh's script layer states that ConstrainedLanguage "cannot arise on
+// this dialect" and aliases the CLM ACL fragments accordingly, so nothing below
+// the provider checks this.
+func dialectGuards(m providerModel, dialect adpwsh.Dialect, kind transportKind, getenv func(string) string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if dialect != adpwsh.DialectPSOpenAD || kind != transportWinrm {
+		return diags
+	}
+	w := winrmModel{}
+	if m.Winrm != nil {
+		w = *m.Winrm
+	}
+	// Read it exactly as resolveWinrm does — attribute, then environment — so a
+	// guard that only looked at the attribute cannot be walked around.
+	if strings.EqualFold(str(w.LanguageMode, getenv, "AD_WINRM_LANGUAGE_MODE"), "constrained") {
+		diags.AddAttributeError(path.Root("winrm").AtName("language_mode"),
+			`language_mode = "constrained" cannot run the psopenad dialect`,
+			"The PSOpenAD script set reads its payload with `[Console]::In.ReadToEnd()` and "+
+				"builds `[PSOpenAD.Security.*]` objects directly. ConstrainedLanguage forbids "+
+				"both, so the session would fail on its first operation rather than at "+
+				"configure time.\n\n"+
+				"Use `dialect = \"adws\"` with this endpoint — ACL delegation is supported "+
+				"there under constrained mode — or drop `language_mode` and target a "+
+				"FullLanguage endpoint.")
+	}
+	return diags
+}
+
 // chooseTransport enforces the exactly-one rule. There is deliberately no
 // implicit default: defaulting to local when the block is absent turns a typo'd
 // `ssh` block into silent local execution against the wrong identity, and

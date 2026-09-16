@@ -365,3 +365,28 @@ resource "activedirectory_ou" "unreachable" {
 		}},
 	})
 }
+
+// The pair is refused before anything dials, so this needs no reachable host.
+func TestProviderPSOpenADRejectsConstrainedLanguage(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  dialect = "psopenad"
+
+  winrm {
+    host               = "mgmt.corp.local"
+    configuration_name = "AdSandbox"
+    language_mode      = "constrained"
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`(?i)cannot run the psopenad dialect`),
+		}},
+	})
+}

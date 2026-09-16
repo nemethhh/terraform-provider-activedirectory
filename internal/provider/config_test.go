@@ -729,3 +729,58 @@ func TestResolveReplicationAllowsExplicitForceSyncUnderADWS(t *testing.T) {
 		}
 	}
 }
+
+func winrmLangModel(mode string) providerModel {
+	w := winrmModel{Host: types.StringValue("mgmt.corp.local")}
+	if mode != "" {
+		w.LanguageMode = types.StringValue(mode)
+	}
+	return providerModel{Winrm: &w}
+}
+
+// The psopenad preamble reads its payload with [Console]::In.ReadToEnd() and
+// constructs [PSOpenAD.Security.*] types directly; ConstrainedLanguage forbids
+// both. go-adpwsh's script layer assumes this pair cannot arise, so the
+// provider is the only place that can enforce it.
+func TestDialectGuardsRejectConstrainedLanguageUnderPSOpenAD(t *testing.T) {
+	diags := dialectGuards(winrmLangModel("constrained"), adpwsh.DialectPSOpenAD, transportWinrm, env(nil))
+	if !diags.HasError() {
+		t.Fatal("constrained + psopenad was accepted")
+	}
+	if got := diags.Errors()[0].Detail(); !strings.Contains(got, "ConstrainedLanguage") {
+		t.Errorf("diagnostic does not name the language mode: %s", got)
+	}
+}
+
+// resolveWinrm reads language_mode from the environment too, so a guard that
+// only looked at the attribute would be bypassed by AD_WINRM_LANGUAGE_MODE.
+func TestDialectGuardsRejectConstrainedLanguageFromTheEnvironment(t *testing.T) {
+	diags := dialectGuards(winrmLangModel(""), adpwsh.DialectPSOpenAD, transportWinrm,
+		env(map[string]string{"AD_WINRM_LANGUAGE_MODE": "constrained"}))
+	if !diags.HasError() {
+		t.Fatal("an environment-set constrained mode slipped past the guard")
+	}
+}
+
+func TestDialectGuardsAllowConstrainedLanguageUnderADWS(t *testing.T) {
+	diags := dialectGuards(winrmLangModel("constrained"), adpwsh.DialectADWS, transportWinrm, env(nil))
+	if diags.HasError() {
+		t.Fatalf("constrained + adws was refused: %v", diags)
+	}
+}
+
+func TestDialectGuardsAllowFullLanguageUnderPSOpenAD(t *testing.T) {
+	diags := dialectGuards(winrmLangModel("full"), adpwsh.DialectPSOpenAD, transportWinrm, env(nil))
+	if diags.HasError() {
+		t.Fatalf("full + psopenad was refused: %v", diags)
+	}
+}
+
+// The guard is about the winrm endpoint's language mode; nothing about local or
+// ssh can trip it.
+func TestDialectGuardsIgnoreOtherTransports(t *testing.T) {
+	m := providerModel{Local: &localModel{}}
+	if diags := dialectGuards(m, adpwsh.DialectPSOpenAD, transportLocal, env(nil)); diags.HasError() {
+		t.Fatalf("local + psopenad was refused: %v", diags)
+	}
+}

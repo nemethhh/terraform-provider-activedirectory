@@ -368,6 +368,11 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 			return
 		}
 
+		resp.Diagnostics.Append(dialectGuards(cfg, dialect, kind, os.Getenv)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
 		// (transport, mode) selects the go-adpwsh constructor: cold is a fresh
 		// pwsh per operation, warm a persistent pooled runspace. winrm has only
 		// a warm implementation today.
@@ -482,9 +487,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot configure the Active Directory client",
-			"The provider reached PowerShell but could not query the domain. "+
-				"Check that RSAT-AD-PowerShell is installed on the machine running pwsh and "+
-				"that TCP 9389 is open from it to the domain controller.\n\n"+err.Error())
+			clientErrDetail(dialect, err))
 		return
 	}
 	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
@@ -550,6 +553,22 @@ func transportErrDetail(mode executionMode, err error) string {
 			"If the target only has Windows PowerShell 5.1, set `mode = \"cold\"`.\n\n" + base
 	}
 	return base
+}
+
+// clientErrDetail renders the advice that follows a failed adpwsh.New. The two
+// dialects fail for entirely different reasons: adws needs RSAT and AD Web
+// Services, psopenad needs the PSOpenAD module and LDAP. Handing a psopenad
+// user the adws advice sends them to look at a port their session never opens.
+func clientErrDetail(dialect adpwsh.Dialect, err error) string {
+	if dialect == adpwsh.DialectPSOpenAD {
+		return "The provider ran PowerShell but could not query the domain over LDAP. " +
+			"Check that the PSOpenAD module is installed for the PowerShell 7.4 or newer that " +
+			"runs it (`Get-Module -ListAvailable PSOpenAD`), and that LDAP — TCP 389, or 636 " +
+			"for LDAPS — is open from that machine to the domain controller.\n\n" + err.Error()
+	}
+	return "The provider reached PowerShell but could not query the domain. " +
+		"Check that RSAT-AD-PowerShell is installed on the machine running pwsh and " +
+		"that TCP 9389 is open from it to the domain controller.\n\n" + err.Error()
 }
 
 // winrmColdErrDetail frames a winrm+cold construction/connection failure. The
