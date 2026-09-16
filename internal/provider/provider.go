@@ -57,8 +57,10 @@ func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, res
 
 func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
-			"PowerShell module. `pwsh` runs either on the Windows host Terraform itself runs on " +
+		MarkdownDescription: "Manages Active Directory objects through PowerShell — Microsoft's " +
+			"ActiveDirectory module over AD Web Services by default, or the PSOpenAD module over " +
+			"LDAP when `dialect = \"psopenad\"`. `pwsh` runs either on the Windows host Terraform " +
+			"itself runs on " +
 			"(the `local` block), on a Windows jump box reached over SSH (the `ssh` block), or " +
 			"on a Windows host reached over PSRP/WinRM (the `winrm` block). Exactly one of the " +
 			"three is required.",
@@ -68,6 +70,26 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 				MarkdownDescription: "Path to PowerShell 7 on whichever machine runs it. " +
 					"`local.pwsh_path` overrides it when the `local` block is used. Environment: " +
 					"`AD_PWSH_PATH`. Defaults to `pwsh`.",
+			},
+			"dialect": schema.StringAttribute{
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.OneOf("adws", "psopenad")},
+				MarkdownDescription: "Which PowerShell module the provider drives. `adws` (the default) " +
+					"runs Microsoft's `ActiveDirectory` module over AD Web Services, which needs a Windows " +
+					"host with RSAT-AD-PowerShell and TCP 9389 to a domain controller. `psopenad` runs the " +
+					"[PSOpenAD](https://github.com/jborean93/PSOpenAD) module over LDAP, so it runs " +
+					"anywhere PowerShell 7.4 does — including the Linux host Terraform itself runs on. " +
+					"Environment: `AD_DIALECT`.\n\n" +
+					"**Experimental.** `psopenad` needs PSOpenAD **0.8.0 or newer** for the security-descriptor " +
+					"writes behind `activedirectory_access_rule`, an OU's `protected_from_accidental_deletion` " +
+					"and a user's `can_change_password` (they use `Set-OpenADObject -SecurityMask`). Those " +
+					"fixes currently ship only from [`nemethhh/PSOpenAD`](https://github.com/nemethhh/PSOpenAD) " +
+					"and are pending upstream; until they land, treat this attribute's behaviour as subject " +
+					"to change.\n\n" +
+					"Two combinations are refused at configure time: `replication.force_sync = true` " +
+					"(forcing a sync needs a rootDSE modify PSOpenAD cannot express — the polling wait " +
+					"works), and `winrm.language_mode = \"constrained\"` (the PSOpenAD script set constructs " +
+					".NET types directly, which ConstrainedLanguage forbids).",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -316,6 +338,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	// payloads; this covers everything the provider itself writes.
 	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password", "private_key", "credential", "AccountPassword")
 
+	// The dialect resolves first: it moves a replication default and constrains
+	// which transport cells are legal, so both of those need it in hand.
+	dialect, diags := chooseDialect(cfg, os.Getenv)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	server, credential, diags := resolveDomain(cfg)
 	resp.Diagnostics.Append(diags...)
 	replication, diags := resolveReplication(ctx, cfg)
@@ -444,6 +474,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 
 	client, err := adpwsh.New(ctx, adpwsh.Config{
 		Transport:   transport,
+		Dialect:     dialect,
 		Server:      server,
 		Credential:  credential,
 		Replication: replication,

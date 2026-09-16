@@ -245,3 +245,95 @@ provider "activedirectory" {
   }
 }
 `
+
+// providerConfigPSOpenAD is providerConfig with the dialect switched. The
+// transport is still faked: what the dialect decides is which script text the
+// provider hands that transport, and that is the only thing this proves.
+const providerConfigPSOpenAD = `
+provider "activedirectory" {
+  dialect = "psopenad"
+
+  ssh {
+    host                     = "jump.corp.local"
+    user                     = "svc_tf"
+    password                 = "unused-because-the-transport-is-faked"
+    insecure_ignore_host_key = true
+  }
+}
+`
+
+// The fake answers on the payload's `op` field, which is identical in both
+// dialects, so it would serve a run that selected the wrong script set just as
+// happily as the right one. The script text is the only evidence that selection
+// actually happened, which is why this asserts on it rather than on state.
+func TestPSOpenADDialectRunsThePSOpenADScriptsAgainstTheFake(t *testing.T) {
+	dir := fake.NewDirectory()
+	// Hold the transport: dir.Transport() returns a NEW recorder every call, so
+	// asking for a second one would inspect a transport nothing ever ran on.
+	tr := dir.Transport()
+	factories := map[string]func() (tfprotov6.ProviderServer, error){
+		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(tr)),
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: providerConfigPSOpenAD + `
+resource "activedirectory_ou" "dialect" {
+  name      = "tfacc-dialect"
+  container = "DC=corp,DC=local"
+}`,
+		}},
+	})
+
+	calls := tr.Calls()
+	if len(calls) == 0 {
+		t.Fatal("the fake recorded no calls")
+	}
+	for _, c := range calls {
+		if !strings.Contains(c.Script, "Import-Module PSOpenAD") {
+			t.Errorf("op %q did not import PSOpenAD", c.Op)
+		}
+		if !strings.Contains(c.Script, "New-OpenADSession") {
+			t.Errorf("op %q opened no OpenAD session", c.Op)
+		}
+		if strings.Contains(c.Script, "Import-Module ActiveDirectory") {
+			t.Errorf("op %q ran the adws script set", c.Op)
+		}
+	}
+}
+
+// The mirror image, and the guard on the default: an unset dialect must still
+// run the ActiveDirectory module, because every configuration written before
+// the attribute existed depends on it.
+func TestDefaultDialectRunsTheADWSScriptsAgainstTheFake(t *testing.T) {
+	dir := fake.NewDirectory()
+	tr := dir.Transport()
+	factories := map[string]func() (tfprotov6.ProviderServer, error){
+		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(tr)),
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: providerConfig + `
+resource "activedirectory_ou" "dialect" {
+  name      = "tfacc-dialect-default"
+  container = "DC=corp,DC=local"
+}`,
+		}},
+	})
+
+	calls := tr.Calls()
+	if len(calls) == 0 {
+		t.Fatal("the fake recorded no calls")
+	}
+	for _, c := range calls {
+		if !strings.Contains(c.Script, "Import-Module ActiveDirectory") {
+			t.Errorf("op %q did not import ActiveDirectory", c.Op)
+		}
+		if strings.Contains(c.Script, "Import-Module PSOpenAD") {
+			t.Errorf("op %q ran the psopenad script set by default", c.Op)
+		}
+	}
+}

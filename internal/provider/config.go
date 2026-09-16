@@ -21,6 +21,7 @@ import (
 
 type providerModel struct {
 	PwshPath    types.String      `tfsdk:"pwsh_path"`
+	Dialect     types.String      `tfsdk:"dialect"`
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
 	Winrm       *winrmModel       `tfsdk:"winrm"`
@@ -529,6 +530,33 @@ func chosenMode(m providerModel, kind transportKind) (executionMode, diag.Diagno
 		diags.AddAttributeError(root.AtName("mode"), "Invalid execution mode",
 			fmt.Sprintf("%q is not a valid mode; use \"warm\" (default) or \"cold\".", raw.ValueString()))
 		return modeWarm, diags
+	}
+}
+
+// chooseDialect selects which PowerShell module every operation runs: the
+// ActiveDirectory module over AD Web Services ("adws"), or the PSOpenAD module
+// over LDAP ("psopenad").
+//
+// Unlike chooseTransport there IS a default. Guessing a transport would let a
+// mistyped block run against the wrong identity; a defaulted dialect cannot,
+// because adws is what every configuration written before this attribute
+// existed already ran. It is also the library's own zero value.
+//
+// Configuration wins over the environment, as everywhere else.
+func chooseDialect(m providerModel, getenv func(string) string) (adpwsh.Dialect, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	switch raw := strings.ToLower(strings.TrimSpace(str(m.Dialect, getenv, "AD_DIALECT"))); raw {
+	case "", "adws":
+		return adpwsh.DialectADWS, diags
+	case "psopenad":
+		return adpwsh.DialectPSOpenAD, diags
+	default:
+		// The schema's OneOf validator rejects a bad literal before Configure
+		// runs, so anything that reaches here came from the environment.
+		diags.AddAttributeError(path.Root("dialect"), "Invalid dialect",
+			fmt.Sprintf("AD_DIALECT=%q is not a valid dialect; use \"adws\" (the default) "+
+				"or \"psopenad\".", raw))
+		return adpwsh.DialectADWS, diags
 	}
 }
 

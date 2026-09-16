@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	adpwsh "github.com/nemethhh/go-adpwsh"
 	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
@@ -607,5 +608,58 @@ func TestResolveWinrmServerSelection(t *testing.T) {
 				t.Errorf("Strategy = %v, want %v", cfg.Strategy, tc.want)
 			}
 		})
+	}
+}
+
+func TestChooseDialectDefaultsToADWS(t *testing.T) {
+	got, diags := chooseDialect(providerModel{}, env(nil))
+	if diags.HasError() {
+		t.Fatalf("chooseDialect: %v", diags)
+	}
+	if got != adpwsh.DialectADWS {
+		t.Errorf("dialect = %v, want adws", got)
+	}
+}
+
+func TestChooseDialectFromConfiguration(t *testing.T) {
+	m := providerModel{Dialect: types.StringValue("psopenad")}
+	got, diags := chooseDialect(m, env(nil))
+	if diags.HasError() {
+		t.Fatalf("chooseDialect: %v", diags)
+	}
+	if got != adpwsh.DialectPSOpenAD {
+		t.Errorf("dialect = %v, want psopenad", got)
+	}
+}
+
+func TestChooseDialectFallsBackToTheEnvironment(t *testing.T) {
+	got, diags := chooseDialect(providerModel{}, env(map[string]string{"AD_DIALECT": "psopenad"}))
+	if diags.HasError() {
+		t.Fatalf("chooseDialect: %v", diags)
+	}
+	if got != adpwsh.DialectPSOpenAD {
+		t.Errorf("dialect = %v, want psopenad", got)
+	}
+}
+
+// Configuration always wins; the environment is the fallback, never an override.
+func TestChooseDialectConfigBeatsEnvironment(t *testing.T) {
+	m := providerModel{Dialect: types.StringValue("adws")}
+	got, _ := chooseDialect(m, env(map[string]string{"AD_DIALECT": "psopenad"}))
+	if got != adpwsh.DialectADWS {
+		t.Errorf("environment overrode configuration: dialect = %v", got)
+	}
+}
+
+// The schema's OneOf rejects a bad literal, so only the environment can carry a
+// bad value this far — and it is refused against the attribute the user can
+// change, not silently treated as adws.
+func TestChooseDialectRejectsABadEnvironmentValue(t *testing.T) {
+	_, diags := chooseDialect(providerModel{}, env(map[string]string{"AD_DIALECT": "ldap3"}))
+	if !diags.HasError() {
+		t.Fatal("a bad AD_DIALECT was accepted")
+	}
+	if got := diags.Errors()[0].Detail(); !strings.Contains(got, "ldap3") {
+		t.Errorf("diagnostic does not quote the bad value: %s", got)
 	}
 }
