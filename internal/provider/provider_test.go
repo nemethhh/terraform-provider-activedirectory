@@ -337,3 +337,31 @@ resource "activedirectory_ou" "dialect" {
 		}
 	}
 }
+
+// The refusal is a configure-time diagnostic, not a runtime failure: nothing
+// dials, and the message points at the attribute the user can change.
+func TestProviderPSOpenADRejectsForcedReplication(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  dialect = "psopenad"
+
+  local {}
+
+  replication {
+    wait       = true
+    targets    = ["all"]
+    force_sync = true
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`(?i)force_sync is not supported`),
+		}},
+	})
+}

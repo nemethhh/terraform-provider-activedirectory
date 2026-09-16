@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -661,5 +662,70 @@ func TestChooseDialectRejectsABadEnvironmentValue(t *testing.T) {
 	}
 	if got := diags.Errors()[0].Detail(); !strings.Contains(got, "ldap3") {
 		t.Errorf("diagnostic does not quote the bad value: %s", got)
+	}
+}
+
+// wait stays false so the "replication wait needs targets" diagnostic cannot
+// fire: these tests are about force_sync alone, and building a types.List of
+// targets would drag an attr import in for nothing.
+func replModel(force types.Bool) providerModel {
+	return providerModel{Replication: &replicationModel{
+		Wait:      types.BoolValue(false),
+		ForceSync: force,
+	}}
+}
+
+// Unchanged behaviour on the default dialect: a replication block with no
+// force_sync still forces one.
+func TestResolveReplicationForceSyncDefaultsTrueUnderADWS(t *testing.T) {
+	got, diags := resolveReplication(context.Background(), replModel(types.BoolNull()), adpwsh.DialectADWS)
+	if diags.HasError() {
+		t.Fatalf("resolveReplication: %v", diags)
+	}
+	if !got.ForceSync {
+		t.Error("ForceSync = false, want true under adws")
+	}
+}
+
+// Under psopenad only the unstated default moves, so `replication { wait = true,
+// targets = [...] }` keeps working as a polling wait instead of failing.
+func TestResolveReplicationForceSyncDefaultsFalseUnderPSOpenAD(t *testing.T) {
+	got, diags := resolveReplication(context.Background(), replModel(types.BoolNull()), adpwsh.DialectPSOpenAD)
+	for _, e := range diags.Errors() {
+		if strings.Contains(e.Summary(), "force_sync") {
+			t.Fatalf("an unstated force_sync was refused: %s", e.Detail())
+		}
+	}
+	if got.ForceSync {
+		t.Error("ForceSync = true, want false under psopenad")
+	}
+}
+
+// Stating it is a different matter: configuration always wins, so a value the
+// dialect cannot honour is refused against its own attribute rather than
+// silently downgraded.
+func TestResolveReplicationRejectsExplicitForceSyncUnderPSOpenAD(t *testing.T) {
+	_, diags := resolveReplication(context.Background(), replModel(types.BoolValue(true)), adpwsh.DialectPSOpenAD)
+	var found bool
+	for _, e := range diags.Errors() {
+		if strings.Contains(e.Summary(), "force_sync") {
+			found = true
+			if !strings.Contains(e.Detail(), "rootDSE") {
+				t.Errorf("diagnostic does not say why: %s", e.Detail())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("explicit force_sync = true was accepted under psopenad: %v", diags)
+	}
+}
+
+// And it is genuinely dialect-specific: the same configuration is fine on adws.
+func TestResolveReplicationAllowsExplicitForceSyncUnderADWS(t *testing.T) {
+	_, diags := resolveReplication(context.Background(), replModel(types.BoolValue(true)), adpwsh.DialectADWS)
+	for _, e := range diags.Errors() {
+		if strings.Contains(e.Summary(), "force_sync") {
+			t.Fatalf("force_sync refused under adws: %s", e.Detail())
+		}
 	}
 }

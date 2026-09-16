@@ -428,8 +428,11 @@ func resolveDomain(m providerModel) (string, *adpwsh.Credential, diag.Diagnostic
 	return server, &adpwsh.Credential{Username: user, Password: adpwsh.NewSecret(pass)}, diags
 }
 
-// resolveReplication turns the replication block into the library's config.
-func resolveReplication(ctx context.Context, m providerModel) (adpwsh.ReplicationConfig, diag.Diagnostics) {
+// resolveReplication turns the replication block into the library's config. The
+// dialect is a parameter because it moves exactly one default: PSOpenAD cannot
+// express the rootDSE modify that forces a sync, and the library refuses the
+// combination outright at New.
+func resolveReplication(ctx context.Context, m providerModel, dialect adpwsh.Dialect) (adpwsh.ReplicationConfig, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if m.Replication == nil {
 		return adpwsh.ReplicationConfig{}, diags
@@ -437,12 +440,30 @@ func resolveReplication(ctx context.Context, m providerModel) (adpwsh.Replicatio
 	r := m.Replication
 	root := path.Root("replication")
 
+	// Defaulting force_sync to true on a dialect that cannot honour it would
+	// break a plain `replication { wait = true, targets = ["all"] }` on nothing
+	// the user wrote, so the default follows the dialect. Only the default: an
+	// explicit true is refused below rather than quietly downgraded.
+	forceSyncDefault := dialect != adpwsh.DialectPSOpenAD
+
 	cfg := adpwsh.ReplicationConfig{
 		Wait:         boolOr(r.Wait, false),
-		ForceSync:    boolOr(r.ForceSync, true),
+		ForceSync:    boolOr(r.ForceSync, forceSyncDefault),
 		Timeout:      duration(r.Timeout, root.AtName("timeout"), 60*time.Second, &diags),
 		PollInterval: duration(r.PollInterval, root.AtName("poll_interval"), 2*time.Second, &diags),
 	}
+
+	if dialect == adpwsh.DialectPSOpenAD && cfg.ForceSync {
+		diags.AddAttributeError(root.AtName("force_sync"),
+			`force_sync is not supported with dialect = "psopenad"`,
+			"Forcing replication needs a rootDSE modify the PSOpenAD module cannot express, "+
+				"and go-adpwsh refuses the combination outright.\n\n"+
+				"Remove `force_sync` to use the polling wait, which is supported: the provider "+
+				"still waits for the write to reach `targets`, it just does not ask the source "+
+				"DC to push it first. Or set `dialect = \"adws\"`.")
+		cfg.ForceSync = false
+	}
+
 	if !r.Targets.IsNull() && !r.Targets.IsUnknown() {
 		diags.Append(r.Targets.ElementsAs(ctx, &cfg.Targets, false)...)
 	}

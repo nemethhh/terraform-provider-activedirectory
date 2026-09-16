@@ -348,7 +348,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 
 	server, credential, diags := resolveDomain(cfg)
 	resp.Diagnostics.Append(diags...)
-	replication, diags := resolveReplication(ctx, cfg)
+	replication, diags := resolveReplication(ctx, cfg, dialect)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
