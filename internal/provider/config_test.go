@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	adldap "github.com/nemethhh/go-adldap"
 	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
 
@@ -406,7 +407,7 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 	tests := []struct {
 		name      string
 		m         providerModel
-		want      transportKind
+		want      connectionKind
 		wantPaths []string // attribute paths the diagnostics must carry, in order
 	}{
 		{
@@ -434,7 +435,7 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, diags := chooseTransport(tt.m)
+			got, diags := chooseConnection(tt.m)
 			if got != tt.want {
 				t.Errorf("chooseTransport = %v, want %v", got, tt.want)
 			}
@@ -475,21 +476,21 @@ func TestChooseTransportRequiresExactlyOneBlock(t *testing.T) {
 }
 
 func TestChooseTransportWinrm(t *testing.T) {
-	k, d := chooseTransport(providerModel{Winrm: &winrmModel{}})
+	k, d := chooseConnection(providerModel{Winrm: &winrmModel{}})
 	if d.HasError() || k != transportWinrm {
 		t.Fatalf("winrm-only: kind=%v diags=%v", k, d)
 	}
 }
 
 func TestChooseTransportThreeWayConflict(t *testing.T) {
-	_, d := chooseTransport(providerModel{Local: &localModel{}, Winrm: &winrmModel{}})
+	_, d := chooseConnection(providerModel{Local: &localModel{}, Winrm: &winrmModel{}})
 	if !d.HasError() {
 		t.Error("local+winrm: want a conflict diagnostic")
 	}
 }
 
 func TestChooseTransportNone(t *testing.T) {
-	_, d := chooseTransport(providerModel{})
+	_, d := chooseConnection(providerModel{})
 	if !d.HasError() {
 		t.Error("no block: want a diagnostic")
 	}
@@ -519,7 +520,7 @@ func TestChosenModeDefaultsWarmEveryTransport(t *testing.T) {
 	cases := []struct {
 		name string
 		m    providerModel
-		kind transportKind
+		kind connectionKind
 	}{
 		{"local", providerModel{Local: &localModel{}}, transportLocal},
 		{"ssh", providerModel{SSH: &sshModel{}}, transportSSH},
@@ -607,5 +608,126 @@ func TestResolveWinrmServerSelection(t *testing.T) {
 				t.Errorf("Strategy = %v, want %v", cfg.Strategy, tc.want)
 			}
 		})
+	}
+}
+
+// The exactly-one rule now covers four blocks. There is still no implicit
+// default: guessing would let a mistyped block reach AD as the wrong identity,
+// or over the wrong protocol.
+func TestChooseConnectionRequiresExactlyOne(t *testing.T) {
+	t.Run("none", func(t *testing.T) {
+		_, diags := chooseConnection(providerModel{})
+		if !diags.HasError() {
+			t.Fatal("zero connection blocks must be an error")
+		}
+	})
+
+	t.Run("ldap alone", func(t *testing.T) {
+		got, diags := chooseConnection(providerModel{LDAP: &ldapModel{}})
+		if diags.HasError() {
+			t.Fatalf("one block must be accepted: %v", diags)
+		}
+		if got != connectionLDAP {
+			t.Errorf("got %v, want connectionLDAP", got)
+		}
+	})
+
+	t.Run("ldap and local", func(t *testing.T) {
+		_, diags := chooseConnection(providerModel{LDAP: &ldapModel{}, Local: &localModel{}})
+		if !diags.HasError() {
+			t.Fatal("two blocks must be an error")
+		}
+		if len(diags.Errors()) != 2 {
+			t.Errorf("got %d diagnostics, want one per offending block so Terraform underlines each", len(diags.Errors()))
+		}
+	})
+}
+
+// The operator runs kinit; the provider reads the resulting ticket. Nothing
+// about that needs a credential in configuration.
+func TestResolveLDAPKerberosNeedsNoCredential(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		TLS:      types.StringValue("ldaps"),
+		Kerberos: &kerberosModel{},
+	}, func(string) string { return "" }, &diags)
+
+	if diags.HasError() {
+		t.Fatalf("resolveLDAP: %v", diags)
+	}
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if got.Simple != nil || got.NTLM != nil {
+		t.Error("exactly one auth block should be set")
+	}
+	if got.Server != "dc01.corp.local" {
+		t.Errorf("Server = %q", got.Server)
+	}
+}
+
+// Configuration wins over the environment, as everywhere else in this provider.
+func TestResolveLDAPConfigBeatsEnvironment(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("configured.corp.local"),
+		TLS:      types.StringValue("ldaps"),
+		Kerberos: &kerberosModel{},
+	}, func(k string) string {
+		if k == "AD_LDAP_SERVER" {
+			return "environment.corp.local"
+		}
+		return ""
+	}, &diags)
+
+	if got.Server != "configured.corp.local" {
+		t.Errorf("Server = %q, want configuration to win", got.Server)
+	}
+}
+
+// No auth block is an error for the same reason no connection block is.
+func TestResolveLDAPRequiresAnAuthBlock(t *testing.T) {
+	var diags diag.Diagnostics
+	resolveLDAP(ldapModel{
+		Server: types.StringValue("dc01.corp.local"),
+		TLS:    types.StringValue("ldaps"),
+	}, func(string) string { return "" }, &diags)
+
+	if !diags.HasError() {
+		t.Fatal("an ldap block with no auth block must be an error")
+	}
+}
+
+// TLS defaults to ldaps rather than to nothing: this backend has no plain mode,
+// so the default has to be one of the two protected ones.
+func TestResolveLDAPDefaultsToLDAPS(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{},
+	}, func(string) string { return "" }, &diags)
+
+	if got.TLS != adldap.TLSLDAPS {
+		t.Errorf("TLS = %q, want ldaps", got.TLS)
+	}
+}
+
+// KRB5CCNAME is read from the environment, which is the whole point: the
+// operator runs kinit in their own shell and the ticket is picked up.
+func TestResolveLDAPReadsKRB5CCNAME(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{},
+	}, func(k string) string {
+		if k == "KRB5CCNAME" {
+			return "FILE:/tmp/krb5cc_tf"
+		}
+		return ""
+	}, &diags)
+
+	if got.Kerberos == nil || got.Kerberos.CCachePath != "FILE:/tmp/krb5cc_tf" {
+		t.Errorf("CCachePath = %+v, want the value from KRB5CCNAME", got.Kerberos)
 	}
 }

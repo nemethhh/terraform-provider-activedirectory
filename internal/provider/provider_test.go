@@ -52,7 +52,7 @@ func accFactories() map[string]func() (tfprotov6.ProviderServer, error) {
 
 // Configure must refuse two transport blocks before it starts a process or opens
 // a socket, which is what makes this a unit test rather than an acceptance one.
-func TestConfigureRefusesTwoTransportBlocks(t *testing.T) {
+func TestConfigureRefusesTwoConnectionBlocks(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories(),
 		Steps: []resource.TestStep{{
@@ -71,12 +71,12 @@ resource "activedirectory_ou" "unreachable" {
   name      = "tfacc-never-created"
   container = "DC=corp,DC=local"
 }`,
-			ExpectError: regexp.MustCompile(`Exactly one transport block is required`),
+			ExpectError: regexp.MustCompile(`Exactly one connection block is required`),
 		}},
 	})
 }
 
-func TestConfigureRefusesNoTransportBlock(t *testing.T) {
+func TestConfigureRefusesNoConnectionBlock(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: accFactories(),
 		Steps: []resource.TestStep{{
@@ -87,7 +87,7 @@ resource "activedirectory_ou" "unreachable" {
   name      = "tfacc-never-created"
   container = "DC=corp,DC=local"
 }`,
-			ExpectError: regexp.MustCompile(`Exactly one transport block is required`),
+			ExpectError: regexp.MustCompile(`Exactly one connection block is required`),
 		}},
 	})
 }
@@ -245,3 +245,65 @@ provider "activedirectory" {
   }
 }
 `
+
+// The ldap block must reach the provider through the real schema, not just
+// through resolveLDAP's unit tests: a missing attribute or a mistyped tfsdk tag
+// only shows up here. It is pointed at a port nothing is listening on, so the
+// assertion is that configuration was accepted and the *connection* failed.
+func TestConfigureAcceptsTheLDAPBlock(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  ldap {
+    server               = "127.0.0.1"
+    port                 = 1
+    tls                  = "ldaps"
+    insecure_skip_verify = true
+
+    simple {
+      username = "CN=svc_tf,DC=corp,DC=local"
+      password = "x"
+    }
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`Cannot configure the Active Directory client`),
+		}},
+	})
+}
+
+// domain.credential is the identity the cmdlets run as; the ldap block
+// authenticates itself. Silently ignoring one of them would leave an operator
+// believing a credential is in use when it is not.
+func TestConfigureRefusesDomainCredentialWithLDAP(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  ldap {
+    server = "dc01.corp.local"
+    kerberos {}
+  }
+  domain {
+    credential {
+      username = "CORP\\svc_tf"
+      password = "x"
+    }
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`domain.credential does not apply to the ldap connection`),
+		}},
+	})
+}
