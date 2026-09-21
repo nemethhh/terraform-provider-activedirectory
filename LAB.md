@@ -384,6 +384,23 @@ rebuilt per target host; an explicit `spn` still wins.
 
 All three are regression-tested in `go-adldap`. None needed a KDC to guard.
 
+### Close-out run, 2026-09-22
+
+The whole of Phases 4–6, re-run once at the end:
+
+| What | Result |
+|---|---|
+| `go test ./...` in `go-adcore`, `go-adldap`, `go-adpwsh` | green |
+| `make check` (build, vet, gofmt, terraform fmt, the fake-backed suites on **both** backends) | green |
+| `make lab-acc-ldap` against `corp.local` | **PASS 52 / FAIL 0 / SKIP 55** |
+| `go test -tags acc -run TestAccBackendsAgree` (the differential suite) | green, six classes |
+| `make lab-acc-ldap` with `LAB_LDAP_AUTH=ntlm` | green |
+| `make lab-acc-ldap` with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | green |
+| `make lab-acc-winrm-7` | **red — missing lab fixtures, not a regression** (see below) |
+
+The 55 skips are the e2e layer, which is a separately provisioned environment
+(`AD_E2E_CONTAINER`), plus the cells for transports this run did not select.
+
 ### The cross-backend differential suite
 
 **Run 2026-09-22** against `corp.local`, comparing the two backends directly:
