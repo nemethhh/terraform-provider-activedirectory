@@ -56,6 +56,7 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
+	github.com/nemethhh/go-adcore v0.0.0 // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/pkg/sftp v1.13.11 // indirect
 	github.com/smnsjas/go-ntlm-cbt v0.0.0-20260107203125-46149984fac0 // indirect
@@ -77,3 +78,7 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace github.com/nemethhh/go-adpwsh => ../go-adpwsh
+
+replace github.com/nemethhh/go-adcore => ../go-adcore
