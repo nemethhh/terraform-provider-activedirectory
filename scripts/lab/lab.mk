@@ -87,7 +87,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
 
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
-        lab-adcs lab-ca-cert lab-acc-ldap \
+        lab-adcs lab-ca-cert lab-acc-ldap lab-dev-workspace lab-dev-workspace-off \
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
@@ -120,6 +120,9 @@ lab-help:
 	@echo '    lab-acc-ldap               run the suite over LDAPS, no PowerShell (PATTERN=<re>)'
 	@echo '    lab-adcs                   install the Enterprise CA that LDAPS needs (once)'
 	@echo '    lab-ca-cert                cache the CA locally for ca_certificate_file'
+	@echo '    lab-dev-workspace          build the runners that run from here against the sibling'
+	@echo '                               working trees instead of the versions go.mod pins'
+	@echo '    lab-dev-workspace-off      back to the pinned releases'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
 	@echo ''
 	@echo '  Transport x mode x pwsh matrix (PATTERN=<re> MINUTES=<n> override; full TestAcc by default):'
@@ -230,21 +233,76 @@ lab-verify-repl:
 
 # git archive rather than the working tree: what runs on the lab is exactly what
 # is committed, and no gitignored clone or build artefact rides along.
-# The provider's go.mod replaces three modules with sibling directories, so
-# shipping the provider alone leaves every one of them unresolvable on the
-# member and `go test` dies with "replacement directory ../go-adcore does not
-# exist" before a single test runs. They travel together, and the layout under
-# C:\src mirrors this working tree so the ../ paths resolve unchanged.
+#
+# The three sibling modules travel with the provider, and a go.work generated
+# beside them makes `go test` on the member build against those shipped sources
+# instead of the released versions go.mod pins. That is what the local cells
+# are for: a library change is exercised against a real domain once it is
+# committed, without tagging and pushing a release first.
+#
+# The workspace exists only on the member and is never committed here, so the
+# provider's go.mod keeps pinning released versions for everyone else. The
+# ssh/winrm cells deliberately do the opposite -- they run this working tree
+# against the released libraries -- which is why they pass GOWORK=off.
+#
+# Until 2026-09-22 this worked through `replace` directives in the provider's
+# go.mod pointing at ../go-adcore and friends, with the layout under C:\src
+# mirroring this working tree so the ../ paths resolved. Those replaces are
+# gone (a clean clone of the provider alone could not build), and the workspace
+# file is what preserves the property they provided.
 LAB_SIBLING_MODULES ?= go-adcore go-adldap go-adpwsh
 
+# The workspace's go directive has to be at least the highest of the modules'.
+# Read it from the provider's go.mod rather than hardcoding a version that goes
+# stale on the next toolchain bump.
+LAB_GO_VERSION := $(shell awk '/^go /{print $$2; exit}' go.mod)
+
+# A workspace for developing the sibling libraries against the lab.
+#
+# run-suite-ldap.sh and the ssh/winrm runners execute `go test` from here, so
+# they build whatever this working tree resolves -- which, now that go.mod pins
+# released versions rather than replacing them with ../ paths, is the released
+# libraries. That is right for a release check and wrong for the loop this
+# repository is usually in: change go-adldap, run it against corp.local, decide
+# whether it works, and only then tag it.
+#
+# The file is written one directory up, outside this git repository, so it
+# cannot be committed by accident and no .gitignore entry is needed. lab-ship
+# generates its own workspace on the member and is unaffected either way, and
+# the ssh/winrm cells pass GOWORK=off so they stay on the released libraries
+# whether this is on or not -- that contrast is the point of those cells.
+LAB_DEV_WORKSPACE := ../go.work
+
+lab-dev-workspace:
+	@test -n '$(LAB_GO_VERSION)' || { echo "could not read the go directive from go.mod"; exit 1; }
+	@for m in $(LAB_SIBLING_MODULES); do \
+	    test -d ../$$m || { echo "sibling module ../$$m is missing"; exit 1; }; \
+	  done
+	@{ printf 'go %s\n\nuse (\n\t./%s\n' '$(LAB_GO_VERSION)' '$(notdir $(CURDIR))'; \
+	   for m in $(LAB_SIBLING_MODULES); do printf '\t./%s\n' $$m; done; \
+	   printf ')\n'; \
+	 } > $(LAB_DEV_WORKSPACE)
+	@echo "workspace on: $(LAB_DEV_WORKSPACE)"
+	@go list -m -f '  {{.Path}} => {{.Dir}}' $(foreach m,$(LAB_SIBLING_MODULES),github.com/nemethhh/$(m))
+	@echo "  make lab-dev-workspace-off to go back to the versions go.mod pins"
+
+lab-dev-workspace-off:
+	@rm -f $(LAB_DEV_WORKSPACE) $(LAB_DEV_WORKSPACE).sum
+	@echo "workspace off: building against the versions go.mod pins"
+
 lab-ship:
-	@rm -f /tmp/lab-ship-*.tgz
+	@test -n '$(LAB_GO_VERSION)' || { echo "could not read the go directive from go.mod"; exit 1; }
+	@rm -f /tmp/lab-ship-*.tgz /tmp/lab-ship-go.work
 	git archive --format=tar --prefix=provider/ HEAD | gzip -9 > /tmp/lab-ship-provider.tgz
 	@for m in $(LAB_SIBLING_MODULES); do \
 	    test -d ../$$m || { echo "sibling module ../$$m is missing"; exit 1; }; \
 	    git -C ../$$m archive --format=tar --prefix=$$m/ HEAD | gzip -9 > /tmp/lab-ship-$$m.tgz; \
 	  done
-	scp -q /tmp/lab-ship-*.tgz $(LAB_MEMBER):
+	@{ printf 'go %s\n\nuse (\n\t./provider\n' '$(LAB_GO_VERSION)'; \
+	   for m in $(LAB_SIBLING_MODULES); do printf '\t./%s\n' $$m; done; \
+	   printf ')\n'; \
+	 } > /tmp/lab-ship-go.work
+	scp -q /tmp/lab-ship-*.tgz /tmp/lab-ship-go.work $(LAB_MEMBER):
 	@{ printf '%s\n' \
 	  '$$ErrorActionPreference = "Stop"' \
 	  'New-Item -ItemType Directory -Force -Path C:\src | Out-Null'; \
@@ -252,10 +310,14 @@ lab-ship:
 	    printf 'if (Test-Path C:\src\%s) { Remove-Item C:\src\%s -Recurse -Force }\n' $$m $$m; \
 	    printf 'tar -xzf "$$env:USERPROFILE\lab-ship-%s.tgz" -C C:\src\n' $$m; \
 	  done; \
-	  printf '%s\n' 'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)'; \
+	  printf '%s\n' \
+	    'Move-Item -Force "$$env:USERPROFILE\lab-ship-go.work" C:\src\go.work' \
+	    'Remove-Item C:\src\go.work.sum -Force -ErrorAction SilentlyContinue' \
+	    'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)' \
+	    'Write-Output ("workspace=" + (((Get-Content C:\src\go.work) -replace "\s+"," ") -join " "))'; \
 	} > /tmp/lab-unpack.ps1
 	@$(PSRUN) $(LAB_MEMBER) /tmp/lab-unpack.ps1 160 2>&1 | grep -vE 'WARNING|vulnerable|openssh.com'
-	@rm -f /tmp/lab-unpack.ps1 /tmp/lab-ship-*.tgz
+	@rm -f /tmp/lab-unpack.ps1 /tmp/lab-ship-*.tgz /tmp/lab-ship-go.work
 
 
 # The suite runner lives in run-suite.sh: generating PowerShell through make's
@@ -303,11 +365,15 @@ lab-acc-psrp-only:
 # | lab-acc-winrm-7     | winrm     | warm | 7    | from here         |
 #
 # Each cell defaults to the full TestAcc suite; override with PATTERN=<re> and
-# MINUTES=<n>. Local cells ship the committed tree to the member and run there
-# (like lab-acc). ssh/winrm cells run the working tree from here against the
-# released go-adpwsh (GOWORK=off), so a code change is exercised without a
-# commit. warm needs pwsh 7 on the target (for ssh, the `powershell` sshd
-# subsystem). A '|' alternation in PATTERN is safe for ssh/winrm (run here) but
+# MINUTES=<n>. Local cells ship the committed tree -- provider and all three
+# sibling libraries -- to the member and run there (like lab-ship + lab-acc),
+# building against those committed library sources through the workspace
+# lab-ship generates. ssh/winrm cells run the working tree from here against
+# the released libraries go.mod pins (GOWORK=off), so a provider change is
+# exercised without a commit. The pair is deliberate: local cells answer "does
+# the committed library work on a real domain", ssh/winrm cells answer "does
+# this uncommitted provider change work against what users actually have".
+# warm needs pwsh 7 on the target (for ssh, the `powershell` sshd subsystem). A '|' alternation in PATTERN is safe for ssh/winrm (run here) but
 # not for the local cells (they cross cmd.exe on the member) — use a prefix.
 MATRIX_CELLS := lab-acc-local-cold lab-acc-local-warm \
                 lab-acc-ssh-cold-51 lab-acc-ssh-cold-7 lab-acc-ssh-warm \
