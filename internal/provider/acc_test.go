@@ -11,6 +11,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
+	"github.com/nemethhh/go-adcore"
+	adldap "github.com/nemethhh/go-adldap"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adssh "github.com/nemethhh/go-adpwsh/transport/ssh"
@@ -48,6 +50,10 @@ const (
 	envLDAPServer   = "AD_ACC_LDAP_SERVER"
 	envLDAPCAFile   = "AD_ACC_LDAP_CA_FILE"
 	envLDAPInsecure = "AD_ACC_LDAP_INSECURE"
+	// A simple bind, for the domains where the Kerberos path cannot be used.
+	// Setting the username selects it; leaving it unset uses kerberos {}.
+	envLDAPUsername = "AD_ACC_LDAP_USERNAME"
+	envLDAPPassword = "AD_ACC_LDAP_PASSWORD"
 
 	// envMode selects the execution mode emitted into the transport block:
 	// "cold" or "warm". Empty leaves the attribute out, so the provider's own
@@ -157,7 +163,18 @@ func accLDAPBlock() string {
 		b.WriteString("    insecure_skip_verify = true\n")
 	}
 	b.WriteString("    max_concurrency = 4\n")
-	b.WriteString("\n    kerberos {}\n")
+
+	// kerberos {} is the intended form — the operator runs kinit and the ticket
+	// is read from KRB5CCNAME, so the suite's configuration holds no credential.
+	// A simple bind is the fallback for a domain where the GSSAPI bind is
+	// refused; see LAB.md, which records that Windows Server 2025 rejects the
+	// token the current LDAP library produces.
+	if u := os.Getenv(envLDAPUsername); u != "" {
+		fmt.Fprintf(&b, "\n    simple {\n      username = %q\n      password = %q\n    }\n",
+			u, os.Getenv(envLDAPPassword))
+	} else {
+		b.WriteString("\n    kerberos {}\n")
+	}
 	b.WriteString("  }\n")
 	return b.String()
 }
@@ -400,8 +417,38 @@ func accTransport(t *testing.T) adpwsh.Transport {
 // accClient builds a library client over the transport under test, configured
 // from the same environment the provider reads. CheckDestroy and the sweeper
 // both need to ask the directory questions that Terraform state cannot answer.
-func accClient(t *testing.T) *adpwsh.Client {
+// accClient opens a directory for the destroy check, using whichever backend
+// the run is exercising.
+//
+// It must follow AD_ACC_CONNECTION rather than always building a PowerShell
+// client: on the ldap connection the suite runs on a machine with no RSAT and
+// no pwsh at all, where the old version failed with "module ActiveDirectory
+// was not loaded" — a teardown failure that masked the result of the test.
+func accClient(t *testing.T) adcore.Directory {
 	t.Helper()
+
+	if accTransportName() == "ldap" {
+		cfg := adldap.Config{
+			Server:             os.Getenv(envLDAPServer),
+			TLS:                adldap.TLSLDAPS,
+			CACertificateFile:  os.Getenv(envLDAPCAFile),
+			InsecureSkipVerify: strings.EqualFold(os.Getenv(envLDAPInsecure), "true"),
+		}
+		if u := os.Getenv(envLDAPUsername); u != "" {
+			cfg.Simple = &adldap.SimpleAuth{
+				Username: u, Password: adcore.NewSecret(os.Getenv(envLDAPPassword)),
+			}
+		} else {
+			cfg.Kerberos = &adldap.KerberosAuth{}
+		}
+		client, err := adldap.New(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("acceptance: cannot configure the LDAP client: %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		return client.Directory()
+	}
+
 	tr := accTransport(t)
 	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer)}
 	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
@@ -412,7 +459,7 @@ func accClient(t *testing.T) *adpwsh.Client {
 		t.Fatalf("acceptance: cannot configure the Active Directory client: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return client
+	return client.Directory()
 }
 
 // accCheckDestroy asserts every object the test managed is actually gone from

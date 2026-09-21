@@ -114,6 +114,9 @@ lab-help:
 	@echo '    lab-acc-only PATTERN=<re>  run one suite, or any -run pattern'
 	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
 	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
+	@echo '    lab-acc-ldap               run the suite over LDAPS, no PowerShell (PATTERN=<re>)'
+	@echo '    lab-adcs                   install the Enterprise CA that LDAPS needs (once)'
+	@echo '    lab-ca-cert                cache the CA locally for ca_certificate_file'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
 	@echo ''
 	@echo '  Transport x mode x pwsh matrix (PATTERN=<re> MINUTES=<n> override; full TestAcc by default):'
@@ -357,6 +360,11 @@ lab-acc-matrix:
 	done; \
 	echo; echo '=== matrix summary ==='; printf '%b\n' "$$results"; \
 	exit $$fail
+
+# The whole acceptance suite over the native LDAP connection. Runs here, not on
+# a member: the ldap connection needs no PowerShell and no jump box.
+lab-acc-ldap:
+	$(LAB_DIR)/run-suite-ldap.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),60)
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30
