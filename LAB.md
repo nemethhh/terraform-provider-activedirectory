@@ -245,28 +245,64 @@ Two topologies are supported and were both exercised:
 
 ## Native LDAP backend — validation status
 
-**Validated 2026-09-22** against `corp.local` on the rebuilt lab (`s-server1`,
-Windows Server 2025), over LDAPS with certificate verification and a Kerberos
-ticket. No password anywhere in the run.
+**Validated 2026-09-22 (Phase 4)** against `corp.local` on the rebuilt lab
+(`s-server1`, Windows Server 2025), over LDAPS with certificate verification and
+a Kerberos ticket. No password anywhere in the run.
 
 ```
-PASS 42   FAIL 6   SKIP 55
+PASS 47   FAIL 1   SKIP 55
 auth: kerberos (ticket in FILE:/tmp/krb5cc_tf)
 ```
 
-Every one of the six failures is a capability this backend has not implemented,
-each refused by name rather than silently ignored:
+Computers and gMSAs now pass over LDAP. The five suites Phase 3 recorded as
+failing for those two classes are green, and exactly one refusal remains:
 
 | Failing suite | Refusal |
 |---|---|
-| `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | `Computer.Create not supported by this endpoint` |
-| `TestAccGMSALifecycle`, `TestAccGMSADataSource` | `GMSA.Create not supported by this endpoint` |
 | `TestAccAccessRuleLifecycle` | `Schema.Resolve not supported by this endpoint` |
 
-Computers, gMSAs and ACLs are Phase 4–6 scope. Everything else the provider
-offers — OUs, groups, users, membership, passwords, search, import, the
-tombstone probe and all three replication suites including `force_sync` — passes
-over LDAP.
+`access_rule` is Phase 5 scope. Everything else the provider offers — OUs,
+groups, users, membership, passwords, computers (including both delegation
+forms), gMSAs, search, import, the tombstone probe and all three replication
+suites including `force_sync` — passes over LDAP.
+
+### What the Phase 4 run found
+
+Two things, neither of which any in-process test could have found.
+
+**1. `msDS-ManagedPasswordInterval` is mandatory, not optional.** It is the
+`msDS-GroupManagedServiceAccount` class's only `systemMustContain` attribute, so
+a raw LDAP add that omits it is refused with
+
+```
+0000207C: UpdErr: DSID-03151EA8, problem 6002 (OBJ_CLASS_VIOLATION), data 0
+```
+
+The LDAP backend wrote it only when the caller named one, which passed against
+the in-process server and split on the lab exactly along that line:
+`TestAccGMSALifecycle` (interval 45 in configuration) passed,
+`TestAccGMSADataSource` (no interval) failed. It is now written
+unconditionally, defaulting to 30 — AD's own default, and the value
+`go-adpwsh`'s `gmsa_create.ps1` already wrote for the same reason, with the same
+comment. Regression-tested on the wire value in `go-adldap`.
+
+**2. The `SeEnableDelegationPrivilege` fixture did not survive the lab
+rebuild.** `TestAccComputerDataSource` and `TestAccComputerLifecycle` step 3
+failed with
+
+```
+00000522: SecErr: DSID-031A1248, problem 4003 (INSUFF_ACCESS_RIGHTS), data 0
+```
+
+on exactly the writes that set `trusted_for_delegation`,
+`allowed_to_delegate_to` or `principals_allowed_to_delegate_to_account`.
+`secedit` on the DC showed `SeEnableDelegationPrivilege = *S-1-5-32-544` alone —
+`svc_tfacc` was missing. This is a lab fixture, not a backend defect: the same
+writes fail the same way over a PowerShell connection. Fixed by
+`make lab-grant-deleg` **and a reboot of `s-server1`** — the privilege reaches
+LSASS only at boot, which is why `scripts/lab/grant-svc-deleg-priv.ps1` ends by
+saying so. **Re-run it after any lab rebuild**, before concluding that a
+delegation failure is the provider's.
 
 ### Kerberos: fixed, and it was never the library
 
