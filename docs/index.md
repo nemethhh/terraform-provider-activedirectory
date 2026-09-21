@@ -155,6 +155,15 @@ provider "activedirectory" {
 #
 # The domain block is not used here: the ldap block carries both the pinned
 # domain controller and its own authentication.
+#
+# Every resource this provider offers works over this connection, including the
+# ones backed by a security descriptor — activedirectory_access_rule, the
+# delegation templates, resource-based constrained delegation,
+# protected_from_accidental_deletion and can_change_password. There is no
+# subset.
+#
+# tls = "starttls" with port = 389 is the other form, and gets the same
+# certificate verification.
 # provider "activedirectory" {
 #   ldap {
 #     server              = "dc01.corp.local"
