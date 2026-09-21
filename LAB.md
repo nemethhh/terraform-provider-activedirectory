@@ -428,16 +428,50 @@ the reflog or by pushing the SHA again if the decision is ever revisited.
 The delete itself is a remote mutation and is listed with the other pending
 pushes rather than done silently.
 
+### NTLM and StartTLS: both exercised 2026-09-22
+
+Both were offered in the schema and had never been run, so a user could select a
+path nobody had tested. Both now pass `TestAccOULifecycle` against `corp.local`.
+
+**NTLM works on this domain controller — and the answer depends entirely on its
+policy.** `s-server1` has:
+
+```
+LdapEnforceChannelBinding = <not set>     # i.e. 0, never
+LDAPServerIntegrity       = 1             # signing negotiated, not required
+```
+
+The LDAP library sends no channel-binding token, so where
+`LdapEnforceChannelBinding = 2` this bind is rejected even over TLS, with
+`data 80090346` and no mention of channel binding anywhere in the message. The
+`ldap.ntlm {}` schema documentation says so and points at `simple` over LDAPS.
+**Re-read the policy before reading a passing NTLM run as a general result.**
+
+```bash
+LAB_LDAP_AUTH=ntlm make lab-acc-ldap PATTERN='TestAccOULifecycle'
+```
+
+**StartTLS on 389 works**, with the same certificate verification LDAPS gets.
+Everything after the handshake is shared code, so one lifecycle suite is the
+whole proof:
+
+```bash
+LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
+  KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap PATTERN='TestAccOULifecycle'
+```
+
 ### Still unexercised
 
-- **NTLM.** Expected to fail where `LdapEnforceChannelBinding = 2`; never run.
-- **StartTLS on 389.** Only LDAPS 636 has been exercised.
 - **`ModifyDN` on the wire.** The in-process LDAP server used in CI cannot serve
   it — gldap rejects application 12 outright — so rename and move are covered
   above the go-ldap adapter but the request bytes have still never crossed a
-  socket. The lab run above does exercise them for real.
+  socket in CI. The lab runs above do exercise them for real.
 - **Windows as the client.** The Kerberos path reads a FILE credential cache,
-  which Windows does not have; a Windows operator uses `ldap.simple`.
+  which Windows does not have; a Windows operator uses `ldap.simple` or
+  `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
+  it is its own piece of work.
+- **A domain that enforces channel binding.** This lab does not, so the NTLM
+  refusal is documented from the policy rather than observed.
 
 ### Running it
 
