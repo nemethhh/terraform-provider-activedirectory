@@ -7,14 +7,26 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
+	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
+// The lifecycle assertions live in the builder and are shared. Running the
+// same builder against both backends is what proves a user switching between
+// them sees no difference — change the builder, never one entry point.
 func TestOULifecycleAgainstTheFake(t *testing.T) {
-	dir := fake.NewDirectory()
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps:                    ouLifecycleSteps(fakeSuiteEnv()),
+	t.Run("pwsh", func(t *testing.T) {
+		dir := fake.NewDirectory()
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    ouLifecycleSteps(fakeSuiteEnv()),
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			Steps:                    ouLifecycleSteps(fakeSuiteEnv()),
+		})
 	})
 }
 

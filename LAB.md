@@ -1061,3 +1061,43 @@ observation, not a suite assertion (same caveat as the negative cache above).
 `LAB_PSRP_SERVER_SELECTION=round_robin` on top of the `LAB_PSRP_HOST2` /
 `LAB_PSRP_SPN2` two-host wiring) and the existing `make lab-acc-winrm-failover`.
 Backed by go-adpwsh v0.20.0; provider pin bumped to v0.20.0.
+
+## Native LDAP backend — validation status
+
+**Not yet validated against `corp.local`.** The `ldap` connection block and the
+`go-adldap` backend behind it are complete and green in CI, but no run against a
+real domain controller has happened. Compiling and passing against a double is
+not validation, so this is recorded as outstanding rather than described as
+working.
+
+What has been exercised:
+
+| | Covered |
+|---|---|
+| `go-adldap` unit + wire tests | dial, TLS with certificate verification, simple bind, error classification, pooling, paged search, OU/group/user CRUD, membership, password set, tombstone probe, replication wait |
+| Conformance suite | `adcorefake`, `go-adpwsh` and `go-adldap` all pass `RunDirectorySuite` |
+| Provider lifecycle suites | OU, group and user run against **both** backends from one set of assertions |
+
+What has **not** been exercised anywhere:
+
+- Kerberos bind against a real KDC. The ccache resolution is unit-tested, but no
+  ticket has been obtained and used.
+- NTLM bind. Expected to fail where `LdapEnforceChannelBinding = 2`; untested.
+- StartTLS on 389. Only LDAPS on 636 has been exercised.
+- `ModifyDN` on the wire. The in-process LDAP server used in CI cannot serve it
+  (the library behind it rejects application 12 outright), so rename and move are
+  covered above the adapter but the request bytes have never crossed a socket.
+- The replication wait against a second DC. `s-server2` exists in this lab and is
+  the obvious place to run it.
+
+### Running it
+
+```sh
+export AD_ACC_CONNECTION=ldap
+export AD_ACC_LDAP_SERVER=ad-server.corp.local
+export AD_ACC_LDAP_CA_FILE=/path/to/corp-root.pem   # or AD_ACC_LDAP_INSECURE=true
+KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit <user>@CORP.LOCAL
+make lab-acc-only PATTERN='TestAccOU|TestAccGroup|TestAccUser'
+```
+
+Record the result here — which DC, what passed, what did not.

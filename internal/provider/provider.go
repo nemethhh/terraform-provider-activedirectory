@@ -40,6 +40,10 @@ type adProvider struct {
 	// It is the test-only hook that lets the lifecycle tests drive a full
 	// resource cycle with no jump box.
 	transport adpwsh.Transport
+
+	// directory, when non-nil, replaces connection selection entirely. It is
+	// the hook that lets one lifecycle suite run against either backend.
+	directory *adcore.Directory
 }
 
 // New returns the provider factory the plugin server serves.
@@ -51,6 +55,13 @@ func New(version string) func() provider.Provider {
 // instead of dialling SSH. Test-only.
 func NewWithTransport(tr adpwsh.Transport) provider.Provider {
 	return &adProvider{version: "test", transport: tr}
+}
+
+// NewWithDirectory substitutes a directory and skips connection selection, so
+// a suite can drive a full resource cycle against any backend — or against the
+// in-memory fake, with no jump box and no domain. Test-only.
+func NewWithDirectory(dir adcore.Directory) provider.Provider {
+	return &adProvider{version: "test", directory: &dir}
 }
 
 func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -406,6 +417,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	// Mask before anything is logged, not after. The library masks its own
 	// payloads; this covers everything the provider itself writes.
 	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password", "private_key", "credential", "AccountPassword")
+
+	// A substituted directory is already connected, so connection selection,
+	// domain targeting and replication have nothing to resolve.
+	if p.directory != nil {
+		resp.ResourceData = *p.directory
+		resp.DataSourceData = *p.directory
+		return
+	}
 
 	server, credential, diags := resolveDomain(cfg)
 	resp.Diagnostics.Append(diags...)

@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 
+	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
@@ -19,21 +20,38 @@ var writeOnlyPasswordChecks = []tfversion.TerraformVersionCheck{
 }
 
 func TestUserLifecycleAgainstTheFake(t *testing.T) {
-	dir := fake.NewDirectory()
-	// Only the fake can be asked what passwords were set. Two of them means the
-	// rotation actually reached the directory rather than only the plan.
-	rotated := func(*terraform.State) error {
-		for _, history := range dir.Passwords {
-			if len(history) == 2 {
-				return nil
+	t.Run("pwsh", func(t *testing.T) {
+		dir := fake.NewDirectory()
+		rotated := func(*terraform.State) error {
+			for _, history := range dir.Passwords {
+				if len(history) == 2 {
+					return nil
+				}
 			}
+			return fmt.Errorf("expected a rotation, got %v", dir.Passwords)
 		}
-		return fmt.Errorf("expected a rotation, got %v", dir.Passwords)
-	}
-	resource.UnitTest(t, resource.TestCase{
-		TerraformVersionChecks:   writeOnlyPasswordChecks,
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps:                    userLifecycleSteps(fakeSuiteEnv(), rotated),
+		resource.UnitTest(t, resource.TestCase{
+			TerraformVersionChecks:   writeOnlyPasswordChecks,
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    userLifecycleSteps(fakeSuiteEnv(), rotated),
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		d, rec := adcorefake.NewRecording(fakeSuiteEnv().Container)
+		rotated := func(*terraform.State) error {
+			pw := rec.Passwords()
+			for _, history := range pw {
+				if len(history) == 2 {
+					return nil
+				}
+			}
+			return fmt.Errorf("expected a rotation, got %v", pw)
+		}
+		resource.UnitTest(t, resource.TestCase{
+			TerraformVersionChecks:   writeOnlyPasswordChecks,
+			ProtoV6ProviderFactories: factoriesWithDirectory(d),
+			Steps:                    userLifecycleSteps(fakeSuiteEnv(), rotated),
+		})
 	})
 }
 

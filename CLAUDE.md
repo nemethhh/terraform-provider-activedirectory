@@ -10,10 +10,48 @@ mechanical process — build, test, lab, release — is in
 This repository is a Terraform provider and **nothing else**. Every Active
 Directory behaviour — cmdlet composition, DC pinning, the read-back after each
 write, delete verification, error classification, serialized writes and the
-replication wait — lives in
-[`github.com/nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh) and is
-*not* reimplemented here. This repo contains only schemas, plan/state mapping,
-diagnostics, and import.
+replication wait — lives in a library and is *not* reimplemented here. This repo
+contains only schemas, plan/state mapping, diagnostics, and import.
+
+## Two backends behind one contract
+
+There are now **two** libraries, and the provider cannot tell them apart:
+
+- [`go-adpwsh`](https://github.com/nemethhh/go-adpwsh) drives AD through
+  PowerShell, over the `local`, `ssh` or `winrm` connection.
+- [`go-adldap`](https://github.com/nemethhh/go-adldap) speaks LDAPS to a domain
+  controller directly, over the `ldap` connection — no PowerShell, no RSAT, no
+  Windows host.
+
+Both satisfy `adcore.Directory` from
+[`go-adcore`](https://github.com/nemethhh/go-adcore), which is also where the
+shared vocabulary lives: the models, the specs, `Identity`, `Secret`, the
+normalized error `Kind`, and the invariant machinery both backends compose.
+Provider data is an `adcore.Directory`, so a resource cannot tell which backend
+configured it — that is what lets one set of resources serve both.
+
+**A change to AD behaviour belongs in whichever library owns it, never here.**
+A change that would apply to both belongs in `go-adcore`. If a resource needs
+something the contract does not expose, widen the contract; do not reach past it
+to a concrete client.
+
+`go-adcore/adcoretest.RunDirectorySuite` is the behavioural conformance suite
+every backend runs. It replaces what a single shared implementation used to
+guarantee structurally: read-back after write, delete verification, serialized
+writes per identity, a search that errors rather than truncating, and a rename
+that never replaces the object. A backend that does not run it is not a
+conforming implementation.
+
+`chooseConnection` covers **four** mutually exclusive blocks with no implicit
+default, for the same reason it covered three: guessing one would let a mistyped
+block run against the wrong identity, or over the wrong protocol. Note that
+`ldap` is not a transport — the `mode` (warm/cold) axis describes how `pwsh` is
+driven, and that path runs none.
+
+The `ldap` connection currently manages **organizational units, groups and
+users**. gMSAs, computers, and everything needing a security descriptor still
+require a PowerShell connection; `can_change_password = false` on the LDAP path
+is refused as unsupported rather than silently ignored.
 
 **When a task needs new AD behaviour, the change belongs in the library, not
 here.** The library's operation set is deliberately narrow: as of `go-adpwsh`

@@ -42,6 +42,12 @@ const (
 	// the only one that can run on the host itself), "ssh", or "winrm". A 5.1
 	// endpoint is reached over winrm from wherever the suite runs.
 	envTransport = "AD_ACC_TRANSPORT"
+	// envConnection is the newer spelling: the mutually exclusive set now
+	// includes ldap, which is not a transport. envTransport still works.
+	envConnection   = "AD_ACC_CONNECTION"
+	envLDAPServer   = "AD_ACC_LDAP_SERVER"
+	envLDAPCAFile   = "AD_ACC_LDAP_CA_FILE"
+	envLDAPInsecure = "AD_ACC_LDAP_INSECURE"
 
 	// envMode selects the execution mode emitted into the transport block:
 	// "cold" or "warm". Empty leaves the attribute out, so the provider's own
@@ -119,20 +125,50 @@ func accPreCheck(t *testing.T, alsoRequired ...string) func() {
 // accTransportName is the deployment the suite exercises. Empty means local, so
 // every existing invocation behaves exactly as it did before.
 func accTransportName() string {
-	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envTransport))); v {
+	raw := strings.TrimSpace(os.Getenv(envConnection))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(envTransport))
+	}
+	switch v := strings.ToLower(raw); v {
 	case "", "local":
 		return "local"
-	case "ssh", "winrm":
+	case "ssh", "winrm", "ldap":
 		return v
 	default:
-		panic(fmt.Sprintf("%s=%q: want local, ssh or winrm", envTransport, v))
+		panic(fmt.Sprintf("%s=%q: want local, ssh, winrm or ldap", envConnection, v))
 	}
+}
+
+// accLDAPBlock renders the ldap connection. kerberos {} with no attributes is
+// the intended form: the operator runs kinit and the ticket is read from
+// KRB5CCNAME, so the suite's configuration file holds no credential.
+//
+// The max_concurrency line is emitted verbatim for the same reason every other
+// branch emits it: accProviderConfigWithConcurrency rewrites it in place.
+func accLDAPBlock() string {
+	var b strings.Builder
+	b.WriteString("  ldap {\n")
+	fmt.Fprintf(&b, "    server = %q\n", os.Getenv(envLDAPServer))
+	b.WriteString("    tls = \"ldaps\"\n")
+	if ca := os.Getenv(envLDAPCAFile); ca != "" {
+		fmt.Fprintf(&b, "    ca_certificate_file = %q\n", ca)
+	}
+	if strings.EqualFold(os.Getenv(envLDAPInsecure), "true") {
+		b.WriteString("    insecure_skip_verify = true\n")
+	}
+	b.WriteString("    max_concurrency = 4\n")
+	b.WriteString("\n    kerberos {}\n")
+	b.WriteString("  }\n")
+	return b.String()
 }
 
 // accTransportBlock renders the selected transport literally. Every branch emits
 // the line "    max_concurrency = 4" verbatim, because
 // accProviderConfigWithConcurrency and accProviderConfigWithTimeout rewrite it.
 func accTransportBlock() string {
+	if accTransportName() == "ldap" {
+		return accLDAPBlock()
+	}
 	var b strings.Builder
 	switch accTransportName() {
 	case "ssh":
@@ -232,6 +268,17 @@ func accProviderConfig(extraBlocks ...string) string {
 	}
 	b.WriteString(accTransportBlock())
 	b.WriteString("\n")
+
+	// The ldap block carries its own server and authentication, and the
+	// provider refuses domain.credential alongside it rather than ignoring it.
+	if accTransportName() == "ldap" {
+		for _, block := range extraBlocks {
+			b.WriteString(block)
+			b.WriteString("\n")
+		}
+		b.WriteString("}\n")
+		return b.String()
+	}
 
 	b.WriteString("  domain {\n")
 	if v := os.Getenv(envServer); v != "" {

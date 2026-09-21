@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
+	"github.com/nemethhh/go-adcore"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 	"github.com/nemethhh/terraform-provider-activedirectory/internal/provider"
 )
@@ -202,6 +203,15 @@ func TestProviderConfigWinrmServerSelection(t *testing.T) {
 func factoriesWith(dir *fake.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
 	return map[string]func() (tfprotov6.ProviderServer, error){
 		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(dir.Transport())),
+	}
+}
+
+// factoriesWithDirectory drives the provider from an adcore.Directory rather
+// than a transport, which is how one lifecycle suite runs against either
+// backend.
+func factoriesWithDirectory(d adcore.Directory) map[string]func() (tfprotov6.ProviderServer, error) {
+	return map[string]func() (tfprotov6.ProviderServer, error){
+		"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithDirectory(d)),
 	}
 }
 
