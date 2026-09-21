@@ -6,14 +6,23 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
 func TestAccessRuleLifecycleAgainstTheFake(t *testing.T) {
-	dir := fake.NewDirectory()
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps:                    accessRuleSteps(fakeSuiteEnv()),
+	t.Run("pwsh", func(t *testing.T) {
+		dir := fake.NewDirectory()
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    accessRuleSteps(fakeSuiteEnv()),
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			Steps:                    accessRuleSteps(fakeSuiteEnv()),
+		})
 	})
 }
 
@@ -118,21 +127,31 @@ resource "activedirectory_access_rule" "grant1" {
   type        = data.activedirectory_delegation_template.t.rules[1].type
 }`
 
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps: []resource.TestStep{{
-			Config: base + grant,
-			Check: resource.ComposeAggregateTestCheckFunc(
-				resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant0", "trustee_sid"),
-				resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant1", "trustee_sid"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "object_type", "Reset Password"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "object_type", "pwdLastSet"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.scope", "descendants"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.object_class", "user"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.scope", "descendants"),
-				resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.object_class", "user"),
-			),
-		}},
+	steps := []resource.TestStep{{
+		Config: base + grant,
+		Check: resource.ComposeAggregateTestCheckFunc(
+			resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant0", "trustee_sid"),
+			resource.TestCheckResourceAttrSet("activedirectory_access_rule.grant1", "trustee_sid"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "object_type", "Reset Password"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "object_type", "pwdLastSet"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.scope", "descendants"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant0", "applies_to.object_class", "user"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.scope", "descendants"),
+			resource.TestCheckResourceAttr("activedirectory_access_rule.grant1", "applies_to.object_class", "user"),
+		),
+	}}
+
+	t.Run("pwsh", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    steps,
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New("DC=corp,DC=local")),
+			Steps:                    steps,
+		})
 	})
 }
 
