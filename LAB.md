@@ -18,7 +18,14 @@ in `~/ad-lab-credentials.txt` (mode 0600).
 | `s-client1` (`ad-client1`) | 192.168.50.31 | domain-joined member server, runs the suite |
 | `s-client2` (`ad-client2`) | 192.168.50.32 | second member, winrm failover |
 
-Both run **Windows Server 2025 Standard** with PowerShell 7 and static addresses.
+Rebuilt 2026-09-21 onto these addresses. The whole lab moved: the pre-rebuild
+`s-server` (192.168.50.216) and `s-client` (192.168.50.31) are gone, and
+192.168.50.32 — which used to be the second DC — is now the second member. Run
+write-ups further down name the hosts as they were at the time and are left
+that way deliberately; anything in an *instruction* naming an old address is
+stale, not a variant.
+
+All four run **Windows Server 2025 Standard** with PowerShell 7 and static addresses.
 The forest is `corp.local` / NetBIOS `CORP`, `DC=corp,DC=local`, at Windows2025
 forest mode — chosen to match `fake.Directory`'s naming context so the fake-backed
 and acceptance suites assert against identical DNs.
@@ -26,18 +33,20 @@ and acceptance suites assert against identical DNs.
 ## Connecting
 
 ```bash
-ssh s-server
-ssh s-client
+ssh s-server1
+ssh s-client1
 ```
 
-Both aliases are defined in `~/.ssh/config` and need no flags. Two details that
-are easy to get wrong:
+The `ad-*` aliases work too, and the pre-rebuild names `s-server` and `s-client`
+still resolve to `s-server1` and `s-client1` so older notes keep working. Both
+are defined in `~/.ssh/config` and need no flags. Two details that are easy to
+get wrong:
 
 - **The account is `Administrator`, not `admin`.** `admin` is refused.
 - The blocks must stay **above** the catch-all `Host *` entry in `~/.ssh/config`,
   which otherwise applies `User sre` and `IdentityFile ~/.ssh/id_rsa`. `ssh` takes
   the *first* value it obtains for each keyword, so ordering is what makes this
-  work. Check with `ssh -G s-server`.
+  work. Check with `ssh -G s-server1`.
 
 The key is `~/.ssh/tf_ad_lab` (ed25519), created for this lab and used by nothing
 else.
@@ -118,7 +127,7 @@ All three are non-admin and share one password, added to `~/ad-lab-credentials.t
 ## Running the e2e suite
 
     make lab-e2e-fixtures     # once, as admin: create the principals and OUs
-    make lab-e2e              # ship this tree and run every TestAccE2E* on s-client
+    make lab-e2e              # ship this tree and run every TestAccE2E* on s-client1
 
 `make lab-e2e` needs no admin credentials: each scenario authenticates as its own
 delegated principal via the provider's `credential {}` block, and CheckDestroy
@@ -165,7 +174,7 @@ join succeeded immediately. Compare before building:
 ### The double hop is real here
 
 Confirmed on this lab, and it decides how the acceptance suite must be configured
-under the `ssh` transport. From a public-key SSH session on `s-client`:
+under the `ssh` transport. From a public-key SSH session on `s-client1`:
 
 ```
 Get-ADDomain                       ->  "Unable to contact the server ... does not
@@ -174,7 +183,7 @@ Get-ADDomain -Credential CORP\...  ->  OK, corp.local
 ```
 
 ADWS is demonstrably running. The session simply holds no delegatable credentials,
-and `whoami` reports `s-client\administrator` — the local account, which has no
+and `whoami` reports `s-client1\administrator` — the local account, which has no
 rights in the directory. So over SSH, `domain.credential` is **required**, meaning
 `AD_ACC_USERNAME` and `AD_ACC_PASSWORD` must be set. Running Terraform on the host
 itself (the `local` transport) does not have this problem, which is the whole point
@@ -182,14 +191,14 @@ of that deployment.
 
 ## Running the suite against this lab
 
-The suite's provider block declares `local {}`, so **the tests run on `s-client`,
+The suite's provider block declares `local {}`, so **the tests run on `s-client1`,
 not on the workstation** — the local transport spawns `pwsh` on whichever machine
 executes the tests. `scripts/lab/10-install-dev-tools.ps1` puts Go and Terraform
 there; the source goes over `scp` (`git archive HEAD`), so the host needs no Git.
 
 `AD_ACC_USERNAME` and `AD_ACC_PASSWORD` are **required even under the `local`
 transport** when the run is launched over SSH. `whoami` in an SSH session on
-`s-client` reports `s-client\administrator` — the local account, which holds no
+`s-client1` reports `s-client1\administrator` — the local account, which holds no
 rights in the directory — and every `pwsh` the transport spawns inherits that
 token. The double hop below is the same effect seen from the other direction.
 
@@ -198,7 +207,7 @@ export TF_ACC=1 \
        AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
        AD_ACC_DENIED_CONTAINER='OU=tfacc-denied,DC=corp,DC=local' \
        AD_ACC_SECOND_DC='s-server2.corp.local' \
-       AD_ACC_SERVER='s-server.corp.local' \
+       AD_ACC_SERVER='s-server1.corp.local' \
        AD_ACC_USERNAME='CORP\svc_tfacc' AD_ACC_PASSWORD='...'
 go test ./internal/provider/ -run TestAcc -v -timeout 120m
 ```
@@ -206,226 +215,6 @@ go test ./internal/provider/ -run TestAcc -v -timeout 120m
 Every variable is now satisfied, so nothing needs skipping. `accPreCheck` calls
 `t.Fatal` on a missing one rather than skipping, so an incomplete environment
 fails loudly instead of reporting green.
-
-### First run against a real domain, 2026-08-20
-
-All thirteen non-replication suites pass. The first run found three defects,
-which is the suite working rather than the suite failing:
-
-| Defect | Where it was |
-|---|---|
-| An OU carrying AD's default protection could never be moved: the flag denies the Delete right a move is authorised through | `go-adpwsh`, fixed in **v0.2.1**; `fake.Directory` now enforces the same rule, so it reproduces without a domain |
-| The concurrency suite addressed counted resources as `fan[0]`; the shimmed state uses `fan.0`, so every check said "Not found" while the apply had succeeded | the test |
-| `OU=tfacc-denied` carried an explicit DENY on read, so ADWS answered a create with a generic "server is unwilling to process the request" and no access-denied wording | the lab fixture |
-
-What only a real domain proved: the eleven hostile values survive the cmdlet
-layer; `global` to `universal` is a conversion AD permits; `generate-config-out`
-re-plans clean for all three resources; and the sweeper's PowerShell works.
-
-### Group membership, 2026-08-21
-
-The two membership resources (`activedirectory_group_member`,
-`activedirectory_group_membership`) had their first real-domain run. It found one
-defect, again the suite working:
-
-| Defect | Where it was |
-|---|---|
-| `Group.Members` read the member attribute with the LDAP ranged-retrieval option (`-Properties "member;range=0-1499"`), which `Get-ADObject` rejects with `System.ArgumentException`. The AD cmdlets page a multivalued attribute internally, so `-Properties member` already returns the whole set | `go-adpwsh`, fixed in **v0.3.1**; a unit guard now fails if the read op ever uses `range=`. The fake could not catch it — it does not model the cmdlet layer, which is the standing fake-vs-real risk |
-
-What only a real domain proved: `AddMembers`/`RemoveMembers`/`IsMember` (the
-base-scoped `Test-AdMember` search included) all work; a group can be a member of
-a group (nested membership, both resources); and — via the opt-in
-`TestAccGroupMembershipLargeSet` with `AD_ACC_LARGE_COUNT=5000` — `Group.Members`
-reads back all 5000 members of a real group, exercising the cmdlets' internal
-ranged retrieval across four pages. That large-group run is the empirical answer
-to the ranged-read question `LAB.md` and the design had left open.
-
-`s-server2` was down during this run, so the replication suite was not
-re-exercised; the membership suites do not use the second DC.
-
-### Data sources and directory search, 2026-08-21
-
-The seven read-only data sources — `activedirectory_ou`/`_group`/`_user`,
-`activedirectory_group_members`, and the plural typed searches
-`activedirectory_ous`/`_groups`/`_users` — had their first real-domain run,
-backed by the new class-scoped search primitive in `go-adpwsh` **v0.4.0**
-(`OU.Search`/`Group.Search`/`User.Search`, and the exported
-`EscapeFilter`/`Equal`/`And` filter builder). The full `make lab-acc` run was
-clean: all seven data-source suites passed, and every existing resource,
-membership, hostile-input, concurrency, brownfield and delegation-denial suite
-passed again against `v0.4.0`, so the library bump introduced no regression.
-
-What only a real domain proved: the singular sources resolve a managed object
-back through `Get-AD*` (OU by DN, group by sAMAccountName, user by objectGUID,
-including the account-expiry RFC 3339 round-trip); the plural sources honour
-`container` + `scope` (`one_level`) and both filter inputs — `filter_by`
-equality (users) and a raw `ldap_filter` wildcard `(name=…*)` matched by
-`Get-ADGroup` (groups); and `activedirectory_group_members` enumerates a real
-group's membership. The `max_results` over-limit error (`KindTooManyResults`)
-and the fake's bounded-grammar evaluator are exercised by the always-on
-fake-backed suites rather than a dedicated acc assertion; the >1500-member
-paging path through the data source has an opt-in acc test
-(`TestAccGroupMembersDataSourceLargeSet`, gated on `AD_ACC_LARGE_COUNT`) on top
-of the library-level `TestAccGroupMembershipLargeSet` already recorded above.
-
-`s-server2` was down during this run (`192.168.50.32` refused 22/389/9389), so
-the three `TestAccReplication*` suites failed with `Cannot reach Active
-Directory` (a transport error reaching the second DC) — infrastructure, not a
-regression: nothing in this change touches the replication path. Everything else
-passed.
-
-### The double hop bites the diagnostics too
-
-A domain controller has no local accounts, so an SSH session on `s-server` runs
-as a domain identity -- but still on a network logon token with nothing
-delegatable. Queries against that DC itself succeed, because they are local;
-anything that hops to the other DC fails, and `Sync-ADObject` reports it as
-*"the destination server ... does not have Active Directory Web Services
-running"*. ADWS was running the whole time. Any cross-DC check run over SSH needs
-an explicit `-Credential`, exactly as the provider does under the `ssh` transport.
-
-### ACLs and delegation, 2026-08-22
-
-The new access-control surface — the `activedirectory_access_rule` resource and
-the `activedirectory_delegation_template` data source — had its first
-real-domain run, backed by `go-adpwsh` **v0.5.0** (`ACL.Get/Grant/Revoke` over
-explicit ACEs, `Schema.Resolve` name→GUID, and the pure `Delegation.Template`
-catalog). Validated in two layers.
-
-**Library, direct against the DC (a throwaway `ssh`-transport probe).**
-`Schema.Resolve` answered the well-known names (`Reset Password`, `user`) from
-its in-process table and resolved a non-well-known attribute (`department`) live
-from the schema; `ACL.Grant` → `Get` → `Revoke` of the `reset_user_passwords`
-ACEs round-tripped on a real OU with the rights/objectType/inheritance intact
-(so the `New-PSDrive`-pinned `AD:` path and the rights-mask round-trip both
-hold); a second grant of the same ACEs added no duplicate (idempotent).
-
-**What only a real domain proved — the GUID target.** The `AD:` provider
-addresses objects by distinguished name, so an ACL op given an `objectGUID`
-target must resolve it to a DN first. The fake resolves GUID-or-DN
-interchangeably and hid this; the fix (`Get-ADObject -Identity` → DN, at the top
-of each ACL op) was confirmed on the DC by granting/reading/revoking with the
-OU's GUID as the target.
-
-**Provider.** `TestAccAccessRuleLifecycle` passed (create → no-diff replan →
-import) — the no-diff replan is itself the mask/inheritance round-trip proof,
-since a DACL AD echoed back differently would show drift.
-`TestAccE2EDelegationGrantsCapability` passed as a genuine before/after
-differential: `svc_e2e_limited` could **not** reset a user's password before the
-grant and **could** after it. `TestAccE2EAccessRuleDenied` passed — a Grant
-without `WriteDacl` surfaces `KindDenied`. The full `make lab-acc` run was clean
-(0 failures): every existing OU/group/user, membership, data-source,
-replication, hostile-input and denied-import suite passed again against v0.5.0,
-so the library bump introduced no regression. `s-server2` was up this time, so
-the three `TestAccReplication*` suites passed.
-
-**Two things the lab caught, both fixed and re-validated.** (1) `applies_to`
-sourced from the delegation-template data source arrives as an *unknown* object
-at plan time; the resource model had to become a `types.Object` to hold it (a
-plain struct cannot), or the headline template→`for_each`→`access_rule` pattern
-fails at plan. (2) `terraform-plugin-testing` v1.16.0's legacy state shim rejects
-`for_each` resource instances ("for_each is not supported") — a *test-harness*
-limitation, not a provider one: the apply itself succeeds and the pattern works
-in real Terraform, so the example keeps `for_each`, but the acc/e2e tests were
-rewritten to index the template's `rules[0]`/`rules[1]` explicitly.
-
-### Recursive (effective) group membership, 2026-08-22
-
-The `activedirectory_group_members` data source gained a `recursive` flag —
-effective (transitive) membership resolved through nested groups — backed by
-`go-adpwsh` **v0.7.0** (`Group.MembersRecursive` and the
-`group_members_read_recursive` op, running `Get-ADGroupMember -Recursive`).
-Validated on the real domain in three passes: the functional suite
-(`TestAccGroupMembersRecursiveDataSource`) proved a direct read of a parent
-returns the nested child *group* while the recursive read flattens it to the leaf
-*user*; the group-member regression sweep (`-run TestAccGroupMember`:
-`TestAccGroupMemberLifecycle`/`Nested`, `TestAccGroupMembershipLifecycle`/`Nested`,
-`TestAccGroupMembersDataSource`) passed again against the v0.7.0-pinned provider,
-so the library bump introduced no regression; and the opt-in
-`TestAccGroupMembersRecursiveLargeSet` (`AD_ACC_LARGE_COUNT=5000`) proved the
-feature at scale from a single 5000-user fixture — a flat group with all 5000 as
-direct members (direct **and** recursive both return 5000) and a top group whose
-5000 members are reached only through five nested child groups (direct returns the
-five child groups, recursive flattens to all 5000).
-
-What only a real domain proved: `Get-ADGroupMember -Recursive` returns exactly
-5000 members within ADWS's default `MaxGroupOrMemberEntries` (5000, unset on the
-lab DCs) — for both a single large group and a multiply-nested hierarchy. The
-size-limit ceiling the design flagged as a risk does not trip at exactly that
-boundary (the limit is an inclusive maximum). `s-server2` was reachable during
-the runs; the replication path is untouched by this change, so the
-`TestAccReplication*` suites were not re-exercised.
-
-Lab-caught, fixed and re-validated:
-
-| Defect | Where it was |
-|---|---|
-| The 5000-member scale run's `flat_direct` step (`Group.Members`, whose read-back does a per-member `Get-ADObject` — 5000 sequential directory calls) exceeded the provider's default **60s** transport timeout and aborted the plan before the recursive reads ran | the test — a legitimately long single operation, not a hang. Fixed by configuring `local { timeout = "20m" }` for that suite (`accProviderConfigWithTimeout`); the recursive reads themselves are a single `Get-ADGroupMember` call and are not the slow path. The fake cannot catch a real-cmdlet latency wall — the standing fake-vs-real risk |
-
-### Fail-loud handling of AD-side value mutation, 2026-08-23
-
-The provider gained a two-layer defence against Active Directory storing an
-object differently from the configuration (which otherwise surfaces as the
-framework's cryptic "inconsistent result after apply" or a perpetual
-reconcile). **Layer 1** is plan-time schema validators (`sam_account_name`
-length + charset, `name`/CN length ≤ 64) that reject bad input before any
-directory call. **Layer 2** is a post-write consistency guard
-(`consistency.go`) that compares the requested spec against the read-back and
-emits one clear attribute-scoped error on genuine divergence, while suppressing
-equivalent respellings (DN case via `dnEqual`, name whitespace via a new
-`keepEquivalentName` plan modifier). Backed by `go-adpwsh` **v0.8.0**, whose
-in-memory fake learned to reproduce name/sam trim + truncation so the guard is
-exercisable off-domain.
-
-Before finalising the validators, a live probe (`New-ADUser`/`New-ADGroup`/
-`New-ADOrganizationalUnit` on `s-server`, each created then read back and
-deleted) established what the directory **actually** does:
-
-| Input | corp.local result |
-|---|---|
-| user `sAMAccountName`, 21 chars | **REJECTED** — "The name provided is not a properly formed account name" |
-| group `sAMAccountName`, 25 chars | **ACCEPTED**, stored all 25 |
-| OU name, 65 chars | **REJECTED** — "A value for the attribute was not in the acceptable range of values" |
-| `sAMAccountName` containing `,` | **REJECTED** |
-| user name with a trailing space | **ACCEPTED**, the space **preserved** (not trimmed) |
-
-**What only a real domain proved — and it corrected the design.** On this
-domain AD **rejects** an over-length or illegal `sAMAccountName`/CN outright; it
-does **not** silently truncate, and it **preserves** trailing whitespace in a
-name rather than trimming it. So the Layer 1 validators are not merely
-prevention — they match AD's own refusal and convert a post-hoc apply failure
-into a clean `terraform plan` error, which is the confirmed primary value. Two
-consequences: (1) the group `sAMAccountName` ceiling is **not** the 20-char
-down-level user limit — groups accepted 25 — so the group validator was relaxed
-to the schema `rangeUpper` of **256** (user stays at 20, lab-confirmed); (2) the
-Layer 2 guard, `keepEquivalentName`, and the fake's trim/truncate simulation
-modelled a *silent-mutation* behaviour this domain does not exhibit, so they were
-**removed** — there is no need to defend against silent mutation when the
-directory rejects outright, and `keepEquivalentName` would in fact have wrongly
-suppressed a trailing-space name the directory would have stored. What shipped is
-the Layer 1 validators only: they mirror Active Directory's own refusal and turn
-it into a clean `terraform plan` error. The go-adpwsh fake reverted to storing
-values verbatim (v0.8.0's mutation simulation superseded); the provider pins
-v0.7.0 again. (The pre-existing `keepEquivalentDN` still handles the one real
-silent normalisation — the container DN's canonical case — and is untouched.)
-
-Validated on the real domain with the full lifecycle sweep
-(`-run 'TestAcc.*Lifecycle'`, 496s): `TestAccUserLifecycle`,
-`TestAccGroupLifecycle`, `TestAccOULifecycle`, plus
-`TestAccAccessRuleLifecycle`, `TestAccGroupMemberLifecycle` and
-`TestAccGroupMembershipLifecycle` — **all PASS** against the v0.8.0-pinned
-provider (E2E suites skipped, gated on `AD_E2E_CONTAINER`). This proves the new
-validators do not reject valid creates, the consistency guard — which now runs
-on every create/update/rename/move — never false-fired on a real AD read-back,
-and the suites' no-diff steps stayed empty, i.e. no reconcile-next-run. The
-replication path is untouched by this change, so `TestAccReplication*` was not
-re-exercised.
-
-Lab-caught, fixed and re-validated:
-
-| Defect | Where it was |
-|---|---|
-| The Layer 1 group `sam_account_name` validator inherited the 20-char user ceiling, which would have rejected valid group logon names (the probe created a 25-char group sam that AD accepted and stored) | the provider — the 20-char limit is the pre-Windows-2000 *user* down-level name limit, not a group constraint. Fixed by relaxing the group validator to the `sAMAccountName` schema ceiling of 256 (`groupSamAccountNameValidators`), with the user validator left at 20; caught by the pre-finalisation probe rather than by a test, exactly the "lab-verify the limits before shipping" step the design called for |
 
 ## WinRM/PSRP
 
@@ -449,765 +238,101 @@ Two topologies are supported and were both exercised:
 
 - **DC-direct**: `psrp.host` is a domain controller itself, authenticating as
   the runner's own Kerberos session identity (no `domain.credential` needed).
-- **Member-host**: `psrp.host` is a domain-joined member (`s-client`), with
+- **Member-host**: `psrp.host` is a domain-joined member (`s-client1`), with
   `domain.credential` supplying `DOMAIN\user`/password — required to cross the
   Kerberos double hop from the member to the directory, the same constraint
   already documented above for `ssh`/`local`.
 
-### PSRP transport, 2026-08-24
-
-A real `terraform apply`/`destroy` of an `activedirectory_ou` exercised the
-`psrp` transport end-to-end on both topologies. DC-direct: create, update and
-delete each independently verified on the DC. Member-host (`s-client` +
-`domain.credential`): create verified on the DC, destroy clean — confirming
-the double hop is crossed by explicit credentials exactly as it is for `ssh`.
-DC-direct exercised the full create/update/delete lifecycle; the member-host
-topology was validated for create and delete, confirming the double-hop
-credential path (update was not exercised on that topology).
-
-### gMSA — group Managed Service Accounts, 2026-08-24
-
-`TestAccGMSALifecycle` and `TestAccGMSADataSource` (the `activedirectory_gmsa`
-resource and data source, backed by go-adpwsh's new `ServiceAccount` sub-client
-driving `*-ADServiceAccount`) both passed against `corp.local`. The lifecycle
-suite exercised, end to end on the DC: create (with
-`principals_allowed_to_retrieve_managed_password`, `service_principal_names`,
-`kerberos_encryption_type = ["AES256"]`, `managed_password_interval_in_days =
-45`); update (including clearing `description` via `""` → `-Clear`, changing
-`dns_hostname`, growing kerberos to `["AES128","AES256"]`, and replacing the
-SPN set); rename **and** move in one step (objectGUID stable, `dn` reflecting
-both); and import (with `ImportStateVerifyIgnore` for the two Optional,
-non-Computed sets, which read back null on a skeleton import state). Destroy was
-verified by `accCheckDestroy` (a real `ServiceAccount.Get` → not-found), and the
-sweeper's gMSA path was validated separately by planting a stray `tfacc-`
-service account and confirming `make lab-sweep` removed it
-(`msDS-GroupManagedServiceAccount` dispatches to `ServiceAccount.Delete`).
-The `principals_allowed_to_retrieve_managed_password` write→read-back is a real
-round-trip: the config sets it to an in-config `activedirectory_group`'s
-objectGUID and the suite asserts the gMSA reads that GUID back (the library
-resolves the DN AD returns to a GUID). A dedicated plan-only step also omits
-`managed_password_interval_in_days` after it was set to 45 and asserts an empty
-plan — confirming the create-only attribute carries state forward on omission
-rather than erroring (it is `Optional`+`Computed` with `UseStateForUnknown`, no
-static default, so Active Directory owns the default of 30).
-
-**KDS root key:** none was created manually. Windows Server 2025 auto-provisions
-the forest KDS root key on the first `New-ADServiceAccount`, backdated so it is
-immediately effective — the classic "`Add-KdsRootKey` then wait 10 hours"
-prerequisite does not bite on 2025 (older DCs still require it).
-
-Lab-caught, fixed and re-validated — both in the go-adpwsh `Convert-AdServiceAccount`
-read-back converter, and both invisible to the in-memory fake (which returns
-plain JSON scalars/arrays), so only a real DC surfaced them:
-
-| Bug | Fix |
-|---|---|
-| Every `GMSA.Create`/`Get` failed with `ConvertToFinalInvalidCastException`: `Get-ADServiceAccount` returns `ManagedPasswordIntervalInDays` as an `ADPropertyValueCollection`, and `[int]` on that collection throws | unwrap the single element before the cast — `[int](@($o.ManagedPasswordIntervalInDays)[0])`. go-adpwsh **v0.10.1** |
-| `kerberos_encryption_type` came back as `["Microsoft.ActiveDirectory.Management.ADPropertyValueCollection"]` (Terraform then rejected the apply: "planned set element AES256 does not correlate"): the converter called `.ToString()` on the whole collection, which yields the type name; the property is also a flags enum, so `AES128,AES256` returns as one element `"AES128, AES256"` | enumerate the collection and split each element on the comma — `foreach ($k in $o.KerberosEncryptionType) { foreach ($part in ("$k" -split ',\s*')) {...} }`. go-adpwsh **v0.10.2** |
-
-### Computer — activedirectory_computer, 2026-08-24
-
-`TestAccComputerLifecycle`, `TestAccComputerDataSource` and
-`TestAccComputersDataSource` (the `activedirectory_computer` resource plus its
-singular and plural data sources, backed by go-adpwsh **v0.11.0**'s new
-`Computer` sub-client driving `*-ADComputer`) all passed against `corp.local`.
-The whole acceptance suite (every non-e2e `TestAcc*`) and the whole e2e suite
-(every `TestAccE2E*`, re-shipped from the final tree) were then re-run green —
-no regressions from the new resource or its registration.
-
-The lifecycle suite exercised, end to end on the DC: create (description,
-`enabled`, `dns_hostname`, `service_principal_names`); a plan-only no-op
-re-apply (proving the read-back maps cleanly with no spurious diff); update
-every mutable attribute in one apply (`display_name`, `location`, `managed_by`,
-`trusted_for_delegation = true`, `kerberos_encryption_type =
-["AES128","AES256"]`, `account_expiration_date`, constrained delegation via
-`allowed_to_delegate_to`, and RBCD via `principals_allowed_to_delegate_to_account`
-pointed at an in-config helper computer's objectGUID); clearing `description`
-(`""` → `-Clear`); rename **and** move in one step (objectGUID stable, `dn`
-reflecting both); a 16-character name that applies successfully (the
-warn-not-error length path); and import (with `ImportStateVerifyIgnore` for the
-three Optional, non-Computed sets — `service_principal_names`,
-`allowed_to_delegate_to`, `principals_allowed_to_delegate_to_account` — which
-read back null on a skeleton import state). Destroy was verified by
-`accCheckDestroy` (a real `Computer.Get` → not-found), and the sweeper's
-computer path was validated when `make lab-sweep` removed a stray `tfacc-`
-computer left under a dangling OU (`objectClass computer` dispatches to
-`Computer.Delete`).
-
-The `principals_allowed_to_delegate_to_account` (RBCD) write→read-back is a real
-round-trip: the config sets it to an in-config `activedirectory_computer`'s
-objectGUID and the suite asserts the computer reads that GUID back — go-adpwsh's
-`Convert-AdComputer` resolves the DN AD returns to a GUID, exactly as the gMSA
-principals path does. `allowed_to_delegate_to` (classic constrained delegation,
-`msDS-AllowedToDelegateTo`) round-trips through the generic
-`-OtherAttributes`/`-Replace`/`-Clear` path — there is no friendly
-`-AllowedToDelegateTo` cmdlet parameter (see below).
-
-**Lab reconfiguration — SeEnableDelegationPrivilege.** The non-admin `svc_tfacc`
-account has Full Control over the `tfacc` subtree, which covers create, rename,
-move, `dns_hostname` and `servicePrincipalName` writes — but setting
-`trusted_for_delegation` or `allowed_to_delegate_to` is a *privileged*
-operation. Active Directory refuses those two attributes with `0x522` — "A
-required privilege is not held by the client" (Win32 1314) — unless the caller
-holds **SeEnableDelegationPrivilege** ("Enable computer and user accounts to be
-trusted for delegation"). Granted to `svc` via the Default Domain Controllers
-Policy (`make lab-grant-deleg` → `grant-svc-deleg-priv.ps1`). **Gotcha:** the
-privilege takes effect only after the DC is **rebooted** — `gpupdate` updates
-the policy database but LSASS keeps the privilege set it built at boot, so a
-fresh network logon still lacks the right until restart. `svc` stays a non
-Domain Admin, so the denial suite still proves what it did. This is a genuine
-operator requirement, now documented on both attributes' schema descriptions.
-
-**Lab-caught before the v0.11.0 tag** — surfaced by review and hands-on DC
-probes (running the cmdlets as `svc` via `-Credential`), all invisible to the
-in-memory fake, all fixed in go-adpwsh before the tag:
-
-| Bug | Fix |
-|---|---|
-| `Convert-AdComputer` read `$c.ServicePrincipalName` (singular) — a property `Get-ADComputer` does not expose; it returned `$null` → serialized `[null]` → decoded to `[""]`, so `service_principal_names` was wrong on every read | read the friendly plural `@($c.ServicePrincipalNames)` and request it by that name in `computerProject` (mirrors `Convert-AdServiceAccount`). go-adpwsh **v0.11.0** |
-| `Convert-AdComputer` read the raw `msDS-SupportedEncryptionTypes` integer bitmask (e.g. `24`) instead of the decoded flag names, so `kerberos_encryption_type` came back as `["24"]` — the same class as the gMSA v0.10.2 bug, in a new spot | read the friendly `@($c.KerberosEncryptionType)` and request it by that name. go-adpwsh **v0.11.0** |
-| The `allowed_to_delegate_to` write used a `-AllowedToDelegateTo` splat key, but no such parameter exists on `New-`/`Set-ADComputer` — it would fail on a real DC with "a parameter cannot be found" | route `msDS-AllowedToDelegateTo` through the generic `-OtherAttributes` (create) and `-Replace`/`-Clear` (update) on the raw attribute name. go-adpwsh **v0.11.0** |
-
-**One transient (did not recur):** the first plural-data-source run failed with
-`0x203b` "A local error occurred" on one of two computers Terraform created
-concurrently (writes are serialized per-identity, not globally, so `computer.a`
-and `computer.b` race). It passed on re-run — a concurrent-create transient, not
-a systematic fault, and not specific to computers.
-
-### Windows PowerShell 5.1 as a supported engine, 2026-08-25
-
-The whole PowerShell 7 dependency in go-adpwsh's script layer turned out to be
-four lines — three `?.` uses and one `ConvertFrom-Json -AsHashtable`. With those
-replaced, the scripts run on Windows PowerShell 5.1 as well as 7.
-
-This matters for deployment, not tidiness. A PowerShell 7 WinRM endpoint refuses
-a non-administrator caller unless the endpoint itself runs as a virtual account,
-which is a *local administrator* on that host — so a delegated team account would
-gain local-administrator code execution. A 5.1 endpoint with **no RunAs** admits
-a non-administrator and runs as that caller, so a team account needs no privilege
-on the management host at all. It also removes the PowerShell 7 install from the
-host's prerequisites: `RSAT-AD-PowerShell` is then the only requirement.
-
-**Endpoints used.** `AdObjects51` on `s-client`: Windows PowerShell 5.1,
-`FullLanguage`, **no RunAs**, security descriptor granting local administrators
-plus the AD group `CORP\AD-Terraform-Objects`, which contains `svc_tfacc`. That
-account holds no local group membership on the host — not Administrators, not
-Remote Management Users. `AdObjects7` is the same shape on PowerShell 7.6 with a
-virtual account, used only as the comparison engine so the account and runner are
-identical and the engine is the only variable.
-
-**Parse gate.** All 41 composed operation and tool scripts parsed by the 5.1
-parser: `parsed=41 syntaxErrors=0 on PowerShell 5.1.26100.32684`. This covers the
-operations no suite exercises.
-
-**Results.**
-
-Ten batches against **5.1** over psrp from Linux, run in sequence with a WinRM
-reclaim between each so peak shell count stays low. They sum to **34 pass, 0
-fail** (one skip), not the 44 an earlier draft of this table reported — that
-figure conflated these ten batches with the 10 PowerShell 7 comparison passes
-below, which belong on their own row. A separate, eleventh run — a peak-shell
-probe, not part of the ten — adds 4 more passes.
-
-| Batch | Suites | Result |
-|---|---|---|
-| b1 | OU, group, user lifecycles | 3 pass, 0 fail |
-| b2 (+b2b) | Computer, gMSA, `access_rule` lifecycles | 3 pass, 0 fail (+1 pass, 0 fail) |
-| b3 | Four membership suites | 4 pass, 0 fail |
-| b4 | Data sources | 6 pass, 0 fail |
-| b5 | Data sources | 5 pass, 0 fail (1 skip) |
-| b6 | Replication | 3 pass, 0 fail |
-| b7 | Brownfield config generation | 3 pass, 0 fail |
-| b8 | Denial and hostile-input suites | 4 pass, 0 fail |
-| b9 | Concurrency suites | 2 pass, 0 fail |
-| **Total, ten batches** | | **34 pass, 0 fail (1 skip)** |
-| peak-probe (separate, eleventh) | Shell-quota peak probe | 4 pass, 0 fail |
-
-| Run | Engine | Transport | Result |
-|---|---|---|---|
-| Batches 1-3 (all resource-type converters) | 7 | psrp from Linux | 10 pass, 0 fail |
-| Whole suite | 7 | local, on the member | 38 pass, 0 fail |
-| Large sets, 500 members | 7 | local, on the member | 3 pass |
-
-The 5.1 batches covered OU, group and user lifecycles; computer, gMSA and
-`access_rule` lifecycles; the four membership suites; eleven data sources; the
-three replication suites; brownfield config generation; the denial and
-hostile-input suites; and the two concurrency suites. **User, computer, gMSA,
-`access_rule` and replication had never run on 5.1 before** — each has its own
-read-back converter, and converters are where the engines diverge, so those five
-were the standing risk. All pass.
-
-**Lab-caught and fixed:** the acceptance harness carries two inline PowerShell
-scripts of its own — the large-group provisioner and the sweeper — and both still
-used `ConvertFrom-Json -AsHashtable`. On 5.1 the large-set suites failed at
-provisioning with "The specified module 'ActiveDirectory' was not loaded", and
-`make lab-sweep` would have failed the same way on a 5.1-only host. Neither
-script splats the payload or treats it as a dictionary, so the switch was never
-needed. Fixed in `c1c6771`.
-
-**Not verified, and why.** The large-payload path on **5.1** could not be
-exercised by either route:
-
-- **psrp from Linux** — the large-group suites provision 500 members through a
-  helper that spawns a local `pwsh` directly rather than going through the
-  transport, so it needs Windows with RSAT. It cannot run on the Linux side.
-- **local on the member** — `lab-ship` sends `git archive HEAD`, and `go.work` is
-  gitignored, so the member builds against `go.mod`'s pinned `go-adpwsh v0.11.0`.
-  That released version predates the 5.1 fix, so member-side runs exercise the
-  old PowerShell-7-only scripts. They pass on 7 and fail on 5.1 with the expected
-  `?.` parse error at `preamble.ps1:146`.
-
-Both blocks are understandable and neither indicates a defect. After go-adpwsh is
-released with the 5.1 change, the member-side route works and this gap closes —
-which is why the release order is library tag first, provider bump second.
-
-**Two harness limitations worth knowing.** `lab-acc-only PATTERN=` cannot take a
-`|` alternation: the pattern reaches `go test -run` through a `cmd /c` on the
-member, where `cmd.exe` reads the pipe as a pipe (`'X' is not recognized as an
-internal or external command`). Use a common prefix or a regex without `|`, as
-`lab.mk` already documents for `lab-e2e-only`. Separately, `lab-acc*` does not
-imply `lab-ship`, and `lab-ship` ships **HEAD** — an uncommitted fix will not
-reach the member.
-
-**Also merged into this branch:** the psrp WinRM shell-leak mitigation. Before
-it, a full suite run left 464 live shells and 464 `wsmprovhost` processes holding
-52 GB on a 26 GB host, after which every operation failed at session-establish;
-the transport now requests a 2-minute shell lease instead of inheriting a
-30-minute one, and rebuilds a shell reaped underneath it. Verified on the host:
-shells report `idleTimeout=PT120.000S`, down from `PT1800.000S`. That is a
-mitigation, not a cure — the transport still does not release its own shells.
-
-### ConstrainedLanguage sandbox endpoints, 2026-08-26
-
-`psrp.language_mode = "constrained"` lets the provider drive a locked-down
-ConstrainedLanguage (CLM) endpoint that confines a delegated team account to AD
-cmdlets with no host escape. `scripts/host/New-AdProviderEndpoint.ps1 -Sandbox`
-registers such an endpoint (5.1, no RunAs, `VisibleCmdlets` restricted to stock
-cmdlets, ACL capability dropped). It exposes **no bespoke functions**: the
-preamble builds its credential with `[PSCredential]::new` +
-`ConvertTo-SecureString`, both of which CLM allows (PSCredential/SecureString are
-CLM "core" types — lab-verified in the registered endpoint), so no
-credential-builder helper is needed. A sandbox endpoint named `AdSandbox` was
-registered on `s-client` and **left in place** as a reference; unregister it with
-`Remove-AdProviderEndpoint.ps1 -TierName AdSandbox` if you want the host pristine.
-
-Validated end to end as the delegated non-admin `CORP\svc_tfacc`:
-
-    LAB_PSRP_LANGUAGE_MODE=constrained LAB_PSRP_CONFIG=AdSandbox \
-      make lab-acc-psrp-only PATTERN=TestAccOULifecycle
-
-`TestAccOULifecycle`, `TestAccUserLifecycle`, `TestAccGroupLifecycle` all pass in
-constrained mode; a full-mode no-regression run (`LAB_PSRP_CONFIG=AdObjects51`,
-`language_mode` unset) also passes, so the mode-aware preamble did not disturb the
-existing full-language path. The ACL ops are refused before the transport by a
-go-adpwsh guard (`KindUnsupported`), unit-tested, so they need no lab run.
-
-**Four things only a real 5.1/CLM run caught** — none were visible to unit tests,
-diff review, or the design-phase hand-composed capstone, which is exactly why
-CLAUDE.md insists on the lab:
-
-- `New-PSSessionConfigurationFile` on WinPS 5.1 rejects the `Object[]` that
-  `Sort-Object` yields for `-VisibleCmdlets` with the **misleading** error "The
-  member 'ModulesToImport' must be an array…"; the fix is a `[string[]]` cast.
-- `$_.Exception.GetType().FullName` in the preamble/epilogue error handlers is a
-  method call CLM blocks, so *every* AD error under a constrained endpoint —
-  including the not-found that delete-verify relies on — failed the whole pipeline
-  with a CLM violation. `$_.Exception.psobject.TypeNames[0]` (property access) is
-  the CLM-safe, value-identical replacement.
-- The acceptance harness's own out-of-band verification client (`accTransport`)
-  has to carry `language_mode` too, or CheckDestroy sends a full-language wrapper
-  (`[Console]::SetIn`) to the constrained endpoint and CLM rejects it.
-- Kerberos is time-sensitive: a lab host whose clock drifted (here `s-client` was
-  9 h ahead after a suspend) fails the WinRM negotiate handshake with the opaque
-  "unexpected negotiation state: 1"; `w32tm /resync /force` from the domain fixes
-  it before any provider issue is real.
-
-### Local warm executor (local + warm cell), 2026-08-27
-
-`go-adpwsh`'s new `transport/localwarm` — a pool of persistent local
-`pwsh -SSHServerMode` runspaces driven over the out-of-proc adapter
-(`internal/oop`) and the shared warm core (`internal/warm`) — is the first cell
-of the transport × execution-mode matrix
-(`docs/superpowers/specs/2026-08-27-transport-execution-mode-independence-design.md`).
-It runs entirely inside go-adpwsh; the `mode`/transport rename in the provider is
-a later phase. Validated on `s-client` (pwsh 7.6.4, AD module 1.0.1.0) against
-`s-server.corp.local` as the delegated non-admin `CORP\svc_tfacc`, via the
-`localwarmlive`-tagged integration test cross-compiled for Windows:
-
-    GOOS=windows GOARCH=amd64 go test -tags localwarmlive -c -o localwarm.test.exe ./transport/localwarm/
-    # scp to s-client, then, with AD_LIVE_SERVER / AD_LIVE_USER / AD_LIVE_PASS /
-    # AD_LIVE_CONTAINER=OU=tfacc,DC=corp,DC=local set:
-    localwarm.test.exe -test.run TestLive -test.v
-
-Two tests, both green:
-
-- `TestLiveWarmLocalReadReuse` (pool of one): read #1 156 ms, read #2 **73 ms** —
-  the second read reuses the open runspace with the AD module already imported.
-  (The full cold→warm gap, ~1100 ms → ~40 ms, was measured in the spike, design
-  §15; here `adpwsh.New`'s rootDSE probe already warms the single conn, so both
-  timed reads are warm.)
-- `TestLiveWarmLocalConcurrentPool` (pool of 4, Terraform-like load): 8 distinct
-  users **created concurrently**, then **40 concurrent reads** across the 4-process
-  pool, each asserting it got back the exact user it asked for — **0 cross-talk**
-  in 1.45 s — then an update + read-back, with full CRUD teardown. This is the
-  load-bearing proof: `[Console]::SetIn` payload delivery is process-global, so a
-  pool that ever shared a process between two concurrently-busy ops would cross
-  their payloads and `-Credential`; only "one process per pooled conn" keeps it
-  correct, and only a real concurrent run against AD can show it. Teardown left
-  the delegated OU empty (`LEFTOVER_COUNT=0`).
-
-**What only the real run settled:** the spec's open item — whether the
-`[Console]::SetIn` → preamble `[Console]::In.ReadToEnd()` → `[PSCredential]`
-rebuild path works inside a go-psrpcore *out-of-proc* runspace (the spike had
-inlined its credential rather than exercising `SetIn`). It does: every read
-returned real directory data under an explicit domain credential delivered
-entirely through the payload, which is also what resolves the spike's
-local-account caveat (the SSH/local session lands as a non-domain account;
-`domain.credential` is the answer).
-
-### SSH warm executor (ssh + warm cell), 2026-08-27
-
-`go-adpwsh`'s new `transport/sshwarm` — a pool of persistent `pwsh -sshs`
-runspaces on the jump box, each reached over its own SSH **subsystem** channel and
-driven over the out-of-proc adapter (`internal/oop`) and the shared warm core
-(`internal/warm`), sharing the runspace executor with local+warm via the extracted
-`internal/psrun` — is the second warm cell of the transport × execution-mode matrix
-(`docs/superpowers/specs/2026-08-27-transport-execution-mode-independence-design.md`,
-phase 3). It runs entirely inside go-adpwsh; the `mode`/transport rename in the
-provider is a later phase. Unlike the local-warm run (built on and run *on*
-`s-client`), this was driven **from the Linux dev box**, which SSHes into the jump
-box and opens the subsystem channel — the real ssh-warm topology.
-
-**Registering the `powershell` subsystem (and the sftp-coexistence fix).** Warm-ssh
-needs a clean binary channel, so the jump box must expose `pwsh -sshs` as an sshd
-`Subsystem` (a plain exec of `pwsh -sshs` is corrupted by the remote cmd.exe). The
-design's earlier attempt (§14/§15) broke `sftp` when the line was added. **Root
-cause, confirmed this run:** the naive append put the new directive at the *end* of
-`C:\ProgramData\ssh\sshd_config`, which on this host ends with a `Match Group
-administrators` block — and `Subsystem` is a global-only directive that OpenSSH
-rejects inside a `Match` block, so the whole config failed to parse and sftp went
-with it. The fix is to insert it in the **global** section, right after the
-existing `Subsystem sftp` line. The exact working line (OpenSSH_for_Windows_9.5p2,
-LibreSSL 3.8.2; PowerShell 7 at `C:\Program Files\PowerShell\7\pwsh.exe`):
-
-    Subsystem	powershell	c:/progra~1/powershell/7/pwsh.exe -sshs -nologo
-
-The `progra~1` 8.3 short name sidesteps the space in "Program Files" (sshd's
-`Subsystem` parser mishandles quoted paths with spaces). Deploy safely: back up
-the file, edit it preserving its **ASCII/CRLF, no-BOM** encoding, validate the
-candidate with `sshd -T -f <candidate>` **before** touching the live file (a
-config that passes `-T` cannot lock you out), copy it over, then restart sshd
-**out-of-band** (a one-shot SYSTEM scheduled task, so the session issuing the
-restart is not the one torn down). Verify **both** afterwards: `scp` still works
-(sftp intact) **and** `ssh -s s-client powershell </dev/null` returns the
-out-of-proc `__NamedPipeError__` (the subsystem responds). A rollback copy is left
-at `C:\ProgramData\ssh\sshd_config.bak.sshwarm`.
-
-Validated on `s-client` against `s-server.corp.local` as the delegated non-admin
-`CORP\svc_tfacc`, via the `sshwarmlive`-tagged integration test run from the Linux
-dev box (`x/crypto/ssh` ignores `~/.ssh/config`, so use the address, not the
-alias):
-
-    cd go-adpwsh
-    AD_SSH_HOST=192.168.50.31 AD_SSH_USER=Administrator AD_SSH_KEY=~/.ssh/tf_ad_lab \
-    AD_LIVE_SERVER=s-server.corp.local \
-    AD_LIVE_CREDUSER='<svc.username>' AD_LIVE_CREDPASS='<svc.password>' \
-    AD_LIVE_CONTAINER=OU=tfacc,DC=corp,DC=local AD_LIVE_IDENTITY=krbtgt \
-    go test -tags sshwarmlive ./transport/sshwarm/ -run TestLive -v
-
-Two tests, both green:
-
-- `TestLiveWarmSSHReadsAD` (default pool): read `krbtgt` over a warm subsystem
-  runspace — `sam=krbtgt dn=CN=krbtgt,CN=Users,DC=corp,DC=local`.
-- `TestLiveWarmSSHConcurrentPool` (pool of 4, Terraform-like load): 8 distinct
-  users **created concurrently**, then **40 concurrent reads** across the 4-process
-  pool, each asserting it got back the exact user it asked for — **0 cross-talk in
-  1.53 s** (~38 ms/read amortized, versus the ~1.3 s a cold op costs; the warm win
-  realized the way the provider realizes it — module import amortized across many
-  ops on each pooled process, not two sequential reads on a shrunk pool) — then an
-  update + read-back, with full CRUD teardown that left the delegated OU empty.
-
-This closes the `ssh + warm` cell end-to-end: the shared `psrun` executor drives a
-warm runspace over an SSH subsystem exactly as it does over a local child, the
-`[Console]::SetIn` payload + `-Credential` delivery is byte-clean over the
-subsystem channel, and the pool keeps concurrently-busy operations isolated.
-
-### Provider two-axis config — full matrix, 2026-08-27
-
-The provider now models transport (`local`/`ssh`/`winrm`) and execution mode
-(`cold`/`warm`, default warm) as independent axes; `psrp {}` was renamed to
-`winrm {}`. The lab targets `make lab-acc-<cell>` and `make lab-acc-matrix` run
-one acceptance suite per supported cell. `make lab-acc-matrix
-PATTERN=TestAccOULifecycle MINUTES=8` — every supported (transport × mode ×
-PowerShell) cell, all green:
-
-| cell | target | pwsh | result |
-|---|---|---|---|
-| local + cold | `lab-acc-local-cold`  | 7   | PASS 50.0s (on member) |
-| local + warm | `lab-acc-local-warm`  | 7   | PASS 46.3s (on member) |
-| ssh + cold   | `lab-acc-ssh-cold-51` | 5.1 | PASS 46.9s |
-| ssh + cold   | `lab-acc-ssh-cold-7`  | 7   | PASS 61.1s |
-| ssh + warm   | `lab-acc-ssh-warm`    | 7   | PASS 59.3s (`pwsh -sshs`) |
-| winrm + warm | `lab-acc-winrm-51`    | 5.1 | PASS 32.9s (AdObjects51) |
-| winrm + warm | `lab-acc-winrm-7`     | 7   | PASS 42.0s (AdObjects7)  |
-| winrm + cold | `lab-acc-winrm-cold`  | 5.1 | PASS 88.8s (WinRS stdin; see 2026-08-27 revision below) |
-
-Every cell exercised the real path the provider takes: `local` ran on `s-client` with
-the committed tree; the `ssh`/`winrm` cells ran the working tree from the Linux
-box `GOWORK=off` (so the released `go-adpwsh` v0.15.0 is what was tested, not the
-`../go-adpwsh` checkout). The `ssh` session lands as a local account, so all
-`ssh` cells authenticated to AD with the svc `domain.credential` — the same
-decoupling the design relies on. `ssh + cold` proves the 5.1 jump-box path still
-runs (`powershell.exe -EncodedCommand`); `ssh + warm` drives the `powershell`
-sshd subsystem (`pwsh -sshs`); `winrm + warm` picks its engine by session
-configuration (5.1 vs pwsh 7). Default warm was validated as the real default:
-where a cell left `mode` unset it constructed the warm transport.
-
-### winrm + cold — first refused, then REVIVED via stdin and lab-validated, 2026-08-27
-
-An earlier `winrm + cold` (go-adpwsh v0.16.0 `NewCold`, a fresh WinRS
-`pwsh -EncodedCommand` per op) was **refused**: the ~10 KB preamble base64-of-UTF16
-is ~28 KB, past the WinRS **cmd.exe ~8191-char** command line, so no op fit. That
-verdict blamed the wrong layer — the limit is `cmd.exe`, not WinRS. Putting the
-script on **stdin** removes it entirely.
-
-**go-adpwsh v0.17.0 revives the cell** (`transport/winrm`, stdin-fed): a fresh
-Windows Remote Shell per op, feeding the wrapped script on **stdin** to a tiny
-`powershell -EncodedCommand` bootstrap (`[Console]::In.ReadToEnd() | iex`). No
-command-size limit. go-adpwsh owns the WinRS shell body (go-psrp consumed
-unmodified via its public `wsman`/`transport`/`auth` packages): the decisive fix
-is `<rsp:InputStreams>stdin</>` — go-psrp hardcodes the PSRP-shaped `stdin pr`,
-which makes the server accept every `Send` yet never route stdin to the process —
-plus a separate empty `End="true"` for stdin EOF (go-psrp's `Send` never sets it).
-Full analysis: `docs/superpowers/analysis/2026-08-27-winrm-cold-stdin-spike.md`.
-
-**Two identities (cold makes them distinct):** the WinRS **transport** account
-needs WinRS shell access (member of `Remote Management Users`, and present in the
-WSMan service **RootSDDL** — this host was hardened to admins-only, so the default
-RMU ACE `(A;;GA;;;RM)` was restored); the **AD** identity rides `domain.credential`
-(`-Credential`), least-privilege. Lab created a dedicated WinRS-only account
-`CORP\svc_tfcold` (creds file `cold.*`) for this; the AD cmdlets run as `svc_tfacc`.
-
-**Validated end-to-end (2026-08-27):** go-adpwsh `TestLiveColdStdinGetADUser`
-(Kerberos); provider `TestAccOULifecycle` (88.8s), `TestAccGroupLifecycle` (70.9s),
-`TestAccUserLifecycle` (62.8s) over the winrm+cold cell — the last against the
-**released** go-adpwsh v0.17.0 with `GOWORK=off` (`make lab-acc-winrm-cold`). The
-earlier `AccessDenied` was the transport account lacking WinRS RootSDDL access,
-not a `domain.credential` problem. The provider still rejects
-`winrm{mode="cold"}` with `configuration_name`/`language_mode` set (those are PSRP
-session-config knobs cold does not use).
-
-This makes the transport × mode matrix **six supported cells**: `local`/`ssh` ×
-`cold`/`warm`, `winrm` × `warm`/`cold`.
-
-### ACL delegation under ConstrainedLanguage, 2026-08-28
-
-`activedirectory_access_rule` now works against a `-Sandbox`
-(ConstrainedLanguage) endpoint — the case that was previously refused
-(`KindUnsupported`). The refusal existed because the ACL ops construct
-`[System.DirectoryServices.ActiveDirectoryAccessRule]` /
-`[System.Security.Principal.SecurityIdentifier]` and call `$acl.AddAccessRule`,
-none of which a ConstrainedLanguage **caller** may run. The fix keeps the caller
-constrained and moves that .NET into a **FullLanguage island**: go-adpwsh ships
-`Set-AdAce`/`Get-AdAce`/`Remove-AdAce` as endpoint `FunctionDefinitions` (which
-run FullLanguage even inside a CLM session), plus thin `acl_{grant,read,revoke}_clm`
-op variants that `core.exec` selects when the transport reports `Constrained()`;
-the CLM op just calls the helper by name. The double hop is cleared the same way
-the full path clears it — the helper takes `-Credential` (the `domain.credential`)
-and passes it to `New-PSDrive`/`Get-ADObject`. `dsacls` (the obvious
-stock-tool alternative) was rejected before implementation: it binds to the DC on
-the caller's own token and takes no `-Credential`, so it cannot clear the WinRM
-double hop. The provider's `New-AdProviderEndpoint.ps1 -Sandbox` now emits the
-helper `FunctionDefinitions` (a verbatim, drift-tested copy of go-adpwsh's
-`ACLEndpointHelpers()`) plus the `Get-Acl`/`Set-Acl`/`New-PSDrive`/`Remove-PSDrive`
-cmdlets and the `ActiveDirectory` provider whenever `-Capability acl` is combined
-with `-Sandbox`. Backed by go-adpwsh **v0.18.0** (feature-branch at run time) and
-the provider feature branch pinning it via a local `replace`.
-
-**Endpoint.** Registered on `s-client` as
-`New-AdProviderEndpoint.ps1 -TierName AdSandboxAcl -GrantTo 'CORP\AD-Terraform-Objects' -Capability all -Sandbox`
-— 5.1, ConstrainedLanguage, granted to `AD-Terraform-Objects` (which `svc_tfacc`
-is a member of). Left registered as the constrained-ACL test fixture, alongside
-the object-only `AdSandbox`. (`-Capability all` rather than `ou,group,user,acl`
-because `psrun.sh` single-quotes a comma list into one string, which the
-`[string[]]` `ValidateSet` rejects; `all` includes `acl`, and the extra cmdlets
-are harmless on a test endpoint.)
-
-**Run.**
-`LAB_PSRP_LANGUAGE_MODE=constrained LAB_PSRP_CONFIG=AdSandboxAcl scripts/lab/run-suite-psrp.sh TestAccAccessRuleLifecycle 40`
-→ `--- PASS: TestAccAccessRuleLifecycle (31.11s)`, as the delegated non-admin
-`CORP\svc_tfacc`. The suite is the full mask/inheritance round-trip proof: create
-+ grant two ACEs (an `ExtendedRight`/`Reset Password` and a two-right
-`ReadProperty`+`WriteProperty`, both `scope=descendants object_class=user`), a
-no-diff replan (a DACL AD echoed back differently would show drift), an
-`Allow`→`Deny` **replace** (destroy = revoke, create = grant), an import, and
-`CheckDestroy` (revoke all) — every one going through the CLM `_clm` path and the
-endpoint helpers. A spike first proved a `member`-attribute ACE granted to
-Authenticated Users hits an AD validated-write `Access is denied` on revoke, but
-that is an AD ACL-evaluation quirk of that specific ACE, not the mechanism — the
-suite's ordinary delegation ACEs grant and revoke cleanly.
-
-## WinRM multi-server failover (2026-09-01)
-
-A second WinRM management host now exists: the new `s-client2`
-(`192.168.50.33`), a `corp.local` member with an `AdObjects51` endpoint
-identical to `s-client`'s (5.1, `FullLanguage`, **no RunAs**, granting
-`BUILTIN\Administrators` + `CORP\AD-Terraform-Objects`). It was provisioned from
-a fresh Windows Server 2025 the same way `s-client` was — SSH key (over WinRM,
-local admin) → rename → domain join as `CORP\svc_join` →
-`Initialize-AdProvisioningHost.ps1 -AllowedClientCidr 192.168.50.0/24 -ServiceAccountGroup 'CORP\AD-Terraform-Objects'`
-→ `New-AdProviderEndpoint.ps1 -TierName AdObjects51 -GrantTo 'CORP\AD-Terraform-Objects'`
-— from Windows PowerShell 5.1 (no pwsh 7 installed: failover is engine-agnostic,
-so the 5.1 endpoint exercises it). SSH alias `s-client2` added on the Linux box.
-
-**Feature.** The provider's `winrm {}` block accepts repeatable `server { host }`
-sub-blocks (optional per-host `port`/`spn`; all auth/TLS/Kerberos/mode/config
-stay `winrm`-level and shared). go-adpwsh's `transport/winrm` gained a
-`failoverExecutor` that probes the ordered endpoint list at connect time and
-binds to the first that connects, a per-endpoint connect-budget ceiling, and a
-pool-shared negative cache. Backed by go-adpwsh **v0.19.0**. Warm-only —
-`server{}` + `mode = "cold"` is a config error. Selection is strict list-order
-priority (prefer-primary), not load-balancing.
-
-**Runs.** Over psrp from the Linux box as `CORP\svc_tfacc`, `TestAccOULifecycle`,
-against the failover branch via `go.work`; the harness emits `server{}` blocks
-when `LAB_PSRP_HOST2` is set.
-
-| Scenario | Config | Result |
-|---|---|---|
-| Both healthy | `server{s-client} server{s-client2}` | PASS 34.9s (runs on the primary) |
-| Down at start (refused) | `server{192.168.50.99 dead} server{s-client2}` | PASS 247s — fails over to `s-client2` |
-| Dies mid-run | both, `Stop-Service WinRM` on `s-client` mid-op | one op errors (WSMan `995` "I/O aborted") |
-| Hung primary, whole run | `s-client` WinRM down for the whole run | PASS — full lifecycle on `s-client2` |
-
-The **mid-run** case is the fail-closed boundary, not a defect: a host dying
-mid-execution yields `KindTransport`, which is never retried (the write may have
-partially reached AD, so a silent re-run could double-apply). Terraform surfaces
-that one op's error and a re-apply completes it on the healthy host. New
-operations after the death fail over normally — only the in-flight one surfaces.
-
-**A lab-found bug, fixed.** The first connect-budget formula (`Timeout/n` = 45s)
-let a *hung* primary eat most of a 60s op deadline and starve the healthy
-secondary — both timed out. Capped at a 15s ceiling (the single-host `n=1` path
-is exempt, so its full connect deadline is preserved). A *refused/unreachable*
-primary was always cheap; only a *hung* one hit this.
-
-**Negative caching + a harness caveat.** A pool-shared negative cache skips a
-recently-failed endpoint for a 5-minute cooldown so a hung host is not re-probed
-on every reconnection. Its benefit is invisible under `resource.Test`: `TF_LOG`
-shows the provider is **Configured ~21× per lifecycle**, and each Configure
-builds a fresh transport + cache, so the harness re-probes a hung primary
-~21×15s (≈430s, and cooldown-invariant — 30s and 5m produced identical times).
-A real single `terraform apply` configures **once**, so a hung primary is probed
-once (~15s) and the cache holds for the whole apply — the acc-suite hung-primary
-latency is a harness artifact, not the real cost. (`s-client2` also runs ~3×
-slower than `s-client` as a freshly built box, inflating every secondary-host
-number.)
-
-**Target.** `make lab-acc-winrm-failover` (`LAB_PSRP_HOST2` / `LAB_PSRP_SPN2`
-default to `s-client2`) runs the suite against both hosts.
-
-## WinRM server selection — round_robin (2026-09-01)
-
-Follow-up to the multi-server failover above. The `winrm {}` block now takes
-`server_selection = "failover" | "round_robin"` (default `failover` = the
-strict-priority behaviour above). `round_robin` rotates which endpoint each
-pooled connection binds to as connections are (re)established, spreading
-PowerShell-execution load across the peer hosts to avoid a hot primary; it still
-fails through to the next host when the chosen one is down. Implemented in
-go-adpwsh **v0.20.0** as "failover with a rotating start index": a pool-shared
-`sync/atomic` counter offsets the endpoint probe order per connect, reusing the
-existing negative-cache / connect-budget / bind-first machinery unchanged.
-Per-connection, not per-operation (the warm pool binds a persistent runspace per
-host); no effect with a single host. `server_selection` maps to the library's
-`Config.Strategy`; the schema `OneOf`-validates it. Design:
-`docs/superpowers/specs/2026-09-01-winrm-server-selection-design.md`.
-
-**Runs.** Over psrp from the Linux box as `CORP\svc_tfacc`, `TestAccOULifecycle`,
-**`GOWORK=off` against the released v0.20.0** (not the local checkout); two
-servers `s-client` (192.168.50.31) + `s-client2` (192.168.50.33), `AdObjects51`
-(5.1) endpoints.
-
-| Scenario | Config | Result |
-|---|---|---|
-| Round-robin, both healthy | `server_selection=round_robin`, 2 hosts | PASS 56.8s |
-| Failover regression, both healthy | `server_selection=failover` (default), 2 hosts | PASS 33.3s (primary only) |
-| **Server unavailable DURING execution** | failover mode, `Stop-Service WinRM` on `s-client` ~14s into the run | PASS 219s — run completes on `s-client2` |
-
-**The unavailable-during-execution run (the key new evidence).** In failover
-mode all connections bind the primary (`s-client`). ~14s into the lifecycle its
-WinRM was stopped (`Stop-Service WinRM -Force`) — verified down (service
-`Stopped`, `:5985` refused) from 12:31:14 until the 12:34:42 restore. The suite
-kept running the whole time `s-client` was down and **PASSED** (219s vs. a ~40s
-both-healthy baseline; the elongation is reconnect plus the ~3× slower secondary
-box). Because the primary was down for the entire remainder of the run, the
-surviving create/read/rename/move/destroy operations could only complete on
-`s-client2` — corroborated by its Security log: **33 `svc_tfacc` network logons
-(4624) on `s-client2`** in the window (its WinRM/Operational log is enabled,
-2313 records). `s-client`'s WinRM was restored cleanly afterward (Running,
-`:5985` open). This exercised the transparent-reconnect path of the failover
-safety spine — distinct from the in-flight-op boundary in the table above (a
-death caught mid-op still surfaces one `KindTransport` error and re-applies);
-here the stop landed such that reconnection carried the run through to
-`s-client2` with no fatal op error.
-
-**Distribution.** Even spread is proven deterministically by go-adpwsh unit tests
-(`TestRoundRobinRotatesStartAcrossConnects` and the concurrent
-`TestRoundRobinConcurrentConnectsDistribute`). On the lab, the round_robin
-lifecycle passes and both hosts serve the service account; the acc harness
-reconfigures ~21×/lifecycle with a small pool, so exact per-host counts are an
-observation, not a suite assertion (same caveat as the negative cache above).
-
-**Targets.** `make lab-acc-winrm-roundrobin` (new — sets
-`LAB_PSRP_SERVER_SELECTION=round_robin` on top of the `LAB_PSRP_HOST2` /
-`LAB_PSRP_SPN2` two-host wiring) and the existing `make lab-acc-winrm-failover`.
-Backed by go-adpwsh v0.20.0; provider pin bumped to v0.20.0.
-
 ## Native LDAP backend — validation status
 
-**Rebuilt and validated 2026-09-21** against `corp.local` on the recreated lab
-(s-server1, build 26100 / Windows Server 2025).
+**Validated 2026-09-22** against `corp.local` on the rebuilt lab (`s-server1`,
+Windows Server 2025), over LDAPS with certificate verification and a Kerberos
+ticket. No password anywhere in the run.
 
-### What now works, proven against a real domain controller
+```
+PASS 42   FAIL 6   SKIP 55
+auth: kerberos (ticket in FILE:/tmp/krb5cc_tf)
+```
 
-The backend was exercised end to end over **LDAPS with certificate
-verification on** — the lab CA pinned through `ca_certificate_file`, not
-`insecure_skip_verify`:
+Every one of the six failures is a capability this backend has not implemented,
+each refused by name rather than silently ignored:
 
-| | Result |
+| Failing suite | Refusal |
 |---|---|
-| TLS 1.3 to the DC, chain verified against `corp-lab-ca` | pass |
-| Simple bind over LDAPS | pass |
-| `objectGUID` decode (mixed-endian) | pass — real AD GUIDs round-trip |
-| OU create, read-back, description | pass |
-| **ModifyDN — rename with `objectGUID` preserved** | pass |
-| Delete with absence verification | pass |
+| `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | `Computer.Create not supported by this endpoint` |
+| `TestAccGMSALifecycle`, `TestAccGMSADataSource` | `GMSA.Create not supported by this endpoint` |
+| `TestAccAccessRuleLifecycle` | `Schema.Resolve not supported by this endpoint` |
 
-The ModifyDN result is the one that mattered most: the in-process LDAP server
-used in CI cannot serve application 12 at all, so until this run the rename and
-move path had never put a byte on a socket.
+Computers, gMSAs and ACLs are Phase 4–6 scope. Everything else the provider
+offers — OUs, groups, users, membership, passwords, search, import, the
+tombstone probe and all three replication suites including `force_sync` — passes
+over LDAP.
 
-### What is still broken: the Kerberos bind
+### Kerberos: fixed, and it was never the library
 
-`ldap.kerberos {}` **does not work against Windows Server 2025**, and the cause
-is upstream, not in this provider:
+`ldap.kerberos {}` now works. It had been recorded here as an upstream GSSAPI
+incompatibility requiring the `conn` seam to be swapped for a different LDAP
+library. That diagnosis was wrong. Two defects, both ours:
 
-```
-LDAP Result Code 49 "Invalid Credentials": 80090308: LdapErr: DSID-0C09071F,
-comment: AcceptSecurityContext error, data 57, v65f4
-```
+1. **The AP-REQ did not request mutual authentication.** go-ldap's `GSSAPIBind`
+   helper passes no AP options while the GSSAPI checksum it builds requests
+   `ContextFlagMutual`, so the request asks for mutual auth in one field and not
+   the other. AD refuses the inconsistency with
 
-Isolated as follows, so the diagnosis is not a guess:
+   ```
+   80090308: LdapErr: DSID-0C09071F, comment: AcceptSecurityContext error, data 57
+   ```
 
-- MIT `kinit` obtains a TGT, and `kvno ldap/s-server1.corp.local` obtains the
-  service ticket (`kvno = 3`). The KDC, the SPN and the client configuration
-  are all correct.
-- The same failure reproduces with **raw `go-ldap` + `gssapi`**, with none of
-  this provider's code in the path.
-- It is identical on **plain 389 and on LDAPS**, so it is not TLS.
-- It persists with `LdapEnforceChannelBinding = 0`, so it is **not** channel
-  binding — which had been the working assumption, and was wrong.
+   `data 57` is `ERROR_INVALID_PARAMETER` — a message naming neither Kerberos
+   nor the field, and reading like a bad credential while `kinit` and `kvno`
+   both succeed. That is what made it look like a library problem.
+   `GSSAPIBindRequestWithAPOptions` with `APOptionMutualRequired` binds
+   immediately.
 
-`data 57` is `ERROR_INVALID_PARAMETER`: AD is refusing the GSSAPI token
-`go-ldap`/`gokrb5` produces. This is exactly the case the `conn` seam in
-go-adldap exists for — swapping the LDAP library is a one-package change.
+2. **The `FILE:` prefix survived into the filename.** `ResolveCCachePath`
+   stripped it from `KRB5CCNAME` but returned an *explicit* path verbatim, and
+   the provider resolves `KRB5CCNAME` itself (configuration wins over the
+   environment), so the value arrived through the explicit argument and the bind
+   died with `open FILE:/tmp/krb5cc_tf: no such file or directory`.
 
-Until that is done, **use `ldap.simple` over LDAPS**, or one of the PowerShell
-connections.
+A third defect surfaced once the bind worked: the replication wait dialled the
+second controller with the **pinned** DC's binder, presenting a ticket for
+`ldap/s-server1` to `s-server2`. AD refused it, the presence probe never saw the
+object, and the wait ran to its deadline — reported as a replication timeout,
+which reads as slow replication and was actually a bad SPN. The binder is now
+rebuilt per target host; an explicit `spn` still wins.
 
-### Full acceptance suite over `ldap` — 2026-09-22
+All three are regression-tested in `go-adldap`. None needed a KDC to guard.
 
-```
-PASS 31    FAIL 6    SKIP 44          (was PASS 5, FAIL 32 before this work)
-```
+### Still unexercised
 
-**Every remaining failure is a resource this backend does not implement**, and
-there are only three distinct errors in the whole run, all of the form
-`not supported by this endpoint` naming the capability:
-
-| Failing | Missing | Phase |
-|---|---|---|
-| `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | computer accounts | 4 |
-| `TestAccGMSALifecycle`, `TestAccGMSADataSource` | gMSAs | 4 |
-| `TestAccAccessRuleLifecycle` | `ACL` and `Schema.Resolve` | 5 |
-
-Everything else passes against a real domain controller: OUs, groups, users,
-group membership and nesting, the replication wait across both DCs, import and
-brownfield config generation, hostile input, and the delegation-boundary denial
-suites.
-
-The 44 skips are unrelated: 41 want `AD_E2E_CONTAINER`, 3 want
-`AD_ACC_LARGE_COUNT`.
-
-Both descriptor-backed properties are implemented —
-`protected_from_accidental_deletion` on an OU and `can_change_password` on a
-user. They write the same attribute, so the tests check that setting one does
-not disturb the other.
-
-### Four defects the lab found that CI could not
-
-Each was invisible to the in-process test server, which accepts what a real
-domain controller refuses.
-
-**1. OU protection was silently ignored.** `OUSpec.Protected` was accepted and
-dropped. The provider defaults `protected_from_accidental_deletion` to `true`,
-so every OU apply failed with "inconsistent result after apply: was cty.True,
-but now cty.False" — naming neither the field nor the reason. This blocked all
-32 non-skipped tests. Now implemented: a Deny ACE for Delete and DeleteTree on
-`nTSecurityDescriptor`, written as a read-modify-write so existing delegations
-survive, and lifted and restored around a move because the Deny covers
-DeleteTree and AD checks that on a re-parent.
-
-**2. A nil sub-directory panicked instead of erroring.** The unimplemented
-classes were nil interface fields, on the reasoning that nil "fails loudly".
-It does not: the consumer dereferenced it and the process died with a nil
-pointer panic, taking 29 remaining tests with it and naming neither the class
-nor the reason. They are now stubs returning `KindUnsupported`.
-
-**3. Creating an enabled user was rejected outright.** The account was created
-with the spec's `Enabled` applied, so AD was asked for an enabled account with
-no password and refused with `ERROR_PASSWORD_RESTRICTION` — which surfaces as
-"password rejected by domain policy" and blames a password that was never the
-problem. The account is now created disabled, given its password, and enabled
-afterwards, which is the order `New-ADUser` uses. The same rule applies to
-`pwdLastSet`.
-
-**4. `MembersRecursive` asked the wrong attribute.** The filter used
-`member:LDAP_MATCHING_RULE_IN_CHAIN:=<group>`, which finds the groups
-containing an object — the inverse of the question. It returns an empty set
-rather than an error, so it read as a group with no members. Now `memberOf:`.
-
-### Still unexercised### Still unexercised
-
-- **NTLM bind.** Untested here; expected to fail where
-  `LdapEnforceChannelBinding = 2`, and now also suspect for the same reason
-  Kerberos fails.
+- **NTLM.** Expected to fail where `LdapEnforceChannelBinding = 2`; never run.
 - **StartTLS on 389.** Only LDAPS 636 has been exercised.
-- **The replication wait against a second DC.** s-server2 is up and replicating,
-  so this is now runnable.
-- **The full `TestAcc*` suite over the ldap connection.** Only the smoke path
-  above has run.
-
-### LDAPS needs a CA — the lab has one now
-
-A fresh AD DS install has **no certificate**, so LSASS binds TCP 636 and then
-resets every handshake. It reads like a firewall problem and is not. The lab
-therefore installs an Enterprise Root CA:
-
-```sh
-make lab-adcs      # once, on the first DC; the second auto-enrols
-make lab-ca-cert   # cache the CA locally for ca_certificate_file
-```
+- **`ModifyDN` on the wire.** The in-process LDAP server used in CI cannot serve
+  it — gldap rejects application 12 outright — so rename and move are covered
+  above the go-ldap adapter but the request bytes have still never crossed a
+  socket. The lab run above does exercise them for real.
+- **Windows as the client.** The Kerberos path reads a FILE credential cache,
+  which Windows does not have; a Windows operator uses `ldap.simple`.
 
 ### Running it
 
-This workstation does not use the lab's DNS, so `/etc/hosts` carries the four
-FQDNs and `/etc/krb5.conf` names the KDC explicitly (see
-`scripts/lab/README.md`).
+Kerberos is the intended form and needs no credential in configuration:
 
-```sh
-export AD_ACC_CONNECTION=ldap
-export AD_ACC_LDAP_SERVER=s-server1.corp.local
-export AD_ACC_LDAP_CA_FILE="$HOME/.config/ad-lab/corp-lab-ca.pem"
-make lab-acc-only PATTERN=TestAccOU
+```bash
+KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tfacc@CORP.LOCAL
+KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap
 ```
+
+Without a ticket the runner falls back to a simple bind using `svc.username` /
+`svc.password` from `~/ad-lab-credentials.txt`. Narrow the run with
+`make lab-acc-ldap PATTERN='TestAccOU|TestAccGroup|TestAccUser'`.
+
+The DC's certificate is verified against the CA cached by `make lab-ca-cert`
+(`~/.config/ad-lab/corp-lab-ca.pem`). If that file is missing the runner warns
+and falls back to `insecure_skip_verify`, which leaves the verification path
+untested — so refresh it after a lab rebuild rather than living with the
+warning.
+
+Unlike every other runner here this one needs no jump box and ships nothing:
+the provider speaks LDAPS from wherever Terraform runs.

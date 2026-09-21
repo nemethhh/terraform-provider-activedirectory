@@ -50,10 +50,13 @@ LAB_PWSH51           ?= C:\Windows\System32\WindowsPowerShell\v1.0\powershell.ex
 # non-administrator caller without one, so the delegated account this suite runs
 # as gets an opaque pwrshplugin HTTP 500 there. Both lab endpoints grant the
 # group CORP\AD-Terraform-Objects.
-LAB_PSRP_HOST   ?= 192.168.50.31
-LAB_PSRP_SPN    ?= HTTP/s-client1.$(LAB_DOMAIN)
-LAB_PSRP_HOST2  ?= 192.168.50.33
-LAB_PSRP_SPN2   ?= HTTP/s-client2.$(LAB_DOMAIN)
+# Derived from the topology above rather than repeated: LAB_PSRP_HOST2 was left
+# at 192.168.50.33 after the rebuild, where nothing answers, so every failover
+# run silently exercised one host twice.
+LAB_PSRP_HOST   ?= $(LAB_MEMBER_IP)
+LAB_PSRP_SPN    ?= HTTP/$(LAB_MEMBER).$(LAB_DOMAIN)
+LAB_PSRP_HOST2  ?= $(LAB_MEMBER2_IP)
+LAB_PSRP_SPN2   ?= HTTP/$(LAB_MEMBER2).$(LAB_DOMAIN)
 LAB_PSRP_CONFIG ?= AdObjects51
 # The PowerShell 7 WinRM endpoint, the winrm+warm+7 matrix cell's engine.
 LAB_WINRM_CONFIG7 ?= AdObjects7
