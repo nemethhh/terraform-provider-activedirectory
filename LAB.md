@@ -1118,22 +1118,31 @@ connections.
 ### Full acceptance suite over `ldap` — 2026-09-22
 
 ```
-PASS 30    FAIL 7    SKIP 44          (was PASS 5, FAIL 32 before this work)
+PASS 31    FAIL 6    SKIP 44          (was PASS 5, FAIL 32 before this work)
 ```
 
-**Every remaining failure is a capability this backend has not implemented**,
-each reported as `not supported by this endpoint` naming the capability — not a
-crash, and not a wrong result:
+**Every remaining failure is a resource this backend does not implement**, and
+there are only three distinct errors in the whole run, all of the form
+`not supported by this endpoint` naming the capability:
 
 | Failing | Missing | Phase |
 |---|---|---|
 | `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | computer accounts | 4 |
 | `TestAccGMSALifecycle`, `TestAccGMSADataSource` | gMSAs | 4 |
 | `TestAccAccessRuleLifecycle` | `ACL` and `Schema.Resolve` | 5 |
-| `TestAccUserLifecycle` | `can_change_password` (a security descriptor) | 5 |
+
+Everything else passes against a real domain controller: OUs, groups, users,
+group membership and nesting, the replication wait across both DCs, import and
+brownfield config generation, hostile input, and the delegation-boundary denial
+suites.
 
 The 44 skips are unrelated: 41 want `AD_E2E_CONTAINER`, 3 want
 `AD_ACC_LARGE_COUNT`.
+
+Both descriptor-backed properties are implemented —
+`protected_from_accidental_deletion` on an OU and `can_change_password` on a
+user. They write the same attribute, so the tests check that setting one does
+not disturb the other.
 
 ### Four defects the lab found that CI could not
 
