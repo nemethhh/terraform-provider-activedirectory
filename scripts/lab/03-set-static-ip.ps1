@@ -17,7 +17,7 @@
     After confirming the host is still reachable, run 04-confirm-static.ps1 to
     cancel the rollback. Do NOT skip that step: otherwise the host reverts.
 .EXAMPLE
-    ./psrun.sh s-server 03-set-static-ip.ps1 90
+    ./psrun.sh s-server1 03-set-static-ip.ps1 90
 #>
 param([int]$RollbackMinutes = 5, [string]$Dns = '1.1.1.1,1.0.0.1')
 

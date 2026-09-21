@@ -11,7 +11,7 @@
     Run this once per host, authenticating with the local Administrator password.
     No sshd restart is required.
 .EXAMPLE
-    ./psrun.sh s-server 01-install-ssh-key.ps1 60 -- -PublicKey "$(cat ~/.ssh/tf_ad_lab.pub)"
+    ./psrun.sh s-server1 01-install-ssh-key.ps1 60 -- -PublicKey "$(cat ~/.ssh/tf_ad_lab.pub)"
 #>
 param([Parameter(Mandatory)][string]$PublicKey)
 

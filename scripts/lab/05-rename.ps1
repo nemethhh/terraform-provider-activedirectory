@@ -11,7 +11,7 @@
     The reboot is fired from a detached task so the SSH session closing cannot
     abort it.
 .EXAMPLE
-    ./psrun.sh s-server 05-rename.ps1 90 -- -NewName s-server
+    ./psrun.sh s-server1 05-rename.ps1 90 -- -NewName s-server1
 #>
 param([Parameter(Mandatory)][string]$NewName)
 

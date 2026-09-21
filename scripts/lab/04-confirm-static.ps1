@@ -6,7 +6,7 @@
     interface is somehow still on DHCP this leaves the rollback armed rather than
     cancelling it, so a partial failure still self-heals.
 .EXAMPLE
-    ./psrun.sh s-server 04-confirm-static.ps1 60
+    ./psrun.sh s-server1 04-confirm-static.ps1 60
 #>
 $ErrorActionPreference = 'SilentlyContinue'
 $a  = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' } | Select-Object -First 1

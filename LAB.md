@@ -13,9 +13,10 @@ in `~/ad-lab-credentials.txt` (mode 0600).
 
 | Alias | Address | Role |
 |---|---|---|
-| `s-server` (`ad-server`) | 192.168.50.216 | `corp.local` domain controller |
-| `s-server2` (`ad-server2`) | 192.168.50.32 | second domain controller, global catalog |
-| `s-client` (`ad-client`) | 192.168.50.31 | domain-joined member server |
+| `s-server1` (`ad-server1`) | 192.168.50.21 | `corp.local` domain controller, Enterprise Root CA |
+| `s-server2` (`ad-server2`) | 192.168.50.22 | second domain controller, global catalog |
+| `s-client1` (`ad-client1`) | 192.168.50.31 | domain-joined member server, runs the suite |
+| `s-client2` (`ad-client2`) | 192.168.50.32 | second member, winrm failover |
 
 Both run **Windows Server 2025 Standard** with PowerShell 7 and static addresses.
 The forest is `corp.local` / NetBIOS `CORP`, `DC=corp,DC=local`, at Windows2025
@@ -1064,40 +1065,87 @@ Backed by go-adpwsh v0.20.0; provider pin bumped to v0.20.0.
 
 ## Native LDAP backend — validation status
 
-**Not yet validated against `corp.local`.** The `ldap` connection block and the
-`go-adldap` backend behind it are complete and green in CI, but no run against a
-real domain controller has happened. Compiling and passing against a double is
-not validation, so this is recorded as outstanding rather than described as
-working.
+**Rebuilt and validated 2026-09-21** against `corp.local` on the recreated lab
+(s-server1, build 26100 / Windows Server 2025).
 
-What has been exercised:
+### What now works, proven against a real domain controller
 
-| | Covered |
+The backend was exercised end to end over **LDAPS with certificate
+verification on** — the lab CA pinned through `ca_certificate_file`, not
+`insecure_skip_verify`:
+
+| | Result |
 |---|---|
-| `go-adldap` unit + wire tests | dial, TLS with certificate verification, simple bind, error classification, pooling, paged search, OU/group/user CRUD, membership, password set, tombstone probe, replication wait |
-| Conformance suite | `adcorefake`, `go-adpwsh` and `go-adldap` all pass `RunDirectorySuite` |
-| Provider lifecycle suites | OU, group and user run against **both** backends from one set of assertions |
+| TLS 1.3 to the DC, chain verified against `corp-lab-ca` | pass |
+| Simple bind over LDAPS | pass |
+| `objectGUID` decode (mixed-endian) | pass — real AD GUIDs round-trip |
+| OU create, read-back, description | pass |
+| **ModifyDN — rename with `objectGUID` preserved** | pass |
+| Delete with absence verification | pass |
 
-What has **not** been exercised anywhere:
+The ModifyDN result is the one that mattered most: the in-process LDAP server
+used in CI cannot serve application 12 at all, so until this run the rename and
+move path had never put a byte on a socket.
 
-- Kerberos bind against a real KDC. The ccache resolution is unit-tested, but no
-  ticket has been obtained and used.
-- NTLM bind. Expected to fail where `LdapEnforceChannelBinding = 2`; untested.
-- StartTLS on 389. Only LDAPS on 636 has been exercised.
-- `ModifyDN` on the wire. The in-process LDAP server used in CI cannot serve it
-  (the library behind it rejects application 12 outright), so rename and move are
-  covered above the adapter but the request bytes have never crossed a socket.
-- The replication wait against a second DC. `s-server2` exists in this lab and is
-  the obvious place to run it.
+### What is still broken: the Kerberos bind
+
+`ldap.kerberos {}` **does not work against Windows Server 2025**, and the cause
+is upstream, not in this provider:
+
+```
+LDAP Result Code 49 "Invalid Credentials": 80090308: LdapErr: DSID-0C09071F,
+comment: AcceptSecurityContext error, data 57, v65f4
+```
+
+Isolated as follows, so the diagnosis is not a guess:
+
+- MIT `kinit` obtains a TGT, and `kvno ldap/s-server1.corp.local` obtains the
+  service ticket (`kvno = 3`). The KDC, the SPN and the client configuration
+  are all correct.
+- The same failure reproduces with **raw `go-ldap` + `gssapi`**, with none of
+  this provider's code in the path.
+- It is identical on **plain 389 and on LDAPS**, so it is not TLS.
+- It persists with `LdapEnforceChannelBinding = 0`, so it is **not** channel
+  binding — which had been the working assumption, and was wrong.
+
+`data 57` is `ERROR_INVALID_PARAMETER`: AD is refusing the GSSAPI token
+`go-ldap`/`gokrb5` produces. This is exactly the case the `conn` seam in
+go-adldap exists for — swapping the LDAP library is a one-package change.
+
+Until that is done, **use `ldap.simple` over LDAPS**, or one of the PowerShell
+connections.
+
+### Still unexercised
+
+- **NTLM bind.** Untested here; expected to fail where
+  `LdapEnforceChannelBinding = 2`, and now also suspect for the same reason
+  Kerberos fails.
+- **StartTLS on 389.** Only LDAPS 636 has been exercised.
+- **The replication wait against a second DC.** s-server2 is up and replicating,
+  so this is now runnable.
+- **The full `TestAcc*` suite over the ldap connection.** Only the smoke path
+  above has run.
+
+### LDAPS needs a CA — the lab has one now
+
+A fresh AD DS install has **no certificate**, so LSASS binds TCP 636 and then
+resets every handshake. It reads like a firewall problem and is not. The lab
+therefore installs an Enterprise Root CA:
+
+```sh
+make lab-adcs      # once, on the first DC; the second auto-enrols
+make lab-ca-cert   # cache the CA locally for ca_certificate_file
+```
 
 ### Running it
 
+This workstation does not use the lab's DNS, so `/etc/hosts` carries the four
+FQDNs and `/etc/krb5.conf` names the KDC explicitly (see
+`scripts/lab/README.md`).
+
 ```sh
 export AD_ACC_CONNECTION=ldap
-export AD_ACC_LDAP_SERVER=ad-server.corp.local
-export AD_ACC_LDAP_CA_FILE=/path/to/corp-root.pem   # or AD_ACC_LDAP_INSECURE=true
-KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit <user>@CORP.LOCAL
-make lab-acc-only PATTERN='TestAccOU|TestAccGroup|TestAccUser'
+export AD_ACC_LDAP_SERVER=s-server1.corp.local
+export AD_ACC_LDAP_CA_FILE="$HOME/.config/ad-lab/corp-lab-ca.pem"
+make lab-acc-only PATTERN=TestAccOU
 ```
-
-Record the result here — which DC, what passed, what did not.

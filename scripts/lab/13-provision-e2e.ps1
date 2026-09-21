@@ -18,7 +18,7 @@
     sub-OU), so no principal can delete or re-target its own auth account, and
     the tfacc- sweeper never touches them.
 .EXAMPLE
-    ./psrun.sh s-server 13-provision-e2e.ps1 300 -- -SvcPassword 'CHANGEME'
+    ./psrun.sh s-server1 13-provision-e2e.ps1 300 -- -SvcPassword 'CHANGEME'
 #>
 param(
     [Parameter(Mandatory)][string]$SvcPassword,

@@ -8,7 +8,7 @@
     logs to C:\Windows\Temp\labsetup.log. Poll that log rather than waiting on the
     SSH call:
 
-        ssh s-server 'powershell -NoProfile -Command "Get-Content C:\Windows\Temp\labsetup.log -Tail 5"'
+        ssh s-server1 'powershell -NoProfile -Command "Get-Content C:\Windows\Temp\labsetup.log -Tail 5"'
 
     Preconditions: the host is renamed (05) and on a static address (03/04).
     Expect the host to be unreachable for a long stretch afterwards - the first
@@ -16,7 +16,7 @@
     pending updates. ADWS on TCP 9389 is what the provider needs, so check that,
     not just SSH.
 .EXAMPLE
-    ./psrun.sh s-server 06-promote-dc.ps1 120 -- -DsrmPassword 'CHANGEME' -DomainName corp.local -NetbiosName CORP
+    ./psrun.sh s-server1 06-promote-dc.ps1 120 -- -DsrmPassword 'CHANGEME' -DomainName corp.local -NetbiosName CORP
 #>
 param(
     [Parameter(Mandatory)][string]$DsrmPassword,

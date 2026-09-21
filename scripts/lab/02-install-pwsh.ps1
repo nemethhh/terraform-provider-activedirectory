@@ -8,7 +8,7 @@
     Run this while DNS still points at a public resolver — after the host joins
     the domain its DNS is the DC, which may not forward outbound.
 .EXAMPLE
-    ./psrun.sh s-client 02-install-pwsh.ps1 600
+    ./psrun.sh s-client1 02-install-pwsh.ps1 600
 #>
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

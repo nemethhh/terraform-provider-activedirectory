@@ -26,7 +26,7 @@
     Git is deliberately not installed. The source arrives by scp, which keeps
     every artefact on this host traceable to a published checksum.
 .EXAMPLE
-    ./psrun.sh s-client 10-install-dev-tools.ps1 1200
+    ./psrun.sh s-client1 10-install-dev-tools.ps1 1200
 #>
 param(
     [string]$GoVersion        = '1.27.0',

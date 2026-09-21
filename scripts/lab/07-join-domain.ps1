@@ -12,7 +12,7 @@
 
     Logs to C:\Windows\Temp\join.log and reboots on success.
 .EXAMPLE
-    ./psrun.sh s-client 07-join-domain.ps1 600 -- -DcAddress 192.168.50.216 -DomainName corp.local -JoinUser 'CORP\Administrator' -JoinPassword 'CHANGEME'
+    ./psrun.sh s-client1 07-join-domain.ps1 600 -- -DcAddress 192.168.50.21 -DomainName corp.local -JoinUser 'CORP\Administrator' -JoinPassword 'CHANGEME'
 #>
 param(
     [Parameter(Mandatory)][string]$DcAddress,

@@ -8,7 +8,7 @@
 #   usage: psrun.sh <ssh-alias> <script.ps1> [timeout-seconds] [-- <arg>...]
 #
 # Anything after `--` is appended to the script invocation as PowerShell
-# arguments, e.g.  psrun.sh s-server 04-promote-dc.ps1 900 -- -DsrmPassword 'x'
+# arguments, e.g.  psrun.sh s-server1 04-promote-dc.ps1 900 -- -DsrmPassword 'x'
 set -euo pipefail
 
 host=${1:?ssh alias required}
