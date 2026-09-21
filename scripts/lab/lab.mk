@@ -230,18 +230,33 @@ lab-verify-repl:
 
 # git archive rather than the working tree: what runs on the lab is exactly what
 # is committed, and no gitignored clone or build artefact rides along.
+# The provider's go.mod replaces three modules with sibling directories, so
+# shipping the provider alone leaves every one of them unresolvable on the
+# member and `go test` dies with "replacement directory ../go-adcore does not
+# exist" before a single test runs. They travel together, and the layout under
+# C:\src mirrors this working tree so the ../ paths resolve unchanged.
+LAB_SIBLING_MODULES ?= go-adcore go-adldap go-adpwsh
+
 lab-ship:
-	git archive --format=tar --prefix=provider/ HEAD | gzip -9 > /tmp/provider-src.tgz
-	scp -q /tmp/provider-src.tgz $(LAB_MEMBER):provider-src.tgz
-	@printf '%s\n' \
+	@rm -f /tmp/lab-ship-*.tgz
+	git archive --format=tar --prefix=provider/ HEAD | gzip -9 > /tmp/lab-ship-provider.tgz
+	@for m in $(LAB_SIBLING_MODULES); do \
+	    test -d ../$$m || { echo "sibling module ../$$m is missing"; exit 1; }; \
+	    git -C ../$$m archive --format=tar --prefix=$$m/ HEAD | gzip -9 > /tmp/lab-ship-$$m.tgz; \
+	  done
+	scp -q /tmp/lab-ship-*.tgz $(LAB_MEMBER):
+	@{ printf '%s\n' \
 	  '$$ErrorActionPreference = "Stop"' \
-	  'New-Item -ItemType Directory -Force -Path C:\src | Out-Null' \
-	  'if (Test-Path C:\src\provider) { Remove-Item C:\src\provider -Recurse -Force }' \
-	  'tar -xzf "$$env:USERPROFILE\provider-src.tgz" -C C:\src' \
-	  'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)' \
-	  > /tmp/lab-unpack.ps1
+	  'New-Item -ItemType Directory -Force -Path C:\src | Out-Null'; \
+	  for m in provider $(LAB_SIBLING_MODULES); do \
+	    printf 'if (Test-Path C:\src\%s) { Remove-Item C:\src\%s -Recurse -Force }\n' $$m $$m; \
+	    printf 'tar -xzf "$$env:USERPROFILE\lab-ship-%s.tgz" -C C:\src\n' $$m; \
+	  done; \
+	  printf '%s\n' 'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)'; \
+	} > /tmp/lab-unpack.ps1
 	@$(PSRUN) $(LAB_MEMBER) /tmp/lab-unpack.ps1 160 2>&1 | grep -vE 'WARNING|vulnerable|openssh.com'
-	@rm -f /tmp/lab-unpack.ps1 /tmp/provider-src.tgz
+	@rm -f /tmp/lab-unpack.ps1 /tmp/lab-ship-*.tgz
+
 
 # The suite runner lives in run-suite.sh: generating PowerShell through make's
 # quoting rules costs more than it saves, and that script is what a person reads

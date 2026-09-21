@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
 	adpwsh "github.com/nemethhh/go-adpwsh"
-	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
+	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
 )
 
 // The e2e layer's environment. It is a SEPARATELY provisioned environment from
@@ -88,7 +88,15 @@ func e2eSuiteEnv(user, pass, container string) suiteEnv {
 // the whole run free of admin credentials.
 func e2eClient(t *testing.T, user, pass string) *adpwsh.Client {
 	t.Helper()
-	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath)})
+	// Warm, not cold, and for a reason the ACL suites found: cold passes each
+	// script to `pwsh -EncodedCommand`, and base64 inflates it by a third, so a
+	// revoke carrying every explicit ACE on an object overruns the Windows
+	// CreateProcess command-line limit and dies with "The filename or extension
+	// is too long" — a message that names neither PowerShell nor the size. Warm
+	// feeds a persistent runspace and has no such ceiling. It is also what the
+	// provider under test uses by default, so the out-of-band helper now
+	// exercises the same path rather than a weaker one.
+	tr, err := adlocalwarm.New(adlocalwarm.Config{PwshPath: os.Getenv(envPwshPath)})
 	if err != nil {
 		t.Fatalf("e2e: cannot start PowerShell: %v", err)
 	}
