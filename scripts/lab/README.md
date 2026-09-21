@@ -83,7 +83,13 @@ LAB_USER='CORP\Administrator' LAB_ADMIN_PW='...' \
     python3 winrun.py 192.168.50.31 09-open-ssh-firewall.ps1
 ```
 
-`winrun.py` needs `pywinrm` (`pip install pywinrm`).
+`winrun.py` needs `pywinrm`. A PEP 668 distribution (Arch, Fedora, Debian 12+)
+refuses to install it into the system interpreter, so use a venv — `lab.mk`
+prefers it automatically and falls back to `python3`:
+
+```bash
+python3 -m venv ~/.venvs/ad-lab && ~/.venvs/ad-lab/bin/pip install pywinrm
+```
 
 ## Clone the image, sysprep the clone
 
@@ -105,7 +111,7 @@ The provider needs **ADWS on TCP 9389**, not merely SSH. A DC that boots without
 it is a silent failure, so check the port rather than assuming:
 
 ```bash
-timeout 5 bash -c '</dev/tcp/192.168.50.216/9389' && echo ADWS_OK
+timeout 5 bash -c '</dev/tcp/192.168.50.21/9389' && echo ADWS_OK
 ```
 
 Then export what the suite reads (see the acceptance section of `../../README.md`)
@@ -115,7 +121,7 @@ and run it:
 export TF_ACC=1 \
        AD_ACC_CONTAINER='OU=tfacc,DC=corp,DC=local' \
        AD_ACC_DENIED_CONTAINER='OU=tfacc-denied,DC=corp,DC=local' \
-       AD_ACC_SERVER='s-server.corp.local'
+       AD_ACC_SERVER='s-server1.corp.local'
 make testacc
 ```
 
@@ -127,3 +133,38 @@ until a second DC exists.
 All eight are idempotent: they detect the already-done state and say so rather
 than failing. After a crashed acceptance run, `make sweep` clears leftover
 `tfacc-` objects; the containers and `svc_tfacc` are fixtures and survive.
+
+## LDAPS, and why the lab needs a CA
+
+A freshly promoted DC has **no certificate at all**, so it binds TCP 636 and
+then resets every TLS handshake. `nc -z` says the port is open and `openssl
+s_client` reports "no peer certificate available"; it reads like a firewall
+problem and is not.
+
+The provider's `ldap` connection requires LDAPS, so the lab installs an
+Enterprise Root CA on the first DC:
+
+```bash
+make lab-adcs      # role + CA + certutil -pulse; the second DC auto-enrols
+make lab-ca-cert   # cache the CA PEM at ~/.config/ad-lab/corp-lab-ca.pem
+```
+
+An Enterprise CA is used rather than a hand-rolled self-signed certificate
+because it is what a real domain has, the second DC needs no extra step, and
+the CA can be pinned with `ca_certificate_file` — which exercises certificate
+verification instead of skipping it.
+
+## Reaching the lab from a workstation that does not use its DNS
+
+`kinit` needs to find the KDC, and without the lab's DNS the
+`_kerberos._tcp.CORP.LOCAL` SRV records are invisible. Two additive edits:
+
+- `/etc/hosts` — the four lab FQDNs.
+- `/etc/krb5.conf` — a `CORP.LOCAL` realm with an explicit `kdc =`, plus a
+  `[domain_realm]` mapping. Set `rdns = false` and
+  `dns_canonicalize_hostname = false`: AD issues service tickets against the SPN
+  as written, and a reverse lookup that rewrites the name produces a
+  `KDC_ERR_S_PRINCIPAL_UNKNOWN` that reads like a broken account.
+
+Neither is needed on the domain-joined members, which already resolve through
+the DC.

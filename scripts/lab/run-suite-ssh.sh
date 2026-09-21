@@ -33,7 +33,7 @@ ssh_user=${LAB_SSH_USER:-Administrator}
 ssh_key=${LAB_SSH_KEY:-$HOME/.ssh/tf_ad_lab}
 mode=${LAB_MODE:-warm}
 pwsh=${LAB_PWSH:-'C:\Program Files\PowerShell\7\pwsh.exe'}
-dc=${LAB_DC_FQDN:-s-server.corp.local}
+dc=${LAB_DC_FQDN:-s-server1.corp.local}
 dc2=${LAB_DC2_FQDN:-s-server2.corp.local}
 container=${LAB_CONTAINER:-OU=tfacc,DC=corp,DC=local}
 denied=${LAB_DENIED_CONTAINER:-OU=tfacc-denied,DC=corp,DC=local}

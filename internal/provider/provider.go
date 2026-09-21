@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -22,6 +23,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
+	"github.com/nemethhh/go-adcore"
+	adldap "github.com/nemethhh/go-adldap"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
@@ -37,6 +40,10 @@ type adProvider struct {
 	// It is the test-only hook that lets the lifecycle tests drive a full
 	// resource cycle with no jump box.
 	transport adpwsh.Transport
+
+	// directory, when non-nil, replaces connection selection entirely. It is
+	// the hook that lets one lifecycle suite run against either backend.
+	directory *adcore.Directory
 }
 
 // New returns the provider factory the plugin server serves.
@@ -48,6 +55,13 @@ func New(version string) func() provider.Provider {
 // instead of dialling SSH. Test-only.
 func NewWithTransport(tr adpwsh.Transport) provider.Provider {
 	return &adProvider{version: "test", transport: tr}
+}
+
+// NewWithDirectory substitutes a directory and skips connection selection, so
+// a suite can drive a full resource cycle against any backend — or against the
+// in-memory fake, with no jump box and no domain. Test-only.
+func NewWithDirectory(dir adcore.Directory) provider.Provider {
+	return &adProvider{version: "test", directory: &dir}
 }
 
 func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -262,6 +276,94 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					},
 				},
 			},
+			"ldap": schema.SingleNestedBlock{
+				MarkdownDescription: "Connect straight to a domain controller over LDAPS, with no " +
+					"PowerShell, no RSAT and no Windows host anywhere — the provider binary and TCP 636 " +
+					"are the whole runtime requirement.\n\n" +
+					"Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no " +
+					"attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform " +
+					"keeps every credential out of configuration.\n\n" +
+					"Mutually exclusive with `local`, `ssh` and `winrm`.",
+				Attributes: map[string]schema.Attribute{
+					"server": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "The domain controller to connect to, as an FQDN. Pinned for " +
+							"the provider's lifetime: there is no discovery and no failover, because a write " +
+							"that lands on one DC and a read-back that hits another reports \"not found\". " +
+							"Falls back to `AD_LDAP_SERVER`."},
+					"port": schema.Int64Attribute{Optional: true,
+						MarkdownDescription: "TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`."},
+					"tls": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "`ldaps` (default, implicit TLS on 636) or `starttls` (upgrade " +
+							"on 389). Plain LDAP is deliberately not offered: a simple bind over it sends the " +
+							"password in clear text, and a domain with LDAP signing required refuses it anyway. " +
+							"Falls back to `AD_LDAP_TLS`."},
+					"ca_certificate_file": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "PEM file holding the CA that signed the domain controller's " +
+							"certificate. Naming one replaces the system trust store rather than adding to it. " +
+							"Falls back to `AD_LDAP_CA_CERTIFICATE_FILE`."},
+					"insecure_skip_verify": schema.BoolAttribute{Optional: true,
+						MarkdownDescription: "Disable certificate verification. For a lab with a self-signed " +
+							"DC certificate only — it makes the connection trivially interceptable."},
+					"max_concurrency": schema.Int64Attribute{Optional: true,
+						MarkdownDescription: "Maximum pooled LDAP connections. Defaults to `4`."},
+					"timeout": schema.StringAttribute{Optional: true,
+						MarkdownDescription: "Per-operation deadline, as a Go duration (`\"60s\"`)."},
+				},
+				Blocks: map[string]schema.Block{
+					"simple": schema.SingleNestedBlock{
+						MarkdownDescription: "Username and password bind. Safe only because this connection " +
+							"is always TLS-protected.",
+						Attributes: map[string]schema.Attribute{
+							"username": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "A UPN (`svc_tf@corp.local`), a DN, or `DOMAIN\\user`. " +
+									"Falls back to `AD_LDAP_USERNAME`."},
+							"password": schema.StringAttribute{Optional: true, Sensitive: true,
+								MarkdownDescription: "Falls back to `AD_LDAP_PASSWORD`."},
+						},
+					},
+					"kerberos": schema.SingleNestedBlock{
+						MarkdownDescription: "Bind with a Kerberos ticket. Empty — `kerberos {}` — is the " +
+							"intended form: the operator runs `kinit` in their own shell and the ticket is " +
+							"read from `KRB5CCNAME`, so no credential reaches Terraform configuration.\n\n" +
+							"Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the defaults " +
+							"on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the " +
+							"ticket into a file:\n\n" +
+							"```sh\nKRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL\n```\n\n" +
+							"This is the Linux and macOS path. Windows keeps credentials in the LSA with no " +
+							"readable cache, so a Windows operator uses `simple` or `ntlm`.",
+						Attributes: map[string]schema.Attribute{
+							"ccache_path": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Credential cache file. Falls back to `KRB5CCNAME`."},
+							"keytab": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Keytab for unattended authentication, for CI with no " +
+									"`kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`."},
+							"username": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Principal name, with `keytab`. Falls back to `AD_LDAP_USERNAME`."},
+							"realm": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Kerberos realm, with `keytab`. Falls back to `AD_LDAP_REALM`."},
+							"krb5_conf_path": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`."},
+							"spn": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`."},
+						},
+					},
+					"ntlm": schema.SingleNestedBlock{
+						MarkdownDescription: "Bind with NTLM, for a caller that cannot obtain a Kerberos " +
+							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.\n\n" +
+							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
+							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS. Use " +
+							"`simple` over LDAPS there.",
+						Attributes: map[string]schema.Attribute{
+							"domain": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`."},
+							"username": schema.StringAttribute{Optional: true,
+								MarkdownDescription: "Falls back to `AD_LDAP_USERNAME`."},
+							"password": schema.StringAttribute{Optional: true, Sensitive: true,
+								MarkdownDescription: "Falls back to `AD_LDAP_PASSWORD`."},
+						},
+					},
+				},
+			},
 			"domain": schema.SingleNestedBlock{
 				MarkdownDescription: "Domain targeting.",
 				Attributes: map[string]schema.Attribute{
@@ -316,6 +418,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 	// payloads; this covers everything the provider itself writes.
 	ctx = tflog.MaskFieldValuesWithFieldKeys(ctx, "password", "private_key", "credential", "AccountPassword")
 
+	// A substituted directory is already connected, so connection selection,
+	// domain targeting and replication have nothing to resolve.
+	if p.directory != nil {
+		resp.ResourceData = *p.directory
+		resp.DataSourceData = *p.directory
+		return
+	}
+
 	server, credential, diags := resolveDomain(cfg)
 	resp.Diagnostics.Append(diags...)
 	replication, diags := resolveReplication(ctx, cfg)
@@ -326,9 +436,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 
 	transport := p.transport
 	if transport == nil {
-		kind, diags := chooseTransport(cfg)
+		kind, diags := chooseConnection(cfg)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		if kind == connectionLDAP {
+			p.configureLDAP(ctx, cfg, credential, replication, resp)
 			return
 		}
 
@@ -456,13 +571,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 				"that TCP 9389 is open from it to the domain controller.\n\n"+err.Error())
 		return
 	}
+	dir := client.Directory()
 	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
-		"server":                 client.Server(),
-		"default_naming_context": client.DefaultNamingContext(),
+		"server":                 dir.Server,
+		"default_naming_context": dir.DNC,
 	})
 
-	resp.ResourceData = client
-	resp.DataSourceData = client
+	resp.ResourceData = dir
+	resp.DataSourceData = dir
 }
 
 func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
@@ -495,17 +611,23 @@ func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSour
 }
 
 // clientFromProviderData is the boilerplate every resource's Configure runs.
-func clientFromProviderData(data any, diags *diag.Diagnostics) *adpwsh.Client {
+//
+// It hands back an adcore.Directory rather than a concrete client so that a
+// resource cannot tell which backend configured it — which is what lets one
+// set of resources serve both. The zero value is returned before the provider
+// is configured; a resource checks for that with client.OU == nil, since a
+// struct is never nil.
+func clientFromProviderData(data any, diags *diag.Diagnostics) adcore.Directory {
 	if data == nil {
-		return nil // Configure runs before the provider is configured; not an error.
+		return adcore.Directory{} // Configure runs before the provider is configured; not an error.
 	}
-	client, ok := data.(*adpwsh.Client)
+	dir, ok := data.(adcore.Directory)
 	if !ok {
 		diags.AddError("Unexpected provider data",
-			fmt.Sprintf("Expected *adpwsh.Client, got %T. This is a bug in the provider.", data))
-		return nil
+			fmt.Sprintf("Expected adcore.Directory, got %T. This is a bug in the provider.", data))
+		return adcore.Directory{}
 	}
-	return client
+	return dir
 }
 
 // transportErrDetail frames a transport construction failure. For warm mode it
@@ -553,4 +675,63 @@ func withTimeout(ctx context.Context, v func(context.Context, time.Duration) (ti
 	}
 	c, cancel := context.WithTimeout(ctx, d)
 	return c, cancel, diags
+}
+
+// configureLDAP builds the native-LDAP directory. It shares nothing with the
+// PowerShell path: no transport, no execution mode, and no credential from the
+// `domain` block — the `ldap` block carries its own authentication.
+func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, credential *adpwsh.Credential, replication adpwsh.ReplicationConfig, resp *provider.ConfigureResponse) {
+	if credential != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("domain").AtName("credential"),
+			"domain.credential does not apply to the ldap connection",
+			"`domain.credential` is the identity the PowerShell cmdlets run as. The `ldap` "+
+				"block authenticates itself — with `simple`, `kerberos` or `ntlm` — so a "+
+				"credential here would be silently ignored.\n\n"+
+				"Move the credential into `ldap.simple`, or remove it and use `ldap.kerberos {}`.")
+		return
+	}
+
+	lcfg := resolveLDAP(*cfg.LDAP, os.Getenv, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	lcfg.Log = tflogLogger{}
+	lcfg.Replication = adldap.ReplicationConfig{
+		Wait:         replication.Wait,
+		Targets:      replication.Targets,
+		ForceSync:    replication.ForceSync,
+		Timeout:      replication.Timeout,
+		PollInterval: replication.PollInterval,
+	}
+
+	client, err := adldap.New(ctx, lcfg)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("ldap"),
+			"Cannot configure the Active Directory client",
+			"The provider could not connect to the domain controller over LDAP. "+
+				"Check that TCP "+ldapPortHint(lcfg)+" is open to it, that its certificate is "+
+				"trusted (see `ca_certificate_file`), and that the credential or ticket is "+
+				"valid.\n\n"+err.Error())
+		return
+	}
+
+	dir := client.Directory()
+	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
+		"connection":             "ldap",
+		"server":                 dir.Server,
+		"default_naming_context": dir.DNC,
+	})
+
+	resp.ResourceData = dir
+	resp.DataSourceData = dir
+}
+
+// ldapPortHint names the port actually in use, so the diagnostic does not send
+// an operator to check 636 when they configured StartTLS on 389.
+func ldapPortHint(cfg adldap.Config) string {
+	port := cfg.Port
+	if port == 0 {
+		port = adldap.DefaultPort(cfg.TLS)
+	}
+	return strconv.Itoa(port)
 }

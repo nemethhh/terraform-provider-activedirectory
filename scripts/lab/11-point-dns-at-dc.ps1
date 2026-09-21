@@ -20,7 +20,7 @@
     Address only, never a name: this runs before the host can resolve the DC's
     name, which is the entire problem it exists to fix.
 .EXAMPLE
-    ./psrun.sh s-server2 11-point-dns-at-dc.ps1 90 -- -DcAddress 192.168.50.216
+    ./psrun.sh s-server2 11-point-dns-at-dc.ps1 90 -- -DcAddress 192.168.50.21
 #>
 param(
     [Parameter(Mandatory)][string]$DcAddress,

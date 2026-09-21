@@ -7,12 +7,13 @@ import (
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const ousDataSourceType = "activedirectory_ous"
 
-type ousDataSource struct{ client *adpwsh.Client }
+type ousDataSource struct{ client adcore.Directory }
 
 func newOUsDataSource() datasource.DataSource { return &ousDataSource{} }
 

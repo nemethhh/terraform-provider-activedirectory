@@ -20,10 +20,10 @@ creds=${LAB_CREDS:-$HOME/ad-lab-credentials.txt}
 [[ -r $creds ]] || { echo "cannot read $creds" >&2; exit 1; }
 cred() { awk -F'=' "/^$1[ \t]*=/{sub(/^[^=]*=[ \t]*/,\"\");print}" "$creds"; }
 
-member=${LAB_MEMBER:-s-client}
+member=${LAB_MEMBER:-s-client1}
 container=${LAB_CONTAINER:-OU=tfacc,DC=corp,DC=local}
 denied=${LAB_DENIED_CONTAINER:-OU=tfacc-denied,DC=corp,DC=local}
-dc=${LAB_DC_FQDN:-s-server.corp.local}
+dc=${LAB_DC_FQDN:-s-server1.corp.local}
 dc2=${LAB_DC2_FQDN:-s-server2.corp.local}
 pwsh_path=${LAB_PWSH:-'C:\Program Files\PowerShell\7\pwsh.exe'}
 

@@ -9,12 +9,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const usersDataSourceType = "activedirectory_users"
 
-type usersDataSource struct{ client *adpwsh.Client }
+type usersDataSource struct{ client adcore.Directory }
 
 func newUsersDataSource() datasource.DataSource { return &usersDataSource{} }
 

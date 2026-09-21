@@ -34,7 +34,7 @@
     Neither container is created or destroyed by the suite; both are treated as
     pre-existing.
 .EXAMPLE
-    ./psrun.sh s-server 08-provision-acceptance.ps1 180 -- -SvcPassword 'CHANGEME'
+    ./psrun.sh s-server1 08-provision-acceptance.ps1 180 -- -SvcPassword 'CHANGEME'
 #>
 param(
     [Parameter(Mandatory)][string]$SvcPassword,

@@ -7,12 +7,13 @@ import (
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const groupMembersDataSourceType = "activedirectory_group_members"
 
-type groupMembersDataSource struct{ client *adpwsh.Client }
+type groupMembersDataSource struct{ client adcore.Directory }
 
 func newGroupMembersDataSource() datasource.DataSource { return &groupMembersDataSource{} }
 

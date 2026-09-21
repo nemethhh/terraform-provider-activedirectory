@@ -75,14 +75,14 @@ this README covers the shape and the conventions.
 |---|---|
 | **Terraform** | 1.11 or later — the write-only `password` attribute requires it |
 | **PowerShell host** | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 |
-| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm` |
+| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm`. The `ldap` connection needs none of this: TCP 636 to a domain controller and nothing else |
 
 Every setting can also come from the environment (`AD_PWSH_PATH`, `AD_SSH_*`,
 `AD_WINRM_*`, …), and configuration always wins over the environment.
 
 ## Connecting to Active Directory
 
-Exactly **one** of `local`, `ssh` or `winrm` is required — there is no implicit
+Exactly **one** of `local`, `ssh`, `winrm` or `ldap` is required — there is no implicit
 default, because guessing would let a mistyped block run against the wrong
 identity.
 
@@ -91,6 +91,14 @@ identity.
 | `local` | a domain-joined Windows member server | the token of whoever launched Terraform | Terraform already runs on a domain-joined Windows host |
 | `ssh` | anywhere; reaches a Windows jump box over SSH | the SSH session's identity, or `domain.credential` | you want a Windows jump box and Terraform runs elsewhere |
 | `winrm` | anywhere, including Linux; reaches a Windows host over WinRM | an ambient Kerberos ticket, or `winrm.user` / `winrm.password` | you drive AD from Linux/CI, or want no jump box at all |
+| `ldap` | anywhere; speaks LDAPS to a domain controller directly, with **no PowerShell, no RSAT and no Windows host** | a ticket from `KRB5CCNAME` (run `kinit`), or `ldap.simple` / `ldap.ntlm` | you want the provider binary and TCP 636 to be the whole runtime requirement |
+
+The `ldap` connection is not a transport: the other three differ only in where
+`pwsh` runs, and this one runs none, so the `mode` (warm/cold) axis and the
+`dialect` setting do not apply to it. It currently manages **organizational
+units, groups and users**; gMSAs, computers and everything needing a security
+descriptor (ACLs, `protected_from_accidental_deletion`, `can_change_password`,
+delegation) still require one of the PowerShell connections.
 
 A few things worth knowing:
 

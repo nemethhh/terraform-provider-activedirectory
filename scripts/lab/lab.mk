@@ -14,13 +14,27 @@
 LAB_CREDS   ?= $(HOME)/ad-lab-credentials.txt
 LAB_DIR     := scripts/lab
 PSRUN       := bash $(LAB_DIR)/psrun.sh
-WINRUN      := python3 $(LAB_DIR)/winrun.py
 
-LAB_DC      ?= s-server
+# winrun.py needs pywinrm, which a PEP 668 distribution (Arch, Fedora, Debian
+# 12+) refuses to install into the system interpreter. Prefer a venv if one is
+# there, fall back to python3 otherwise, so neither kind of host needs a special
+# case:
+#
+#   python3 -m venv ~/.venvs/ad-lab && ~/.venvs/ad-lab/bin/pip install pywinrm
+LAB_VENV_PY := $(wildcard $(HOME)/.venvs/ad-lab/bin/python)
+WINRUN      := $(or $(LAB_VENV_PY),python3) $(LAB_DIR)/winrun.py
+
+# Rebuilt 2026-09-21 on new addresses. The whole lab moved: s-server/.216 and
+# s-client/.31 are gone, and .32 — which used to be the second DC — is now the
+# second member. Anything still naming an old address is stale, not a variant.
+LAB_DC      ?= s-server1
 LAB_DC2     ?= s-server2
-LAB_MEMBER  ?= s-client
-LAB_DC_IP   ?= 192.168.50.216
-LAB_DC2_IP  ?= 192.168.50.32
+LAB_MEMBER  ?= s-client1
+LAB_MEMBER2 ?= s-client2
+LAB_DC_IP   ?= 192.168.50.21
+LAB_DC2_IP  ?= 192.168.50.22
+LAB_MEMBER_IP  ?= 192.168.50.31
+LAB_MEMBER2_IP ?= 192.168.50.32
 LAB_DOMAIN  ?= corp.local
 
 LAB_CONTAINER        ?= OU=tfacc,DC=corp,DC=local
@@ -36,16 +50,25 @@ LAB_PWSH51           ?= C:\Windows\System32\WindowsPowerShell\v1.0\powershell.ex
 # non-administrator caller without one, so the delegated account this suite runs
 # as gets an opaque pwrshplugin HTTP 500 there. Both lab endpoints grant the
 # group CORP\AD-Terraform-Objects.
-LAB_PSRP_HOST   ?= 192.168.50.31
-LAB_PSRP_SPN    ?= HTTP/s-client.corp.local
-LAB_PSRP_HOST2  ?= 192.168.50.33
-LAB_PSRP_SPN2   ?= HTTP/s-client2.corp.local
+# Derived from the topology above rather than repeated: LAB_PSRP_HOST2 was left
+# at 192.168.50.33 after the rebuild, where nothing answers, so every failover
+# run silently exercised one host twice.
+LAB_PSRP_HOST   ?= $(LAB_MEMBER_IP)
+LAB_PSRP_SPN    ?= HTTP/$(LAB_MEMBER).$(LAB_DOMAIN)
+LAB_PSRP_HOST2  ?= $(LAB_MEMBER2_IP)
+LAB_PSRP_SPN2   ?= HTTP/$(LAB_MEMBER2).$(LAB_DOMAIN)
 LAB_PSRP_CONFIG ?= AdObjects51
 # The PowerShell 7 WinRM endpoint, the winrm+warm+7 matrix cell's engine.
 LAB_WINRM_CONFIG7 ?= AdObjects7
 LAB_REALM       ?= CORP.LOCAL
-LAB_DC_FQDN     ?= s-server.corp.local
-LAB_DC2_FQDN    ?= s-server2.corp.local
+LAB_DC_FQDN     ?= s-server1.$(LAB_DOMAIN)
+LAB_DC2_FQDN    ?= s-server2.$(LAB_DOMAIN)
+
+# The native-LDAP connection. It needs no jump box and no PowerShell: the suite
+# runs wherever Terraform does and speaks LDAPS to the DC directly.
+LAB_LDAP_SERVER ?= $(LAB_DC_FQDN)
+# Where the lab CA certificate is cached locally, for ca_certificate_file.
+LAB_CA_FILE     ?= $(HOME)/.config/ad-lab/corp-lab-ca.pem
 
 # run-suite-psrp.sh carries its own identical defaults and reads these six from
 # its environment, not from make — a plain `?=` assignment is invisible to a
@@ -53,6 +76,10 @@ LAB_DC2_FQDN    ?= s-server2.corp.local
 # only command-line and environment overrides (`make lab-acc-psrp LAB_PSRP_HOST=...`
 # or an exported shell variable) reach the script today.
 export LAB_PSRP_HOST LAB_PSRP_SPN LAB_PSRP_HOST2 LAB_PSRP_SPN2 LAB_PSRP_CONFIG LAB_REALM LAB_DC_FQDN LAB_DC2_FQDN
+# LAB_MEMBER and LAB_DC_IP were missing from this list, so run-suite.sh and
+# run-suite-psrp.sh fell through to their own defaults — which is why editing
+# the topology above had no effect on them.
+export LAB_MEMBER LAB_MEMBER2 LAB_DC LAB_DC2 LAB_DC_IP LAB_DC2_IP LAB_DOMAIN LAB_LDAP_SERVER LAB_CA_FILE
 
 # One awk per lookup, evaluated only when a recipe runs, so no secret is read
 # into make's memory for targets that do not need one.
@@ -60,6 +87,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
 
 .PHONY: lab-help lab-status lab-ssh-key lab-pwsh lab-rename lab-dns lab-dev-tools \
         lab-promote-dc2 lab-open-ssh lab-acceptance-fixtures lab-grant-deleg lab-verify-repl \
+        lab-adcs lab-ca-cert lab-acc-ldap \
         lab-ship lab-acc lab-acc-repl lab-acc-only lab-acc-psrp lab-acc-psrp-only lab-sweep \
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
@@ -89,6 +117,9 @@ lab-help:
 	@echo '    lab-acc-only PATTERN=<re>  run one suite, or any -run pattern'
 	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
 	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
+	@echo '    lab-acc-ldap               run the suite over LDAPS, no PowerShell (PATTERN=<re>)'
+	@echo '    lab-adcs                   install the Enterprise CA that LDAPS needs (once)'
+	@echo '    lab-ca-cert                cache the CA locally for ca_certificate_file'
 	@echo '    lab-sweep                  delete tfacc- leftovers'
 	@echo ''
 	@echo '  Transport x mode x pwsh matrix (PATTERN=<re> MINUTES=<n> override; full TestAcc by default):'
@@ -141,6 +172,18 @@ lab-open-ssh:
 	@test -n "$${LAB_ADMIN_PW}" || { echo 'LAB_ADMIN_PW must be set in the environment'; exit 1; }
 	LAB_USER="$${LAB_USER:-CORP\\Administrator}" $(WINRUN) $(HOST) $(LAB_DIR)/09-open-ssh-firewall.ps1
 
+# A fresh AD DS install has no certificate, so LDAPS resets every handshake and
+# the provider's ldap connection cannot be used at all. Run once on the first DC;
+# the second auto-enrols from the same CA.
+lab-adcs:
+	$(PSRUN) $(or $(HOST),$(LAB_DC)) $(LAB_DIR)/14-install-adcs.ps1 900
+
+# Fetch the CA certificate so a client can verify LDAPS instead of skipping it.
+lab-ca-cert:
+	@mkdir -p $(dir $(LAB_CA_FILE))
+	@$(PSRUN) $(or $(HOST),$(LAB_DC)) $(LAB_DIR)/print-ca-cert.ps1 120 2>/dev/null | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' | tr -d '\r' > $(LAB_CA_FILE)
+	@test -s $(LAB_CA_FILE) && openssl x509 -in $(LAB_CA_FILE) -noout -subject && echo "wrote $(LAB_CA_FILE)" || { echo 'no certificate returned'; exit 1; }
+
 lab-acceptance-fixtures:
 	$(PSRUN) $(LAB_DC) $(LAB_DIR)/08-provision-acceptance.ps1 300 -- \
 	  -SvcPassword "$(call labcred,svc.password)"
@@ -154,14 +197,18 @@ lab-grant-deleg:
 # --- using the lab ----------------------------------------------------------
 
 lab-status:
-	@for h in $(LAB_DC_IP) $(LAB_DC2_IP) 192.168.50.31; do \
-	  printf '%-16s ' $$h; \
-	  for p in 22 389 9389; do \
+	@printf '%-10s %-16s %s\n' HOST ADDRESS PORTS
+	@for pair in "$(LAB_DC):$(LAB_DC_IP)" "$(LAB_DC2):$(LAB_DC2_IP)" \
+	             "$(LAB_MEMBER):$(LAB_MEMBER_IP)" "$(LAB_MEMBER2):$(LAB_MEMBER2_IP)"; do \
+	  n=$${pair%%:*}; h=$${pair##*:}; \
+	  printf '%-10s %-16s ' $$n $$h; \
+	  for p in 22 5985 389 636 9389; do \
 	    if timeout 3 bash -c "cat </dev/null >/dev/tcp/$$h/$$p" 2>/dev/null; \
 	      then printf '%s:open ' $$p; else printf '%s:--   ' $$p; fi; \
 	  done; echo; \
 	done
-	@echo '(389/9389 are expected only on the domain controllers)'
+	@echo '(389/636/9389 are expected only on the domain controllers;'
+	@echo ' 636 is what the provider ldap connection needs, 9389 what the PowerShell ones need)'
 
 # Asks each DC about itself rather than one DC about both. repadmin reaching the
 # other DC goes over RPC as the SSH session's own token, which on a DC carries
@@ -183,18 +230,33 @@ lab-verify-repl:
 
 # git archive rather than the working tree: what runs on the lab is exactly what
 # is committed, and no gitignored clone or build artefact rides along.
+# The provider's go.mod replaces three modules with sibling directories, so
+# shipping the provider alone leaves every one of them unresolvable on the
+# member and `go test` dies with "replacement directory ../go-adcore does not
+# exist" before a single test runs. They travel together, and the layout under
+# C:\src mirrors this working tree so the ../ paths resolve unchanged.
+LAB_SIBLING_MODULES ?= go-adcore go-adldap go-adpwsh
+
 lab-ship:
-	git archive --format=tar --prefix=provider/ HEAD | gzip -9 > /tmp/provider-src.tgz
-	scp -q /tmp/provider-src.tgz $(LAB_MEMBER):provider-src.tgz
-	@printf '%s\n' \
+	@rm -f /tmp/lab-ship-*.tgz
+	git archive --format=tar --prefix=provider/ HEAD | gzip -9 > /tmp/lab-ship-provider.tgz
+	@for m in $(LAB_SIBLING_MODULES); do \
+	    test -d ../$$m || { echo "sibling module ../$$m is missing"; exit 1; }; \
+	    git -C ../$$m archive --format=tar --prefix=$$m/ HEAD | gzip -9 > /tmp/lab-ship-$$m.tgz; \
+	  done
+	scp -q /tmp/lab-ship-*.tgz $(LAB_MEMBER):
+	@{ printf '%s\n' \
 	  '$$ErrorActionPreference = "Stop"' \
-	  'New-Item -ItemType Directory -Force -Path C:\src | Out-Null' \
-	  'if (Test-Path C:\src\provider) { Remove-Item C:\src\provider -Recurse -Force }' \
-	  'tar -xzf "$$env:USERPROFILE\provider-src.tgz" -C C:\src' \
-	  'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)' \
-	  > /tmp/lab-unpack.ps1
+	  'New-Item -ItemType Directory -Force -Path C:\src | Out-Null'; \
+	  for m in provider $(LAB_SIBLING_MODULES); do \
+	    printf 'if (Test-Path C:\src\%s) { Remove-Item C:\src\%s -Recurse -Force }\n' $$m $$m; \
+	    printf 'tar -xzf "$$env:USERPROFILE\lab-ship-%s.tgz" -C C:\src\n' $$m; \
+	  done; \
+	  printf '%s\n' 'Write-Output ("files=" + (Get-ChildItem -Recurse -File C:\src\provider).Count)'; \
+	} > /tmp/lab-unpack.ps1
 	@$(PSRUN) $(LAB_MEMBER) /tmp/lab-unpack.ps1 160 2>&1 | grep -vE 'WARNING|vulnerable|openssh.com'
-	@rm -f /tmp/lab-unpack.ps1 /tmp/provider-src.tgz
+	@rm -f /tmp/lab-unpack.ps1 /tmp/lab-ship-*.tgz
+
 
 # The suite runner lives in run-suite.sh: generating PowerShell through make's
 # quoting rules costs more than it saves, and that script is what a person reads
@@ -316,6 +378,11 @@ lab-acc-matrix:
 	done; \
 	echo; echo '=== matrix summary ==='; printf '%b\n' "$$results"; \
 	exit $$fail
+
+# The whole acceptance suite over the native LDAP connection. Runs here, not on
+# a member: the ldap connection needs no PowerShell and no jump box.
+lab-acc-ldap:
+	$(LAB_DIR)/run-suite-ldap.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),60)
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30

@@ -17,13 +17,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const userResourceType = "activedirectory_user"
 
 type userResource struct {
-	client *adpwsh.Client
+	client adcore.Directory
 }
 
 func newUserResource() resource.Resource { return &userResource{} }

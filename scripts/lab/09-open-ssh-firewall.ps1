@@ -18,7 +18,7 @@
 
     Run it after step 06 (promotion) and after step 07 (join).
 .EXAMPLE
-    ./psrun.sh s-client 09-open-ssh-firewall.ps1 90
+    ./psrun.sh s-client1 09-open-ssh-firewall.ps1 90
 #>
 $ErrorActionPreference = 'Continue'
 
@@ -42,4 +42,17 @@ Write-Output ("sshd       = " + (Get-Service sshd).Status)
 
 # Inbound ICMP, so "is it back yet?" checks are meaningful on this profile.
 Enable-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue
-Write-Output ("securechannel = " + (Test-ComputerSecureChannel -ErrorAction SilentlyContinue))
+# A domain controller has no secure channel to itself, so the test throws there
+# rather than returning false — and -ErrorAction SilentlyContinue does not catch
+# a terminating InvalidOperationException. Skip it on a DC; on a member it is
+# still the check worth having, because a broken channel looks exactly like a
+# bad password later on.
+$role = (Get-CimInstance Win32_ComputerSystem).DomainRole
+if ($role -ge 4) {
+    Write-Output "securechannel = n/a (domain controller)"
+} elseif ($role -eq 0 -or $role -eq 2) {
+    Write-Output "securechannel = n/a (workgroup)"
+} else {
+    try   { Write-Output ("securechannel = " + (Test-ComputerSecureChannel -ErrorAction Stop)) }
+    catch { Write-Output ("securechannel = FAILED: " + $_.Exception.Message) }
+}

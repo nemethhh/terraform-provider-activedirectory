@@ -29,9 +29,9 @@ auser=$(cred 'svc\.username');  apass=$(cred 'svc\.password')
 [[ -n $auser && -n $apass ]] || { echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
 
 host=${LAB_PSRP_HOST:-192.168.50.31}
-spn=${LAB_PSRP_SPN:-HTTP/s-client.corp.local}
-dc_ip=${LAB_DC_IP:-192.168.50.216}
-dc=${LAB_DC_FQDN:-s-server.corp.local}
+spn=${LAB_PSRP_SPN:-HTTP/s-client1.corp.local}
+dc_ip=${LAB_DC_IP:-192.168.50.21}
+dc=${LAB_DC_FQDN:-s-server1.corp.local}
 dc2=${LAB_DC2_FQDN:-s-server2.corp.local}
 realm=${LAB_REALM:-CORP.LOCAL}
 container=${LAB_CONTAINER:-OU=tfacc,DC=corp,DC=local}

@@ -7,12 +7,13 @@ import (
 	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const groupDataSourceType = "activedirectory_group"
 
-type groupDataSource struct{ client *adpwsh.Client }
+type groupDataSource struct{ client adcore.Directory }
 
 func newGroupDataSource() datasource.DataSource { return &groupDataSource{} }
 

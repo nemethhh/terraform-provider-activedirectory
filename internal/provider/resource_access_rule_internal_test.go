@@ -72,7 +72,7 @@ func TestResolveTrusteeSID(t *testing.T) {
 	})
 
 	t.Run("a group identity resolves to the group's SID", func(t *testing.T) {
-		r := &accessRuleResource{client: newTestClient(t, dir.Transport())}
+		r := &accessRuleResource{client: newTestClient(t, dir.Transport()).Directory()}
 		sid, diags := r.resolveTrusteeSID(context.Background(), groupGUID)
 		if diags.HasError() {
 			t.Fatalf("unexpected error: %v", diags)
@@ -101,7 +101,7 @@ func TestResolveTrusteeSID(t *testing.T) {
 			}
 			return dir.Handle(c)
 		}
-		r := &accessRuleResource{client: newTestClient(t, fake.New(handler))}
+		r := &accessRuleResource{client: newTestClient(t, fake.New(handler)).Directory()}
 		sid, diags := r.resolveTrusteeSID(context.Background(), userGUID)
 		if diags.HasError() {
 			t.Fatalf("unexpected error: %v", diags)
@@ -112,7 +112,7 @@ func TestResolveTrusteeSID(t *testing.T) {
 	})
 
 	t.Run("an unknown identity errors on both", func(t *testing.T) {
-		r := &accessRuleResource{client: newTestClient(t, dir.Transport())}
+		r := &accessRuleResource{client: newTestClient(t, dir.Transport()).Directory()}
 		_, diags := r.resolveTrusteeSID(context.Background(), "no-such-trustee")
 		if !diags.HasError() {
 			t.Fatal("expected an attribute error, got none")

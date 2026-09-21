@@ -123,3 +123,30 @@ provider "activedirectory" {
 #     }
 #   }
 # }
+
+# Connect straight to a domain controller over LDAPS. No PowerShell, no RSAT,
+# no Windows host anywhere — the provider binary and TCP 636 are the whole
+# runtime requirement. There is no transport axis here and no mode axis: both
+# describe how pwsh is reached and driven, and this path runs none.
+#
+# Run `kinit` before Terraform and the ticket is picked up from KRB5CCNAME, so
+# no credential goes in configuration:
+#
+#   KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
+#
+# The FILE: prefix matters: only file credential caches can be read, so a
+# KEYRING or KCM cache — the default on sssd-managed hosts — will not work.
+# This is the Linux and macOS path; Windows keeps credentials in the LSA with
+# no readable cache, so a Windows operator uses ldap.simple or ldap.ntlm.
+#
+# The domain block is not used here: the ldap block carries both the pinned
+# domain controller and its own authentication.
+# provider "activedirectory" {
+#   ldap {
+#     server              = "dc01.corp.local"
+#     tls                 = "ldaps"
+#     ca_certificate_file = "/etc/pki/corp-root.pem"
+#
+#     kerberos {}
+#   }
+# }

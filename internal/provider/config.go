@@ -11,6 +11,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
+	adldap "github.com/nemethhh/go-adldap"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
@@ -24,6 +26,7 @@ type providerModel struct {
 	Local       *localModel       `tfsdk:"local"`
 	SSH         *sshModel         `tfsdk:"ssh"`
 	Winrm       *winrmModel       `tfsdk:"winrm"`
+	LDAP        *ldapModel        `tfsdk:"ldap"`
 	Domain      *domainModel      `tfsdk:"domain"`
 	Replication *replicationModel `tfsdk:"replication"`
 }
@@ -452,18 +455,24 @@ func resolveReplication(ctx context.Context, m providerModel) (adpwsh.Replicatio
 	return cfg, diags
 }
 
-// transportKind is which of the three mutually exclusive transport blocks the
+// connectionKind is which of the four mutually exclusive connection blocks the
 // configuration selects.
-type transportKind int
+//
+// Three of them are PowerShell transports — local, ssh, winrm — and differ only
+// in how pwsh is reached. connectionLDAP is not a transport: it runs no
+// PowerShell at all and speaks LDAP to a domain controller directly, so the
+// mode axis (warm/cold) does not apply to it.
+type connectionKind int
 
 const (
-	transportUnset transportKind = iota
+	transportUnset connectionKind = iota
 	transportLocal
 	transportSSH
 	transportWinrm
+	connectionLDAP
 )
 
-func (k transportKind) String() string {
+func (k connectionKind) String() string {
 	switch k {
 	case transportLocal:
 		return "local"
@@ -471,6 +480,8 @@ func (k transportKind) String() string {
 		return "ssh"
 	case transportWinrm:
 		return "winrm"
+	case connectionLDAP:
+		return "ldap"
 	default:
 		return "unset"
 	}
@@ -499,7 +510,7 @@ func (e executionMode) String() string {
 // chosenMode reads the selected transport block's `mode` attribute, defaulting
 // to warm (the fast path). An unrecognised value is refused against the mode
 // attribute rather than silently treated as warm.
-func chosenMode(m providerModel, kind transportKind) (executionMode, diag.Diagnostics) {
+func chosenMode(m providerModel, kind connectionKind) (executionMode, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	var raw types.String
 	var root path.Path
@@ -532,28 +543,31 @@ func chosenMode(m providerModel, kind transportKind) (executionMode, diag.Diagno
 	}
 }
 
-// chooseTransport enforces the exactly-one rule. There is deliberately no
+// chooseConnection enforces the exactly-one rule. There is deliberately no
 // implicit default: defaulting to local when the block is absent turns a typo'd
 // `ssh` block into silent local execution against the wrong identity, and
 // defaulting to ssh or winrm turns a typo'd `local` block into a dial to
 // nowhere.
-func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
+func chooseConnection(m providerModel) (connectionKind, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	const summary = "Exactly one transport block is required"
+	const summary = "Exactly one connection block is required"
 	const detail = "Set exactly one of `local` (run pwsh where Terraform runs), " +
-		"`ssh` (a Windows jump box), or `winrm` (WinRM/PSRP) — not more than one, and not none.\n\n" +
-		"There is no implicit default. Guessing one would let a mistyped block run against the " +
-		"wrong identity."
+		"`ssh` (a Windows jump box), `winrm` (WinRM/PSRP), or `ldap` (connect to a " +
+		"domain controller directly over LDAPS, with no PowerShell) — not more than " +
+		"one, and not none.\n\n" +
+		"There is no implicit default. Guessing one would let a mistyped block run " +
+		"against the wrong identity."
 
 	blocks := []struct {
 		present bool
 		name    string
-		kind    transportKind
+		kind    connectionKind
 	}{
 		{m.Local != nil, "local", transportLocal},
 		{m.SSH != nil, "ssh", transportSSH},
 		{m.Winrm != nil, "winrm", transportWinrm},
+		{m.LDAP != nil, "ldap", connectionLDAP},
 	}
 
 	chosen := transportUnset
@@ -580,4 +594,97 @@ func chooseTransport(m providerModel) (transportKind, diag.Diagnostics) {
 		}
 		return transportUnset, diags
 	}
+}
+
+// ldapModel is the `ldap` connection block: a direct LDAPS connection to a
+// domain controller, with no PowerShell anywhere.
+type ldapModel struct {
+	Server             types.String `tfsdk:"server"`
+	Port               types.Int64  `tfsdk:"port"`
+	TLS                types.String `tfsdk:"tls"`
+	CACertificateFile  types.String `tfsdk:"ca_certificate_file"`
+	InsecureSkipVerify types.Bool   `tfsdk:"insecure_skip_verify"`
+	MaxConcurrency     types.Int64  `tfsdk:"max_concurrency"`
+	Timeout            types.String `tfsdk:"timeout"`
+
+	Simple   *ldapSimpleModel `tfsdk:"simple"`
+	Kerberos *kerberosModel   `tfsdk:"kerberos"`
+	NTLM     *ldapNTLMModel   `tfsdk:"ntlm"`
+}
+
+type ldapSimpleModel struct {
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+}
+
+type kerberosModel struct {
+	CCachePath   types.String `tfsdk:"ccache_path"`
+	Keytab       types.String `tfsdk:"keytab"`
+	Username     types.String `tfsdk:"username"`
+	Realm        types.String `tfsdk:"realm"`
+	Krb5ConfPath types.String `tfsdk:"krb5_conf_path"`
+	SPN          types.String `tfsdk:"spn"`
+}
+
+type ldapNTLMModel struct {
+	Domain   types.String `tfsdk:"domain"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+}
+
+// resolveLDAP turns the ldap block plus the environment into the library's
+// config. Configuration always wins over the environment.
+func resolveLDAP(m ldapModel, getenv func(string) string, diags *diag.Diagnostics) adldap.Config {
+	root := path.Root("ldap")
+	cfg := adldap.Config{
+		Server: str(m.Server, getenv, "AD_LDAP_SERVER"),
+		Port:   int(m.Port.ValueInt64()),
+		// The default is ldaps rather than empty: this backend has no plain
+		// mode, so leaving it unset would only produce a validation error the
+		// operator cannot act on.
+		TLS:                adldap.TLSMode(strOr(str(m.TLS, getenv, "AD_LDAP_TLS"), string(adldap.TLSLDAPS))),
+		CACertificateFile:  str(m.CACertificateFile, getenv, "AD_LDAP_CA_CERTIFICATE_FILE"),
+		InsecureSkipVerify: boolOr(m.InsecureSkipVerify, false),
+		MaxConcurrency:     int(m.MaxConcurrency.ValueInt64()),
+		Timeout:            duration(m.Timeout, root.AtName("timeout"), defaultTransportTimeout, diags),
+	}
+
+	switch {
+	case m.Simple != nil:
+		cfg.Simple = &adldap.SimpleAuth{
+			Username: str(m.Simple.Username, getenv, "AD_LDAP_USERNAME"),
+			Password: adcore.NewSecret(str(m.Simple.Password, getenv, "AD_LDAP_PASSWORD")),
+		}
+	case m.Kerberos != nil:
+		cfg.Kerberos = &adldap.KerberosAuth{
+			CCachePath:   str(m.Kerberos.CCachePath, getenv, "KRB5CCNAME"),
+			Keytab:       str(m.Kerberos.Keytab, getenv, "AD_LDAP_KEYTAB"),
+			Username:     str(m.Kerberos.Username, getenv, "AD_LDAP_USERNAME"),
+			Realm:        str(m.Kerberos.Realm, getenv, "AD_LDAP_REALM"),
+			Krb5ConfPath: str(m.Kerberos.Krb5ConfPath, getenv, "KRB5_CONFIG"),
+			SPN:          str(m.Kerberos.SPN, getenv, "AD_LDAP_SPN"),
+		}
+	case m.NTLM != nil:
+		cfg.NTLM = &adldap.NTLMAuth{
+			Domain:   str(m.NTLM.Domain, getenv, "AD_LDAP_DOMAIN"),
+			Username: str(m.NTLM.Username, getenv, "AD_LDAP_USERNAME"),
+			Password: adcore.NewSecret(str(m.NTLM.Password, getenv, "AD_LDAP_PASSWORD")),
+		}
+	default:
+		diags.AddAttributeError(root,
+			"Exactly one authentication block is required",
+			"Set exactly one of `simple`, `kerberos` or `ntlm` inside `ldap`. "+
+				"There is no implicit default, for the same reason there is no default "+
+				"connection block: guessing would authenticate as the wrong identity.\n\n"+
+				"`kerberos {}` with no attributes uses the ticket from KRB5CCNAME — run "+
+				"`kinit` before Terraform and no credential goes in configuration.")
+	}
+	return cfg
+}
+
+func strOr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
