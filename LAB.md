@@ -1115,41 +1115,60 @@ go-adldap exists for — swapping the LDAP library is a one-package change.
 Until that is done, **use `ldap.simple` over LDAPS**, or one of the PowerShell
 connections.
 
-### Full acceptance suite over `ldap` — run 2026-09-21, blocked on one thing
-
-`make lab-acc-ldap` against s-server1, simple bind, certificate verified:
+### Full acceptance suite over `ldap` — 2026-09-22
 
 ```
-PASS 5    FAIL 32    SKIP 44
+PASS 30    FAIL 7    SKIP 44          (was PASS 5, FAIL 32 before this work)
 ```
 
-**Every one of the 32 failures has the same single cause**, 56 occurrences of
-it and no other error anywhere in the run:
+**Every remaining failure is a capability this backend has not implemented**,
+each reported as `not supported by this endpoint` naming the capability — not a
+crash, and not a wrong result:
 
-```
-Error: OU.Create not supported by this endpoint
-protected_from_accidental_deletion requires writing a security descriptor,
-which this backend does not yet implement
-```
+| Failing | Missing | Phase |
+|---|---|---|
+| `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | computer accounts | 4 |
+| `TestAccGMSALifecycle`, `TestAccGMSADataSource` | gMSAs | 4 |
+| `TestAccAccessRuleLifecycle` | `ACL` and `Schema.Resolve` | 5 |
+| `TestAccUserLifecycle` | `can_change_password` (a security descriptor) | 5 |
 
-`activedirectory_ou` defaults `protected_from_accidental_deletion` to `true`,
-mirroring AD's own default, and almost every suite in the file creates an OU as
-its fixture — so one unimplemented capability blocks the whole suite. The 44
-skips are unrelated: 41 want `AD_E2E_CONTAINER` (a separately provisioned
-layer) and 3 want `AD_ACC_LARGE_COUNT`.
+The 44 skips are unrelated: 41 want `AD_E2E_CONTAINER`, 3 want
+`AD_ACC_LARGE_COUNT`.
 
-This was found *because* the backend was changed to refuse the field. Before
-that it accepted `Protected` and ignored it, and the suite failed with
-"Provider produced inconsistent result after apply: .protected_from_accidental_deletion
-was cty.True, but now cty.False" — a message naming neither the field's meaning
-nor the reason. Refusing turns a silent wrong result into an accurate one.
+### Four defects the lab found that CI could not
 
-**The unlock is OU protection**: a Deny ACE for Delete and DeleteTree on the
-object's `nTSecurityDescriptor`. That is Phase 5 (security descriptors) and is
-the single highest-value item for making the `ldap` connection usable, since
-nothing else in the suite failed.
+Each was invisible to the in-process test server, which accepts what a real
+domain controller refuses.
 
-### Still unexercised
+**1. OU protection was silently ignored.** `OUSpec.Protected` was accepted and
+dropped. The provider defaults `protected_from_accidental_deletion` to `true`,
+so every OU apply failed with "inconsistent result after apply: was cty.True,
+but now cty.False" — naming neither the field nor the reason. This blocked all
+32 non-skipped tests. Now implemented: a Deny ACE for Delete and DeleteTree on
+`nTSecurityDescriptor`, written as a read-modify-write so existing delegations
+survive, and lifted and restored around a move because the Deny covers
+DeleteTree and AD checks that on a re-parent.
+
+**2. A nil sub-directory panicked instead of erroring.** The unimplemented
+classes were nil interface fields, on the reasoning that nil "fails loudly".
+It does not: the consumer dereferenced it and the process died with a nil
+pointer panic, taking 29 remaining tests with it and naming neither the class
+nor the reason. They are now stubs returning `KindUnsupported`.
+
+**3. Creating an enabled user was rejected outright.** The account was created
+with the spec's `Enabled` applied, so AD was asked for an enabled account with
+no password and refused with `ERROR_PASSWORD_RESTRICTION` — which surfaces as
+"password rejected by domain policy" and blames a password that was never the
+problem. The account is now created disabled, given its password, and enabled
+afterwards, which is the order `New-ADUser` uses. The same rule applies to
+`pwdLastSet`.
+
+**4. `MembersRecursive` asked the wrong attribute.** The filter used
+`member:LDAP_MATCHING_RULE_IN_CHAIN:=<group>`, which finds the groups
+containing an object — the inverse of the question. It returns an empty set
+rather than an error, so it read as a group with no members. Now `memberOf:`.
+
+### Still unexercised### Still unexercised
 
 - **NTLM bind.** Untested here; expected to fail where
   `LdapEnforceChannelBinding = 2`, and now also suspect for the same reason
