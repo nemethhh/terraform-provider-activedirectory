@@ -13,13 +13,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const ouResourceType = "activedirectory_ou"
 
 type ouResource struct {
-	client *adpwsh.Client
+	client adcore.Directory
 }
 
 func newOUResource() resource.Resource { return &ouResource{} }

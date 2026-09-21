@@ -10,12 +10,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const computerDataSourceType = "activedirectory_computer"
 
-type computerDataSource struct{ client *adpwsh.Client }
+type computerDataSource struct{ client adcore.Directory }
 
 func newComputerDataSource() datasource.DataSource { return &computerDataSource{} }
 

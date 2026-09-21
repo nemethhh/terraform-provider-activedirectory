@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
@@ -456,13 +457,14 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 				"that TCP 9389 is open from it to the domain controller.\n\n"+err.Error())
 		return
 	}
+	dir := client.Directory()
 	tflog.Debug(ctx, "activedirectory: configured", map[string]any{
-		"server":                 client.Server(),
-		"default_naming_context": client.DefaultNamingContext(),
+		"server":                 dir.Server,
+		"default_naming_context": dir.DNC,
 	})
 
-	resp.ResourceData = client
-	resp.DataSourceData = client
+	resp.ResourceData = dir
+	resp.DataSourceData = dir
 }
 
 func (p *adProvider) Resources(_ context.Context) []func() resource.Resource {
@@ -495,17 +497,23 @@ func (p *adProvider) DataSources(_ context.Context) []func() datasource.DataSour
 }
 
 // clientFromProviderData is the boilerplate every resource's Configure runs.
-func clientFromProviderData(data any, diags *diag.Diagnostics) *adpwsh.Client {
+//
+// It hands back an adcore.Directory rather than a concrete client so that a
+// resource cannot tell which backend configured it — which is what lets one
+// set of resources serve both. The zero value is returned before the provider
+// is configured; a resource checks for that with client.OU == nil, since a
+// struct is never nil.
+func clientFromProviderData(data any, diags *diag.Diagnostics) adcore.Directory {
 	if data == nil {
-		return nil // Configure runs before the provider is configured; not an error.
+		return adcore.Directory{} // Configure runs before the provider is configured; not an error.
 	}
-	client, ok := data.(*adpwsh.Client)
+	dir, ok := data.(adcore.Directory)
 	if !ok {
 		diags.AddError("Unexpected provider data",
-			fmt.Sprintf("Expected *adpwsh.Client, got %T. This is a bug in the provider.", data))
-		return nil
+			fmt.Sprintf("Expected adcore.Directory, got %T. This is a bug in the provider.", data))
+		return adcore.Directory{}
 	}
-	return client
+	return dir
 }
 
 // transportErrDetail frames a transport construction failure. For warm mode it

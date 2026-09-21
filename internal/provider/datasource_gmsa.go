@@ -10,12 +10,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const gmsaDataSourceType = "activedirectory_gmsa"
 
-type gmsaDataSource struct{ client *adpwsh.Client }
+type gmsaDataSource struct{ client adcore.Directory }
 
 func newGMSADataSource() datasource.DataSource { return &gmsaDataSource{} }
 

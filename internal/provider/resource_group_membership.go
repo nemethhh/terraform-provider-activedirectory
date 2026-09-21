@@ -14,13 +14,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 )
 
 const groupMembershipResourceType = "activedirectory_group_membership"
 
 type groupMembershipResource struct {
-	client *adpwsh.Client
+	client adcore.Directory
 }
 
 func newGroupMembershipResource() resource.Resource { return &groupMembershipResource{} }
