@@ -48,10 +48,16 @@ block run against the wrong identity, or over the wrong protocol. Note that
 `ldap` is not a transport — the `mode` (warm/cold) axis describes how `pwsh` is
 driven, and that path runs none.
 
-The `ldap` connection currently manages **organizational units, groups and
-users**. gMSAs, computers, and everything needing a security descriptor still
-require a PowerShell connection; `can_change_password = false` on the LDAP path
-is refused as unsupported rather than silently ignored.
+The `ldap` connection manages **every resource this provider offers** — OUs,
+groups, users, computers, gMSAs, membership, passwords and access rules,
+including everything backed by a security descriptor (ACLs, delegation
+templates, RBCD, `protected_from_accidental_deletion`, `can_change_password`).
+It refuses nothing.
+
+**A new resource is not done until it works on both backends.** The two are
+held to one contract and one set of assertions; a capability only one of them
+has is a split the provider cannot express, because a resource cannot tell
+which backend configured it.
 
 **When a task needs new AD behaviour, the change belongs in the library, not
 here.** The library's operation set is deliberately narrow: as of `go-adpwsh`

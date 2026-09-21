@@ -95,10 +95,12 @@ identity.
 
 The `ldap` connection is not a transport: the other three differ only in where
 `pwsh` runs, and this one runs none, so the `mode` (warm/cold) axis and the
-`dialect` setting do not apply to it. It currently manages **organizational
-units, groups and users**; gMSAs, computers and everything needing a security
-descriptor (ACLs, `protected_from_accidental_deletion`, `can_change_password`,
-delegation) still require one of the PowerShell connections.
+`dialect` setting do not apply to it. It manages **every resource this provider
+offers** — organizational units, groups, users, computers, gMSAs, group
+membership, passwords and access rules, including everything backed by a
+security descriptor (ACLs, delegation templates, resource-based constrained
+delegation, `protected_from_accidental_deletion`, `can_change_password`).
+Validated end to end against a real domain; see [`LAB.md`](./LAB.md).
 
 A few things worth knowing:
 

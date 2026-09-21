@@ -245,30 +245,28 @@ Two topologies are supported and were both exercised:
 
 ## Native LDAP backend — validation status
 
-**Validated 2026-09-22 (Phase 4)** against `corp.local` on the rebuilt lab
-(`s-server1`, Windows Server 2025), over LDAPS with certificate verification and
-a Kerberos ticket. No password anywhere in the run.
+**Parity, validated 2026-09-22 (Phase 5)** against `corp.local` on the rebuilt
+lab (`s-server1`, Windows Server 2025), over LDAPS with certificate
+verification and a Kerberos ticket. No password anywhere in the run.
 
 ```
-PASS 47   FAIL 1   SKIP 55
+PASS 52   FAIL 0   SKIP 55
 auth: kerberos (ticket in FILE:/tmp/krb5cc_tf)
 ```
 
-Computers and gMSAs now pass over LDAP. The five suites Phase 3 recorded as
-failing for those two classes are green, and exactly one refusal remains:
+**No suite is refused for a missing capability.** Every resource the provider
+offers — OUs, groups, users, computers, gMSAs, membership, passwords, access
+rules, delegation templates, search, import, the tombstone probe and all three
+replication suites including `force_sync` — works over LDAPS with no
+PowerShell, no RSAT and no Windows host.
 
-| Failing suite | Refusal |
-|---|---|
-| `TestAccAccessRuleLifecycle` | `Schema.Resolve not supported by this endpoint` |
+The Phase 4 counts on the way here were PASS 47 / FAIL 1 / SKIP 55, the one
+failure being `TestAccAccessRuleLifecycle` before Phase 5 implemented ACLs and
+schema resolution.
 
-`access_rule` is Phase 5 scope. Everything else the provider offers — OUs,
-groups, users, membership, passwords, computers (including both delegation
-forms), gMSAs, search, import, the tombstone probe and all three replication
-suites including `force_sync` — passes over LDAP.
+### What the lab runs found
 
-### What the Phase 4 run found
-
-Two things, neither of which any in-process test could have found.
+Four things, none of which any in-process test could have found.
 
 **1. `msDS-ManagedPasswordInterval` is mandatory, not optional.** It is the
 `msDS-GroupManagedServiceAccount` class's only `systemMustContain` attribute, so
@@ -286,7 +284,19 @@ unconditionally, defaulting to 30 — AD's own default, and the value
 `go-adpwsh`'s `gmsa_create.ps1` already wrote for the same reason, with the same
 comment. Regression-tested on the wire value in `go-adldap`.
 
-**2. The `SeEnableDelegationPrivilege` fixture did not survive the lab
+**2. The extended-right attribute is `rightsGuid`, not `rightsGUID`.**
+`Schema.Resolve` asked for the wrong spelling and reported `"Reset Password"
+has no rightsGuid`. AD answers the *search* regardless — an LDAP attribute
+description is case-insensitive — but keys the entry with the schema's own
+spelling, so the exact map lookup missed.
+
+**3. `conn.Entry.First` was case-sensitive.** That is what turned (2) from a
+typo into a silent "the object does not have this attribute". It now falls back
+to a case-insensitive scan, per RFC 4512 2.5. Every attribute constant in
+`go-adldap` that differs from the schema by a letter's case was a latent
+instance of the same bug.
+
+**4. The `SeEnableDelegationPrivilege` fixture did not survive the lab
 rebuild.** `TestAccComputerDataSource` and `TestAccComputerLifecycle` step 3
 failed with
 
@@ -303,6 +313,40 @@ writes fail the same way over a PowerShell connection. Fixed by
 LSASS only at boot, which is why `scripts/lab/grant-svc-deleg-priv.ps1` ends by
 saying so. **Re-run it after any lab rebuild**, before concluding that a
 delegation failure is the provider's.
+
+### The WinRM/PSRP cells are blocked on missing lab fixtures
+
+`make lab-acc-winrm-7` currently fails for every suite at provider `Configure`:
+
+```
+handshake failed: negotiate authentication rejected:
+server returned 401 with bare Negotiate after receiving our token
+```
+
+**This is not a regression.** The identical failure reproduces from a pristine
+`main` worktree, and that cell runs with `GOWORK=off` — it builds against the
+released `go-adcore v0.1.0` / `go-adpwsh v0.22.0`, so none of the Phase 4–6
+library work is even in the binary. The failure is before any AD operation.
+
+The whole PSRP fixture layer was never re-provisioned after the 2026-09-21
+rebuild. On `s-client1`:
+
+- `Get-PSSessionConfiguration` lists only the four stock endpoints —
+  **`AdObjects51` and `AdObjects7` are gone**.
+- the local group **Remote Management Users is empty**.
+- in AD, the group **`CORP\AD-Terraform-Objects` does not exist**.
+
+Restoring it is host build-out, not lab automation: `scripts/host/New-AdProviderEndpoint.ps1`
+is run by a human administrator on the management host, once per capability
+tier, from the PowerShell engine the endpoint is to use (Windows PowerShell 5.1
+for `AdObjects51`, PowerShell 7 for `AdObjects7`). The order is: create
+`AD-Terraform-Objects` and add `svc_tfacc`; run the script twice on `s-client1`
+with `-TierName AdObjects51`/`AdObjects7 -GrantTo 'CORP\AD-Terraform-Objects'`;
+add the group to **Remote Management Users**. A ticket obtained before the group
+membership exists does not carry it, so `kinit` again afterwards.
+
+Until that is done the PowerShell backend can only be exercised over `local`
+and `ssh`.
 
 ### Kerberos: fixed, and it was never the library
 
@@ -339,6 +383,24 @@ which reads as slow replication and was actually a bad SPN. The binder is now
 rebuilt per target host; an explicit `spn` still wins.
 
 All three are regression-tested in `go-adldap`. None needed a KDC to guard.
+
+### `origin/feat/psopenad-dialect`: superseded, to be deleted
+
+The branch (tip `145d428`) added a top-level `dialect` attribute so the
+PowerShell backend could drive AD through the PSOpenAD module instead of
+RSAT/ADWS — that is, reach a domain controller over raw LDAP while still
+running PowerShell to get there. It was parked pending the native backend.
+
+The native backend now does that job without the approximation: the `ldap`
+connection speaks LDAPS to a DC directly, needs no PowerShell, no RSAT and no
+Windows host, and as of the run above covers every resource. A second,
+PowerShell-mediated way to reach LDAP would be a third code path to keep green
+for a capability the provider already has, so the branch is **superseded and
+should be deleted**. Its SHA is recorded here, so the work is recoverable from
+the reflog or by pushing the SHA again if the decision is ever revisited.
+
+The delete itself is a remote mutation and is listed with the other pending
+pushes rather than done silently.
 
 ### Still unexercised
 
