@@ -384,6 +384,32 @@ rebuilt per target host; an explicit `spn` still wins.
 
 All three are regression-tested in `go-adldap`. None needed a KDC to guard.
 
+### The cross-backend differential suite
+
+**Run 2026-09-22** against `corp.local`, comparing the two backends directly:
+one object of each class created through the LDAP backend and read back
+through both, with the models required to be identical
+(`go-adldap/acc_differential_test.go`, behind the `acc` tag and
+`AD_ACC_DIFFERENTIAL=1`). The PowerShell side reaches RSAT over SSH, since the
+WinRM endpoints are missing; the dialect and the cmdlets are the same either
+way.
+
+Classes compared: OU, group, user, computer, gMSA, and the DACL of a fresh OU.
+
+The first run found **three** real divergences, every one of which a user
+switching backends would have hit. All are fixed and the suite now passes on
+all six:
+
+| What differed | ldap said | pwsh said | Resolution |
+|---|---|---|---|
+| `Computer`/`GMSA` `SamAccountName` | `DIFFPC` | `DIFFPC$` | `go-adpwsh` strips the `$` in `model()`. The specs carry the un-suffixed base and the provider already stripped it on both paths, so no state a user holds changes. |
+| Rights covering `GENERIC_READ` | `[ListChildren ReadProperty ListObject ReadControl]` | `[GenericRead]` | `go-adldap`'s `RightsNames` now renders the .NET `ActiveDirectoryRights` composites, matching what the PowerShell side gets from .NET itself. Affected every inherited ACE on every object. |
+| Empty multi-valued fields | `nil` | `[]string{}` | `go-adpwsh` collapses an empty slice to nil. Reads identically either way; a different Go value is still a different answer. |
+
+The exclusion list is **empty**: no field is currently allowed to differ. An
+entry added to it needs a reason, because an exclusion without one is a bug
+being suppressed.
+
 ### `origin/feat/psopenad-dialect`: superseded, to be deleted
 
 The branch (tip `145d428`) added a top-level `dialect` attribute so the
