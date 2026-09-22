@@ -475,7 +475,7 @@ The whole of Phases 4–6, re-run once at the end:
 |---|---|
 | `go test ./...` in `go-adcore`, `go-adldap`, `go-adpwsh` | green |
 | `make check` (build, vet, gofmt, terraform fmt, the fake-backed suites on **both** backends) | green |
-| `make lab-acc-ldap` against `corp.local` | **PASS 52 / FAIL 0 / SKIP 55** |
+| `make lab-acc-ldap` against `corp.local` | **PASS 52 / FAIL 0 / SKIP 55** — re-run against the released `go-adldap v0.4.0`, not a workspace |
 | `go test -tags acc -run TestAccBackendsAgree` (the differential suite) | green, six classes |
 | `make lab-acc-ldap` with `LAB_LDAP_AUTH=ntlm` | green |
 | `make lab-acc-ldap` with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | green |
