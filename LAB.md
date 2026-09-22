@@ -314,39 +314,120 @@ LSASS only at boot, which is why `scripts/lab/grant-svc-deleg-priv.ps1` ends by
 saying so. **Re-run it after any lab rebuild**, before concluding that a
 delegation failure is the provider's.
 
-### The WinRM/PSRP cells are blocked on missing lab fixtures
+### Restoring the WinRM/PSRP fixtures after a rebuild
 
-`make lab-acc-winrm-7` currently fails for every suite at provider `Configure`:
+The whole PSRP fixture layer did not survive the 2026-09-21 rebuild, and
+`make lab-acc-winrm-7` failed every suite at provider `Configure` with
 
 ```
 handshake failed: negotiate authentication rejected:
 server returned 401 with bare Negotiate after receiving our token
 ```
 
-**This is not a regression.** The identical failure reproduces from a pristine
-`main` worktree, and that cell runs with `GOWORK=off` — it builds against the
-released `go-adcore v0.1.0` / `go-adpwsh v0.22.0`, so none of the Phase 4–6
-library work is even in the binary. The failure is before any AD operation.
+**Restored 2026-09-22**: `make lab-acc-winrm-7` is **PASS 50 / FAIL 0 / SKIP 57**,
+and the 5.1 endpoint passes `TestAccOULifecycle` over `make lab-acc-psrp`. What
+it took, in order — follow this order after any rebuild, because each step
+depends on the one before:
 
-The whole PSRP fixture layer was never re-provisioned after the 2026-09-21
-rebuild. On `s-client1`:
+1. **The AD group.** `CORP\AD-Terraform-Objects` did not exist. Create it and
+   add `svc_tfacc`. Access is granted to a *group* so onboarding never touches
+   the management host again.
 
-- `Get-PSSessionConfiguration` lists only the four stock endpoints —
-  **`AdObjects51` and `AdObjects7` are gone**.
-- the local group **Remote Management Users is empty**.
-- in AD, the group **`CORP\AD-Terraform-Objects` does not exist**.
+2. **The member's secure channel.** After a cold boot `Test-ComputerSecureChannel`
+   returned `False`, and `$env:LOGONSERVER` was empty. Every domain lookup from
+   the host failed — including `NTAccount.Translate()`, which is the first thing
+   the endpoint script does, so it aborted with "Some or all identity references
+   could not be translated". Repair it with a domain credential:
 
-Restoring it is host build-out, not lab automation: `scripts/host/New-AdProviderEndpoint.ps1`
-is run by a human administrator on the management host, once per capability
-tier, from the PowerShell engine the endpoint is to use (Windows PowerShell 5.1
-for `AdObjects51`, PowerShell 7 for `AdObjects7`). The order is: create
-`AD-Terraform-Objects` and add `svc_tfacc`; run the script twice on `s-client1`
-with `-TierName AdObjects51`/`AdObjects7 -GrantTo 'CORP\AD-Terraform-Objects'`;
-add the group to **Remote Management Users**. A ticket obtained before the group
-membership exists does not carry it, so `kinit` again afterwards.
+   ```powershell
+   Test-ComputerSecureChannel -Repair -Server s-server1.corp.local -Credential $cred
+   ```
 
-Until that is done the PowerShell backend can only be exercised over `local`
-and `ssh`.
+3. **`AdObjects51`**, the Windows PowerShell 5.1 endpoint, from `powershell.exe`:
+
+   ```powershell
+   .\New-AdProviderEndpoint.ps1 -TierName AdObjects51 `
+       -GrantTo 'CORP\AD-Terraform-Objects' -Capability all
+   ```
+
+4. **PowerShell 7 remoting**, once, from `pwsh 7` — without it step 5 fails with
+   "The WinRM plugin DLL pwrshplugin.dll is missing for PowerShell":
+
+   ```powershell
+   Enable-PSRemoting -Force
+   ```
+
+5. **`AdObjects7`**, from `pwsh 7`, with
+   [`scripts/host/New-AdProviderEndpoint7.ps1`](scripts/host/New-AdProviderEndpoint7.ps1):
+
+   ```powershell
+   .\New-AdProviderEndpoint7.ps1 -GrantTo 'CORP\AD-Terraform-Objects'
+   ```
+
+   `New-AdProviderEndpoint.ps1` cannot make this one and refuses to: an endpoint
+   takes the engine of the shell that registers it, and a PowerShell 7 endpoint
+   without a RunAs identity faults a non-admin caller with an opaque pwrshplugin
+   HTTP 500. `AdObjects7` therefore runs under a **virtual account** — a local
+   administrator on the member. The directory calls still authenticate as the
+   caller's own `domain.credential`, so AD checks them against that account's OU
+   delegation exactly as for the 5.1 endpoint.
+
+6. **A fresh `kinit`.** Kerberos carries group membership in the ticket, so a
+   ticket obtained before step 1 does not have it.
+
+Two things that are *not* part of this, and cost time before they were ruled
+out: the clocks (below) and, separately, a nil-interface panic in the provider's
+own `directory` sub-tests. These cells run `GOWORK=off` against the released
+libraries, where `adcorefake` leaves `Computer`, `ServiceAccount`, `ACL` and
+`Schema` nil; the sub-tests now skip on a missing class instead of taking the
+whole test binary down with a SIGSEGV and losing every suite after it.
+
+**Two corrections to an earlier version of this section.** *Remote Management
+Users is not needed*: each endpoint's SDDL grants local administrators plus the
+granted group and nothing else, which is the point — a member of the group can
+open that endpoint and nothing else on the host. And *the script cannot be run
+twice, once per engine*: it is 5.1-only by design, which is why
+`New-AdProviderEndpoint7.ps1` exists.
+
+### The clocks after a cold boot
+
+The lab VMs came back from a power cycle **7 hours ahead of real time**, and the
+PDC emulator had no external time source (`w32tm /query /source` =
+`Local CMOS Clock`), so it served that drift to the whole domain. Internally
+consistent — AD and the LDAP suite were unaffected, and `kinit` from Linux
+succeeded because MIT krb5 caches a clock offset per KDC — but a Go Kerberos
+client does not, so every WinRM handshake died with
+
+```
+KRB Error: (37) KRB_AP_ERR_SKEW Clock skew too great
+```
+
+Fix the PDC emulator, then let the hierarchy follow:
+
+```powershell
+# on s-server1
+w32tm /config /manualpeerlist:"time.windows.com,0x8 pool.ntp.org,0x8" `
+      /syncfromflags:manual /reliable:yes /update
+Restart-Service w32time -Force; w32tm /resync /force
+
+# on every other host
+w32tm /config /syncfromflags:domhier /update
+Restart-Service w32time -Force; w32tm /resync /force
+```
+
+The skew also broke DC-to-DC replication (`result 5 (0x5): Access is denied` on
+the Configuration, Schema and DnsZones naming contexts). It does not clear by
+itself quickly enough for a suite run; force it once the clocks are right:
+
+```powershell
+repadmin /replicate s-server2.corp.local s-server1.corp.local "<NC>" /u:<user> /pw:<pw>
+```
+
+The explicit credential matters: `repadmin` and `Get-AD*` run from a key-based
+SSH session land as a *local* administrator with no delegatable domain token, so
+they report "Access is denied" or "Unable to contact the server" for reasons
+that have nothing to do with the thing being diagnosed. That is the same double
+hop the `ssh` acceptance cells document.
 
 ### Kerberos: fixed, and it was never the library
 
@@ -396,7 +477,8 @@ The whole of Phases 4–6, re-run once at the end:
 | `go test -tags acc -run TestAccBackendsAgree` (the differential suite) | green, six classes |
 | `make lab-acc-ldap` with `LAB_LDAP_AUTH=ntlm` | green |
 | `make lab-acc-ldap` with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | green |
-| `make lab-acc-winrm-7` | **red — missing lab fixtures, not a regression** (see below) |
+| `make lab-acc-winrm-7` | **PASS 50 / FAIL 0 / SKIP 57**, once the PSRP fixtures were restored (see below) |
+| `make lab-acc-psrp` (the 5.1 engine, `AdObjects51`) | green on `TestAccOULifecycle` |
 
 The 55 skips are the e2e layer, which is a separately provisioned environment
 (`AD_E2E_CONTAINER`), plus the cells for transports this run did not select.
