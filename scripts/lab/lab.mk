@@ -463,8 +463,17 @@ lab-channel-binding:
 # Every Kerberos credential source against every channel-binding policy.
 # The ccache cell at 1 is the regression case: a client that sent no token
 # passed there before this feature, so a wrong token would newly fail.
+#
+# The whole recipe is one shell process (every line below is `\`-joined into
+# one logical command), so a `trap ... EXIT` set as its first statement fires
+# on every way that process can end -- the normal fall-through, the early
+# `exit 1` when a policy change itself fails, and a signal -- and restores the
+# DC to VALUE=0 every time. Without it, the unconditional restore this recipe
+# used to put only at the bottom never ran on the early-exit path, which is
+# exactly the case a failed `lab-channel-binding` call takes.
 lab-acc-ldap-krb-matrix:
-	@fail=0; results=''; \
+	@trap '$(MAKE) --no-print-directory lab-channel-binding VALUE=0 >/dev/null 2>&1' EXIT; \
+	fail=0; results=''; \
 	for v in 0 1 2; do \
 	  $(MAKE) --no-print-directory lab-channel-binding VALUE=$$v >/dev/null || exit 1; \
 	  for a in kerberos kerberos-password; do \
@@ -476,7 +485,6 @@ lab-acc-ldap-krb-matrix:
 	    fi; \
 	  done; \
 	done; \
-	$(MAKE) --no-print-directory lab-channel-binding VALUE=0 >/dev/null; \
 	echo; echo '=== channel-binding matrix ==='; printf '%b\n' "$$results"; \
 	exit $$fail
 

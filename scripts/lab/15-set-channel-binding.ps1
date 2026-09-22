@@ -5,8 +5,8 @@
 #   1  when supported - a client that sends no token still binds
 #   2  always       - required by the CIS Benchmark and the DISA STIG
 #
-# Reports the value back after the restart: a run that silently tested the
-# wrong policy is worse than one that failed.
+# Reads the value back after the restart and throws on a mismatch: a run that
+# silently tested the wrong policy is worse than one that failed.
 param([Parameter(Mandatory = $true)][ValidateSet('0', '1', '2')][string]$Value)
 
 $ErrorActionPreference = 'Stop'
@@ -20,4 +20,7 @@ New-ItemProperty -Path $key -Name 'LdapEnforceChannelBinding' `
 Restart-Service -Name NTDS -Force
 
 $actual = (Get-ItemProperty -Path $key -Name 'LdapEnforceChannelBinding').LdapEnforceChannelBinding
+if ($actual -ne [int]$Value) {
+    throw "LdapEnforceChannelBinding=$actual, expected $Value -- the policy did not take"
+}
 Write-Output "LdapEnforceChannelBinding=$actual"

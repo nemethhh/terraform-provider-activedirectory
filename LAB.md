@@ -565,10 +565,16 @@ LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
 
 `s-server1` was reconfigured through the run — `LdapEnforceChannelBinding` set
 to 0, 1 and 2 in turn (`scripts/lab/15-set-channel-binding.ps1`, which writes
-the DWord under `NTDS\Parameters` and restarts NTDS so it takes effect), with
-every Kerberos credential source (ticket cache and supplied password) run
-against every value. The policy was restored to 0 — the lab's original state —
-when the run finished.
+the DWord under `NTDS\Parameters`, restarts NTDS so it takes effect, and now
+throws if the readback does not match). Every Kerberos credential source
+(ticket cache and supplied password) ran against every value. The policy is
+back at 0 — the lab's original state.
+
+**At the time of this run, `lab-acc-ldap-krb-matrix`'s auto-restore was not
+failure-safe**, and both attempts below needed a manual `make
+lab-channel-binding VALUE=0` afterward to actually get there — see finding 2
+below. It has since been fixed with a `trap ... EXIT` so the restore now runs
+on every exit path, including the one this run hit twice.
 
 ```bash
 make lab-ca-cert
@@ -610,8 +616,8 @@ make lab-acc-ldap PATTERN=TestAccOULifecycle                       # simple, PAS
 make lab-channel-binding VALUE=0
 ```
 
-Two things surfaced along the way, both fixed in this run rather than left for
-later:
+Three things surfaced along the way, all fixed in this run rather than left
+for later:
 
 1. **`accClient` (the destroy-check helper in `acc_test.go`) still built a bare
    `kerberos {}` client** regardless of which credential source the run under
@@ -623,15 +629,27 @@ later:
    to serve.** A restart issued shortly after a previous one (the matrix
    restarts NTDS three times in quick succession) has a real chance of leaving
    Kerberos AS/TGS exchanges — and once, the SSH session itself — answering
-   `KDC_ERR_SVC_UNAVAILABLE` or refusing the connection for a few seconds.
-   Both automated `make lab-acc-ldap-krb-matrix` attempts here hit it once
-   each (a different cell each time) and aborted before the loop's own
-   `VALUE=0` restore ran, though the policy was independently confirmed back
-   at 0 afterward either way. The table above reflects every cell reconfirmed
-   individually against a settled DC, not a single unattended pass. No settle
-   delay was added to `lab-channel-binding` or the matrix target, since
-   neither was in scope here — this is recorded as an open runbook gap, not a
+   `KDC_ERR_SVC_UNAVAILABLE` or refusing the connection for a few seconds. Both
+   automated `make lab-acc-ldap-krb-matrix` attempts here hit it once each (a
+   different cell each time) and, at the time, **aborted before the loop's own
+   `VALUE=0` restore ran, because that restore sat unconditionally near the
+   bottom of the recipe and the early `exit 1` on a failed policy change
+   skipped straight past it** — an unattended run could have been left with
+   the DC hardened at 1 or 2. The table above reflects every cell reconfirmed
+   individually against a settled DC, not a single unattended pass; the policy
+   was restored to 0 by hand both times this was hit. `lab-acc-ldap-krb-matrix`
+   now sets a `trap ... EXIT` as its first statement so the restore runs on
+   every exit path — normal completion, the early exit, or a signal — closing
+   that gap. No settle delay for the restart race itself was added, since that
+   was out of scope here; it is recorded as an open runbook gap, not a
    channel-binding defect.
+3. **The policy script's own readback was informational only.** Its header
+   already said a run that silently tested the wrong policy is worse than one
+   that failed, but nothing enforced that — a mismatch between the requested
+   and actual value would have printed and been ignored.
+   `15-set-channel-binding.ps1` now throws when the readback disagrees with
+   `-Value`, so a mismatch fails the `lab-channel-binding` call (and, through
+   the trap above, still restores the policy) instead of passing silently.
 
 ### Still unexercised
 
