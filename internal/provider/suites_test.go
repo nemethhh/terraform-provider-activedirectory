@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+
+	"github.com/nemethhh/go-adcore"
+	"github.com/nemethhh/go-adcore/adcorefake"
 )
 
 // accNamePrefix is on every object these suites create. The sweeper matches on
@@ -1868,4 +1872,41 @@ resource "activedirectory_access_rule" "write" {
 			Config:                  base + reset + writeDeny,
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The second backend's capability gate
+// ---------------------------------------------------------------------------
+
+// directoryFake is adcorefake.New with the capabilities a `directory` sub-test
+// needs asserted up front.
+//
+// The ssh and winrm lab cells run with GOWORK=off, deliberately: they exercise
+// this working tree against the *released* libraries, which is the whole point
+// of those cells. A released adcorefake that does not yet implement a class
+// leaves that field nil, and a nil interface field does not fail politely — it
+// panics inside the provider and takes the entire test binary down with it,
+// losing every suite that had not run yet. That is exactly what go-adldap's
+// own unsupported.go exists to prevent, and the fake has no equivalent.
+//
+// So the sub-test skips, naming what is missing. The skip is self-clearing: it
+// stops the moment the pinned adcorefake implements the class, which is what
+// bumping the pin after a library release does.
+func directoryFake(t *testing.T, need ...string) adcore.Directory {
+	t.Helper()
+	d := adcorefake.New(fakeSuiteEnv().Container)
+	have := map[string]bool{
+		"computer":       d.Computer != nil,
+		"serviceaccount": d.ServiceAccount != nil,
+		"acl":            d.ACL != nil,
+		"schema":         d.Schema != nil,
+	}
+	for _, n := range need {
+		if !have[n] {
+			t.Skipf("the pinned go-adcore/adcorefake does not implement %s, so there is no "+
+				"second backend to compare against; bump the go-adcore pin once the release "+
+				"carrying it is tagged", n)
+		}
+	}
+	return d
 }

@@ -5,7 +5,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
-	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
@@ -25,7 +24,7 @@ func TestComputerLifecycleAgainstTheFake(t *testing.T) {
 	})
 	t.Run("directory", func(t *testing.T) {
 		resource.UnitTest(t, resource.TestCase{
-			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			ProtoV6ProviderFactories: factoriesWithDirectory(directoryFake(t, "computer")),
 			Steps:                    computerLifecycleSteps(fakeSuiteEnv()),
 		})
 	})

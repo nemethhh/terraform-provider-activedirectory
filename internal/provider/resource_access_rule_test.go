@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
@@ -20,7 +19,7 @@ func TestAccessRuleLifecycleAgainstTheFake(t *testing.T) {
 	})
 	t.Run("directory", func(t *testing.T) {
 		resource.UnitTest(t, resource.TestCase{
-			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			ProtoV6ProviderFactories: factoriesWithDirectory(directoryFake(t, "acl", "schema")),
 			Steps:                    accessRuleSteps(fakeSuiteEnv()),
 		})
 	})
@@ -149,7 +148,7 @@ resource "activedirectory_access_rule" "grant1" {
 	})
 	t.Run("directory", func(t *testing.T) {
 		resource.UnitTest(t, resource.TestCase{
-			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New("DC=corp,DC=local")),
+			ProtoV6ProviderFactories: factoriesWithDirectory(directoryFake(t, "acl", "schema")),
 			Steps:                    steps,
 		})
 	})
