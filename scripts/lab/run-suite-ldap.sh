@@ -41,13 +41,11 @@ else
   export AD_ACC_LDAP_INSECURE=true
 fi
 
-# The GSSAPI bind is refused by Windows Server 2025 (see LAB.md), so a simple
-# bind is used when no ticket is present. KRB5CCNAME with a live ticket selects
-# the Kerberos path instead.
-# LAB_LDAP_AUTH names the bind explicitly: kerberos (the default when a ticket
-# is present), simple, or ntlm. It exists so the ntlm path can be run at all —
-# it is offered in the schema and, until this, had never been exercised.
-if [[ ${LAB_LDAP_AUTH:-} == ntlm ]]; then
+# LAB_LDAP_AUTH names the bind explicitly: kerberos (ticket cache, the default
+# when a ticket is present), kerberos-password, kerberos-keytab, ntlm, or
+# unset (a ticket if there is one, a simple bind otherwise).
+case ${LAB_LDAP_AUTH:-} in
+ntlm)
   AD_ACC_LDAP_AUTH=ntlm
   AD_ACC_LDAP_USERNAME=$(cred svc.username)
   AD_ACC_LDAP_PASSWORD=$(cred svc.password)
@@ -55,18 +53,55 @@ if [[ ${LAB_LDAP_AUTH:-} == ntlm ]]; then
     echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
   export AD_ACC_LDAP_AUTH AD_ACC_LDAP_USERNAME AD_ACC_LDAP_PASSWORD
   echo "auth: ntlm as $AD_ACC_LDAP_USERNAME"
-elif [[ -n ${KRB5CCNAME:-} ]] && klist -s 2>/dev/null; then
-  echo "auth: kerberos (ticket in $KRB5CCNAME)"
-else
+  ;;
+kerberos-password)
+  # No KRB5CCNAME on purpose. A ticket in the environment would make this cell
+  # pass through the ccache path and prove nothing about the credential one.
+  unset KRB5CCNAME
+  AD_ACC_LDAP_AUTH=kerberos
   AD_ACC_LDAP_USERNAME=$(cred svc.username)
   AD_ACC_LDAP_PASSWORD=$(cred svc.password)
   [[ -n $AD_ACC_LDAP_USERNAME && -n $AD_ACC_LDAP_PASSWORD ]] || {
     echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
-  # A UPN binds regardless of which naming context the account sits in.
-  AD_ACC_LDAP_USERNAME="${AD_ACC_LDAP_USERNAME#*\\}@$domain"
-  export AD_ACC_LDAP_USERNAME AD_ACC_LDAP_PASSWORD
-  echo "auth: simple as $AD_ACC_LDAP_USERNAME"
-fi
+  AD_ACC_LDAP_USERNAME="${AD_ACC_LDAP_USERNAME#*\\}"
+  AD_ACC_LDAP_REALM=${LAB_REALM:-CORP.LOCAL}
+  export AD_ACC_LDAP_AUTH AD_ACC_LDAP_USERNAME AD_ACC_LDAP_PASSWORD AD_ACC_LDAP_REALM
+  echo "auth: kerberos (password) as $AD_ACC_LDAP_USERNAME@$AD_ACC_LDAP_REALM, no ticket cache"
+  ;;
+kerberos-keytab)
+  unset KRB5CCNAME
+  AD_ACC_LDAP_AUTH=kerberos
+  AD_ACC_LDAP_KEYTAB=${LAB_KEYTAB:-$HOME/.config/ad-lab/svc.keytab}
+  [[ -s $AD_ACC_LDAP_KEYTAB ]] || {
+    echo "keytab missing at $AD_ACC_LDAP_KEYTAB; skipping" >&2; exit 0; }
+  AD_ACC_LDAP_USERNAME=$(cred svc.username)
+  AD_ACC_LDAP_USERNAME="${AD_ACC_LDAP_USERNAME#*\\}"
+  AD_ACC_LDAP_REALM=${LAB_REALM:-CORP.LOCAL}
+  export AD_ACC_LDAP_AUTH AD_ACC_LDAP_KEYTAB AD_ACC_LDAP_USERNAME AD_ACC_LDAP_REALM
+  echo "auth: kerberos (keytab) as $AD_ACC_LDAP_USERNAME@$AD_ACC_LDAP_REALM"
+  ;;
+kerberos)
+  [[ -n ${KRB5CCNAME:-} ]] && klist -s 2>/dev/null || {
+    echo "LAB_LDAP_AUTH=kerberos needs a ticket: KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tfacc@CORP.LOCAL" >&2
+    exit 1; }
+  echo "auth: kerberos (ticket in $KRB5CCNAME)"
+  ;;
+*)
+  # Unchanged: a ticket if there is one, a simple bind otherwise.
+  if [[ -n ${KRB5CCNAME:-} ]] && klist -s 2>/dev/null; then
+    echo "auth: kerberos (ticket in $KRB5CCNAME)"
+  else
+    AD_ACC_LDAP_USERNAME=$(cred svc.username)
+    AD_ACC_LDAP_PASSWORD=$(cred svc.password)
+    [[ -n $AD_ACC_LDAP_USERNAME && -n $AD_ACC_LDAP_PASSWORD ]] || {
+      echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
+    # A UPN binds regardless of which naming context the account sits in.
+    AD_ACC_LDAP_USERNAME="${AD_ACC_LDAP_USERNAME#*\\}@$domain"
+    export AD_ACC_LDAP_USERNAME AD_ACC_LDAP_PASSWORD
+    echo "auth: simple as $AD_ACC_LDAP_USERNAME"
+  fi
+  ;;
+esac
 
 echo "server=$AD_ACC_LDAP_SERVER tls=$AD_ACC_LDAP_TLS${AD_ACC_LDAP_PORT:+:$AD_ACC_LDAP_PORT} container=$AD_ACC_CONTAINER pattern=$pattern"
 exec go test ./internal/provider/ -run "$pattern" -v -count=1 -timeout "${minutes}m"

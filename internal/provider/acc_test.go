@@ -60,6 +60,11 @@ const (
 	// way to reach a password bind was simple, and ntlm was a schema option
 	// nobody had ever run.
 	envLDAPAuth = "AD_ACC_LDAP_AUTH"
+	// envLDAPKeytab and envLDAPRealm reach the kerberos block. Without them a
+	// Kerberos run can only use the ambient ticket cache, so the keytab and
+	// password credential sources were unreachable from the suite.
+	envLDAPKeytab = "AD_ACC_LDAP_KEYTAB"
+	envLDAPRealm  = "AD_ACC_LDAP_REALM"
 	// envLDAPTLS and envLDAPPort select StartTLS on 389 instead of LDAPS on
 	// 636. Everything after the handshake is the same code either way, which
 	// is why one lifecycle suite is enough to prove it.
@@ -178,11 +183,6 @@ func accLDAPBlock() string {
 	}
 	b.WriteString("    max_concurrency = 4\n")
 
-	// kerberos {} is the intended form — the operator runs kinit and the ticket
-	// is read from KRB5CCNAME, so the suite's configuration holds no credential.
-	// A simple bind is the fallback for a domain where the GSSAPI bind is
-	// refused; see LAB.md, which records that Windows Server 2025 rejects the
-	// token the current LDAP library produces.
 	switch accLDAPAuth() {
 	case "ntlm":
 		// The domain half of DOMAIN\\user is a separate attribute here, so a
@@ -200,7 +200,27 @@ func accLDAPBlock() string {
 		fmt.Fprintf(&b, "\n    simple {\n      username = %q\n      password = %q\n    }\n",
 			os.Getenv(envLDAPUsername), os.Getenv(envLDAPPassword))
 	default:
-		b.WriteString("\n    kerberos {}\n")
+		// kerberos {} with nothing in it is the intended form: the operator
+		// runs kinit and the ticket comes from KRB5CCNAME, so the suite's
+		// configuration holds no credential. A keytab or a password is the
+		// unattended form, for a runner where kinit was never installed.
+		var k strings.Builder
+		if v := os.Getenv(envLDAPKeytab); v != "" {
+			fmt.Fprintf(&k, "      keytab = %q\n", v)
+		} else if v := os.Getenv(envLDAPPassword); v != "" {
+			fmt.Fprintf(&k, "      password = %q\n", v)
+		}
+		if k.Len() > 0 {
+			if v := os.Getenv(envLDAPUsername); v != "" {
+				fmt.Fprintf(&k, "      username = %q\n", v)
+			}
+			if v := os.Getenv(envLDAPRealm); v != "" {
+				fmt.Fprintf(&k, "      realm = %q\n", v)
+			}
+			fmt.Fprintf(&b, "\n    kerberos {\n%s    }\n", k.String())
+		} else {
+			b.WriteString("\n    kerberos {}\n")
+		}
 	}
 	b.WriteString("  }\n")
 	return b.String()
@@ -512,7 +532,16 @@ func accClient(t *testing.T) adcore.Directory {
 				Password: adcore.NewSecret(os.Getenv(envLDAPPassword)),
 			}
 		default:
-			cfg.Kerberos = &adldap.KerberosAuth{}
+			k := &adldap.KerberosAuth{
+				Username: os.Getenv(envLDAPUsername),
+				Realm:    os.Getenv(envLDAPRealm),
+			}
+			if v := os.Getenv(envLDAPKeytab); v != "" {
+				k.Keytab = v
+			} else if v := os.Getenv(envLDAPPassword); v != "" {
+				k.Password = adcore.NewSecret(v)
+			}
+			cfg.Kerberos = k
 		}
 		client, err := adldap.New(context.Background(), cfg)
 		if err != nil {

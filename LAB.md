@@ -561,6 +561,78 @@ LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
   KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap PATTERN='TestAccOULifecycle'
 ```
 
+### Channel binding: exercised against a hardened DC, 2026-09-22
+
+`s-server1` was reconfigured through the run — `LdapEnforceChannelBinding` set
+to 0, 1 and 2 in turn (`scripts/lab/15-set-channel-binding.ps1`, which writes
+the DWord under `NTDS\Parameters` and restarts NTDS so it takes effect), with
+every Kerberos credential source (ticket cache and supplied password) run
+against every value. The policy was restored to 0 — the lab's original state —
+when the run finished.
+
+```bash
+make lab-ca-cert
+make lab-acc-ldap-krb-matrix PATTERN=TestAccOULifecycle
+```
+
+Six-cell result, each confirmed against a settled DC (NTDS/KDC/Netlogon
+`Running`, not mid-restart):
+
+| `LdapEnforceChannelBinding` | `kerberos` (ticket cache) | `kerberos-password` |
+|---|---|---|
+| 0 (never) | PASS | PASS |
+| 1 (when supported) | PASS | PASS |
+| 2 (always) | PASS | PASS |
+
+All six pass. **`KERB_AP_OPTIONS_CBT` turned out not to be needed** — the spec
+recorded it as unverified, and this run settles it: `apOptions()` in
+`go-adldap/internal/conn/bind_krb.go` was left unchanged
+(`APOptionMutualRequired` only), and the ticket-cache cell binds cleanly at
+both 1 and 2 without it. The `tls-server-end-point` channel-binding token every
+Kerberos bind now carries is sufficient on its own.
+
+`LAB_LDAP_AUTH=ntlm` was refused at `LdapEnforceChannelBinding=2`, exactly as
+predicted from the policy documentation above — `Azure/go-ntlmssp` cannot emit
+the channel-binding AV_PAIR the DC now requires:
+
+```
+New: transport failure: 80090346: LdapErr: DSID-0C0908CB, comment:
+AcceptSecurityContext error, data 80090346, v65f4
+```
+
+`simple` passed unaffected at `LdapEnforceChannelBinding=2` — the policy
+governs SASL (Kerberos/NTLM) binds only, not a simple bind:
+
+```bash
+make lab-channel-binding VALUE=2
+LAB_LDAP_AUTH=ntlm make lab-acc-ldap PATTERN=TestAccOULifecycle   # FAIL, data 80090346
+make lab-acc-ldap PATTERN=TestAccOULifecycle                       # simple, PASS
+make lab-channel-binding VALUE=0
+```
+
+Two things surfaced along the way, both fixed in this run rather than left for
+later:
+
+1. **`accClient` (the destroy-check helper in `acc_test.go`) still built a bare
+   `kerberos {}` client** regardless of which credential source the run under
+   test actually used, so a `kerberos-password`/`kerberos-keytab` cell's
+   teardown fell back to the (absent) ambient ticket cache and failed there
+   even though the provider's own bind had succeeded. It now mirrors
+   `accLDAPBlock`'s credential selection.
+2. **`Restart-Service -Name NTDS -Force` returns before the DC is fully ready
+   to serve.** A restart issued shortly after a previous one (the matrix
+   restarts NTDS three times in quick succession) has a real chance of leaving
+   Kerberos AS/TGS exchanges — and once, the SSH session itself — answering
+   `KDC_ERR_SVC_UNAVAILABLE` or refusing the connection for a few seconds.
+   Both automated `make lab-acc-ldap-krb-matrix` attempts here hit it once
+   each (a different cell each time) and aborted before the loop's own
+   `VALUE=0` restore ran, though the policy was independently confirmed back
+   at 0 afterward either way. The table above reflects every cell reconfirmed
+   individually against a settled DC, not a single unattended pass. No settle
+   delay was added to `lab-channel-binding` or the matrix target, since
+   neither was in scope here — this is recorded as an open runbook gap, not a
+   channel-binding defect.
+
 ### Still unexercised
 
 - **`ModifyDN` on the wire.** The in-process LDAP server used in CI cannot serve
@@ -571,8 +643,6 @@ LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
   which Windows does not have; a Windows operator uses `ldap.simple` or
   `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
   it is its own piece of work.
-- **A domain that enforces channel binding.** This lab does not, so the NTLM
-  refusal is documented from the policy rather than observed.
 
 ### Running it
 
