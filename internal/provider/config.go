@@ -620,6 +620,7 @@ type ldapSimpleModel struct {
 type kerberosModel struct {
 	CCachePath   types.String `tfsdk:"ccache_path"`
 	Keytab       types.String `tfsdk:"keytab"`
+	Password     types.String `tfsdk:"password"`
 	Username     types.String `tfsdk:"username"`
 	Realm        types.String `tfsdk:"realm"`
 	Krb5ConfPath types.String `tfsdk:"krb5_conf_path"`
@@ -656,14 +657,26 @@ func resolveLDAP(m ldapModel, getenv func(string) string, diags *diag.Diagnostic
 			Password: adcore.NewSecret(str(m.Simple.Password, getenv, "AD_LDAP_PASSWORD")),
 		}
 	case m.Kerberos != nil:
-		cfg.Kerberos = &adldap.KerberosAuth{
-			CCachePath:   str(m.Kerberos.CCachePath, getenv, "KRB5CCNAME"),
+		kerb := &adldap.KerberosAuth{
 			Keytab:       str(m.Kerberos.Keytab, getenv, "AD_LDAP_KEYTAB"),
+			Password:     adcore.NewSecret(str(m.Kerberos.Password, getenv, "AD_LDAP_PASSWORD")),
 			Username:     str(m.Kerberos.Username, getenv, "AD_LDAP_USERNAME"),
 			Realm:        str(m.Kerberos.Realm, getenv, "AD_LDAP_REALM"),
 			Krb5ConfPath: str(m.Kerberos.Krb5ConfPath, getenv, "KRB5_CONFIG"),
 			SPN:          str(m.Kerberos.SPN, getenv, "AD_LDAP_SPN"),
 		}
+		// An ambient KRB5CCNAME must not count as a second credential source
+		// when one was configured: Config.Validate rejects two, and a developer
+		// with a live ticket in their shell would see a configured password
+		// fail with a message about exclusivity. Configuration wins over the
+		// environment, so the ambient fallback applies only when nothing else
+		// was chosen.
+		if kerb.Keytab == "" && kerb.Password.IsZero() {
+			kerb.CCachePath = str(m.Kerberos.CCachePath, getenv, "KRB5CCNAME")
+		} else {
+			kerb.CCachePath = m.Kerberos.CCachePath.ValueString()
+		}
+		cfg.Kerberos = kerb
 	case m.NTLM != nil:
 		cfg.NTLM = &adldap.NTLMAuth{
 			Domain:   str(m.NTLM.Domain, getenv, "AD_LDAP_DOMAIN"),
