@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -54,6 +55,16 @@ const (
 	// Setting the username selects it; leaving it unset uses kerberos {}.
 	envLDAPUsername = "AD_ACC_LDAP_USERNAME"
 	envLDAPPassword = "AD_ACC_LDAP_PASSWORD"
+	// envLDAPAuth names the bind explicitly: "kerberos", "simple" or "ntlm".
+	// It exists so the ntlm path can be exercised at all — without it the only
+	// way to reach a password bind was simple, and ntlm was a schema option
+	// nobody had ever run.
+	envLDAPAuth = "AD_ACC_LDAP_AUTH"
+	// envLDAPTLS and envLDAPPort select StartTLS on 389 instead of LDAPS on
+	// 636. Everything after the handshake is the same code either way, which
+	// is why one lifecycle suite is enough to prove it.
+	envLDAPTLS  = "AD_ACC_LDAP_TLS"
+	envLDAPPort = "AD_ACC_LDAP_PORT"
 
 	// envMode selects the execution mode emitted into the transport block:
 	// "cold" or "warm". Empty leaves the attribute out, so the provider's own
@@ -155,7 +166,10 @@ func accLDAPBlock() string {
 	var b strings.Builder
 	b.WriteString("  ldap {\n")
 	fmt.Fprintf(&b, "    server = %q\n", os.Getenv(envLDAPServer))
-	b.WriteString("    tls = \"ldaps\"\n")
+	fmt.Fprintf(&b, "    tls = %q\n", accLDAPTLS())
+	if p := os.Getenv(envLDAPPort); p != "" {
+		fmt.Fprintf(&b, "    port = %s\n", p)
+	}
 	if ca := os.Getenv(envLDAPCAFile); ca != "" {
 		fmt.Fprintf(&b, "    ca_certificate_file = %q\n", ca)
 	}
@@ -169,14 +183,56 @@ func accLDAPBlock() string {
 	// A simple bind is the fallback for a domain where the GSSAPI bind is
 	// refused; see LAB.md, which records that Windows Server 2025 rejects the
 	// token the current LDAP library produces.
-	if u := os.Getenv(envLDAPUsername); u != "" {
+	switch accLDAPAuth() {
+	case "ntlm":
+		// The domain half of DOMAIN\\user is a separate attribute here, so a
+		// value carrying one is split rather than passed through — an NTLM bind
+		// with the domain still in the username is refused by the DC for a
+		// reason that names neither.
+		domain, user := splitNTLMUser(os.Getenv(envLDAPUsername))
+		b.WriteString("\n    ntlm {\n")
+		if domain != "" {
+			fmt.Fprintf(&b, "      domain   = %q\n", domain)
+		}
+		fmt.Fprintf(&b, "      username = %q\n      password = %q\n    }\n",
+			user, os.Getenv(envLDAPPassword))
+	case "simple":
 		fmt.Fprintf(&b, "\n    simple {\n      username = %q\n      password = %q\n    }\n",
-			u, os.Getenv(envLDAPPassword))
-	} else {
+			os.Getenv(envLDAPUsername), os.Getenv(envLDAPPassword))
+	default:
 		b.WriteString("\n    kerberos {}\n")
 	}
 	b.WriteString("  }\n")
 	return b.String()
+}
+
+// accLDAPTLS is "ldaps" unless AD_ACC_LDAP_TLS says otherwise.
+func accLDAPTLS() string {
+	if v := os.Getenv(envLDAPTLS); v != "" {
+		return strings.ToLower(v)
+	}
+	return "ldaps"
+}
+
+// accLDAPAuth names the bind. AD_ACC_LDAP_AUTH wins; otherwise a username
+// present means a simple bind, as it always did, and its absence means
+// kerberos.
+func accLDAPAuth() string {
+	if v := os.Getenv(envLDAPAuth); v != "" {
+		return strings.ToLower(v)
+	}
+	if os.Getenv(envLDAPUsername) != "" {
+		return "simple"
+	}
+	return "kerberos"
+}
+
+// splitNTLMUser separates DOMAIN\user, and accepts a bare user unchanged.
+func splitNTLMUser(v string) (domain, user string) {
+	if i := strings.IndexByte(v, '\\'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return "", v
 }
 
 // accTransportBlock renders the selected transport literally. Every branch emits
@@ -428,17 +484,34 @@ func accClient(t *testing.T) adcore.Directory {
 	t.Helper()
 
 	if accTransportName() == "ldap" {
+		tls := adldap.TLSLDAPS
+		if accLDAPTLS() == "starttls" {
+			tls = adldap.TLSStartTLS
+		}
 		cfg := adldap.Config{
 			Server:             os.Getenv(envLDAPServer),
-			TLS:                adldap.TLSLDAPS,
+			TLS:                tls,
 			CACertificateFile:  os.Getenv(envLDAPCAFile),
 			InsecureSkipVerify: strings.EqualFold(os.Getenv(envLDAPInsecure), "true"),
 		}
-		if u := os.Getenv(envLDAPUsername); u != "" {
-			cfg.Simple = &adldap.SimpleAuth{
-				Username: u, Password: adcore.NewSecret(os.Getenv(envLDAPPassword)),
+		if p := os.Getenv(envLDAPPort); p != "" {
+			if n, err := strconv.Atoi(p); err == nil {
+				cfg.Port = n
 			}
-		} else {
+		}
+		switch accLDAPAuth() {
+		case "ntlm":
+			domain, user := splitNTLMUser(os.Getenv(envLDAPUsername))
+			cfg.NTLM = &adldap.NTLMAuth{
+				Domain: domain, Username: user,
+				Password: adcore.NewSecret(os.Getenv(envLDAPPassword)),
+			}
+		case "simple":
+			cfg.Simple = &adldap.SimpleAuth{
+				Username: os.Getenv(envLDAPUsername),
+				Password: adcore.NewSecret(os.Getenv(envLDAPPassword)),
+			}
+		default:
 			cfg.Kerberos = &adldap.KerberosAuth{}
 		}
 		client, err := adldap.New(context.Background(), cfg)

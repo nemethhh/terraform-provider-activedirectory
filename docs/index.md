@@ -155,6 +155,15 @@ provider "activedirectory" {
 #
 # The domain block is not used here: the ldap block carries both the pinned
 # domain controller and its own authentication.
+#
+# Every resource this provider offers works over this connection, including the
+# ones backed by a security descriptor — activedirectory_access_rule, the
+# delegation templates, resource-based constrained delegation,
+# protected_from_accidental_deletion and can_change_password. There is no
+# subset.
+#
+# tls = "starttls" with port = 389 is the other form, and gets the same
+# certificate verification.
 # provider "activedirectory" {
 #   ldap {
 #     server              = "dc01.corp.local"
@@ -174,7 +183,11 @@ provider "activedirectory" {
 - `domain` (Block, Optional) Domain targeting. (see [below for nested schema](#nestedblock--domain))
 - `ldap` (Block, Optional) Connect straight to a domain controller over LDAPS, with no PowerShell, no RSAT and no Windows host anywhere — the provider binary and TCP 636 are the whole runtime requirement.
 
-Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform keeps every credential out of configuration.
+**Every resource this provider offers works over this connection**, including the ones backed by a security descriptor: `activedirectory_access_rule`, delegation templates, resource-based constrained delegation, `protected_from_accidental_deletion` and `can_change_password`.
+
+Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform keeps every credential out of configuration. That path reads a `FILE:` credential cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.
+
+`replication.force_sync` is supported here and only here: it is a directory operation on this connection, and the PowerShell connections run `Sync-ADObject` instead.
 
 Mutually exclusive with `local`, `ssh` and `winrm`. (see [below for nested schema](#nestedblock--ldap))
 - `local` (Block, Optional) Run `pwsh` on the machine Terraform itself runs on — a domain-joined Windows host. The spawned process inherits that machine's logon token, so Active Directory operations authenticate as whoever launched Terraform unless `domain.credential` says otherwise. Mutually exclusive with `ssh` and `winrm`; exactly one of the three is required. (see [below for nested schema](#nestedblock--local))
@@ -218,14 +231,14 @@ KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
 
 This is the Linux and macOS path. Windows keeps credentials in the LSA with no readable cache, so a Windows operator uses `simple` or `ntlm`. (see [below for nested schema](#nestedblock--ldap--kerberos))
 - `max_concurrency` (Number) Maximum pooled LDAP connections. Defaults to `4`.
-- `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.
+- `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also the Windows client's path, since the Kerberos one reads a `FILE:` credential cache Windows does not have.
 
-**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS. Use `simple` over LDAPS there. (see [below for nested schema](#nestedblock--ldap--ntlm))
+**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `simple` over LDAPS there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
 - `port` (Number) TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`.
 - `server` (String) The domain controller to connect to, as an FQDN. Pinned for the provider's lifetime: there is no discovery and no failover, because a write that lands on one DC and a read-back that hits another reports "not found". Falls back to `AD_LDAP_SERVER`.
 - `simple` (Block, Optional) Username and password bind. Safe only because this connection is always TLS-protected. (see [below for nested schema](#nestedblock--ldap--simple))
 - `timeout` (String) Per-operation deadline, as a Go duration (`"60s"`).
-- `tls` (String) `ldaps` (default, implicit TLS on 636) or `starttls` (upgrade on 389). Plain LDAP is deliberately not offered: a simple bind over it sends the password in clear text, and a domain with LDAP signing required refuses it anyway. Falls back to `AD_LDAP_TLS`.
+- `tls` (String) `ldaps` (default, implicit TLS on 636) or `starttls` (upgrade on 389). Both are exercised against a real domain, with certificate verification. Plain LDAP is deliberately not offered: a simple bind over it sends the password in clear text, and a domain with LDAP signing required refuses it anyway. Falls back to `AD_LDAP_TLS`.
 
 <a id="nestedblock--ldap--kerberos"></a>
 ### Nested Schema for `ldap.kerberos`
@@ -276,7 +289,7 @@ Optional:
 
 Optional:
 
-- `force_sync` (Boolean) Issue Sync-ADObject before polling. Defaults to `true`; passive replication can legitimately take 15 minutes, which presents as a hang.
+- `force_sync` (Boolean) Issue Sync-ADObject before polling. Defaults to `true`; passive replication can legitimately take 15 minutes, which presents as a hang. Supported on the `ldap` connection, where it is a directory operation rather than a cmdlet.
 - `poll_interval` (String) Interval between checks. Defaults to `2s`.
 - `targets` (List of String) Domain controllers to wait for, or ["all"].
 - `timeout` (String) How long to wait. Defaults to `60s`.

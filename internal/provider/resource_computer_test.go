@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
+	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
@@ -15,10 +16,18 @@ import (
 // name past the 15-character NetBIOS warn threshold, and import by
 // objectGUID.
 func TestComputerLifecycleAgainstTheFake(t *testing.T) {
-	dir := fake.NewDirectory()
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps:                    computerLifecycleSteps(fakeSuiteEnv()),
+	t.Run("pwsh", func(t *testing.T) {
+		dir := fake.NewDirectory()
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    computerLifecycleSteps(fakeSuiteEnv()),
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			Steps:                    computerLifecycleSteps(fakeSuiteEnv()),
+		})
 	})
 }
 

@@ -245,28 +245,108 @@ Two topologies are supported and were both exercised:
 
 ## Native LDAP backend — validation status
 
-**Validated 2026-09-22** against `corp.local` on the rebuilt lab (`s-server1`,
-Windows Server 2025), over LDAPS with certificate verification and a Kerberos
-ticket. No password anywhere in the run.
+**Parity, validated 2026-09-22 (Phase 5)** against `corp.local` on the rebuilt
+lab (`s-server1`, Windows Server 2025), over LDAPS with certificate
+verification and a Kerberos ticket. No password anywhere in the run.
 
 ```
-PASS 42   FAIL 6   SKIP 55
+PASS 52   FAIL 0   SKIP 55
 auth: kerberos (ticket in FILE:/tmp/krb5cc_tf)
 ```
 
-Every one of the six failures is a capability this backend has not implemented,
-each refused by name rather than silently ignored:
+**No suite is refused for a missing capability.** Every resource the provider
+offers — OUs, groups, users, computers, gMSAs, membership, passwords, access
+rules, delegation templates, search, import, the tombstone probe and all three
+replication suites including `force_sync` — works over LDAPS with no
+PowerShell, no RSAT and no Windows host.
 
-| Failing suite | Refusal |
-|---|---|
-| `TestAccComputerLifecycle`, `TestAccComputerDataSource`, `TestAccComputersDataSource` | `Computer.Create not supported by this endpoint` |
-| `TestAccGMSALifecycle`, `TestAccGMSADataSource` | `GMSA.Create not supported by this endpoint` |
-| `TestAccAccessRuleLifecycle` | `Schema.Resolve not supported by this endpoint` |
+The Phase 4 counts on the way here were PASS 47 / FAIL 1 / SKIP 55, the one
+failure being `TestAccAccessRuleLifecycle` before Phase 5 implemented ACLs and
+schema resolution.
 
-Computers, gMSAs and ACLs are Phase 4–6 scope. Everything else the provider
-offers — OUs, groups, users, membership, passwords, search, import, the
-tombstone probe and all three replication suites including `force_sync` — passes
-over LDAP.
+### What the lab runs found
+
+Four things, none of which any in-process test could have found.
+
+**1. `msDS-ManagedPasswordInterval` is mandatory, not optional.** It is the
+`msDS-GroupManagedServiceAccount` class's only `systemMustContain` attribute, so
+a raw LDAP add that omits it is refused with
+
+```
+0000207C: UpdErr: DSID-03151EA8, problem 6002 (OBJ_CLASS_VIOLATION), data 0
+```
+
+The LDAP backend wrote it only when the caller named one, which passed against
+the in-process server and split on the lab exactly along that line:
+`TestAccGMSALifecycle` (interval 45 in configuration) passed,
+`TestAccGMSADataSource` (no interval) failed. It is now written
+unconditionally, defaulting to 30 — AD's own default, and the value
+`go-adpwsh`'s `gmsa_create.ps1` already wrote for the same reason, with the same
+comment. Regression-tested on the wire value in `go-adldap`.
+
+**2. The extended-right attribute is `rightsGuid`, not `rightsGUID`.**
+`Schema.Resolve` asked for the wrong spelling and reported `"Reset Password"
+has no rightsGuid`. AD answers the *search* regardless — an LDAP attribute
+description is case-insensitive — but keys the entry with the schema's own
+spelling, so the exact map lookup missed.
+
+**3. `conn.Entry.First` was case-sensitive.** That is what turned (2) from a
+typo into a silent "the object does not have this attribute". It now falls back
+to a case-insensitive scan, per RFC 4512 2.5. Every attribute constant in
+`go-adldap` that differs from the schema by a letter's case was a latent
+instance of the same bug.
+
+**4. The `SeEnableDelegationPrivilege` fixture did not survive the lab
+rebuild.** `TestAccComputerDataSource` and `TestAccComputerLifecycle` step 3
+failed with
+
+```
+00000522: SecErr: DSID-031A1248, problem 4003 (INSUFF_ACCESS_RIGHTS), data 0
+```
+
+on exactly the writes that set `trusted_for_delegation`,
+`allowed_to_delegate_to` or `principals_allowed_to_delegate_to_account`.
+`secedit` on the DC showed `SeEnableDelegationPrivilege = *S-1-5-32-544` alone —
+`svc_tfacc` was missing. This is a lab fixture, not a backend defect: the same
+writes fail the same way over a PowerShell connection. Fixed by
+`make lab-grant-deleg` **and a reboot of `s-server1`** — the privilege reaches
+LSASS only at boot, which is why `scripts/lab/grant-svc-deleg-priv.ps1` ends by
+saying so. **Re-run it after any lab rebuild**, before concluding that a
+delegation failure is the provider's.
+
+### The WinRM/PSRP cells are blocked on missing lab fixtures
+
+`make lab-acc-winrm-7` currently fails for every suite at provider `Configure`:
+
+```
+handshake failed: negotiate authentication rejected:
+server returned 401 with bare Negotiate after receiving our token
+```
+
+**This is not a regression.** The identical failure reproduces from a pristine
+`main` worktree, and that cell runs with `GOWORK=off` — it builds against the
+released `go-adcore v0.1.0` / `go-adpwsh v0.22.0`, so none of the Phase 4–6
+library work is even in the binary. The failure is before any AD operation.
+
+The whole PSRP fixture layer was never re-provisioned after the 2026-09-21
+rebuild. On `s-client1`:
+
+- `Get-PSSessionConfiguration` lists only the four stock endpoints —
+  **`AdObjects51` and `AdObjects7` are gone**.
+- the local group **Remote Management Users is empty**.
+- in AD, the group **`CORP\AD-Terraform-Objects` does not exist**.
+
+Restoring it is host build-out, not lab automation: `scripts/host/New-AdProviderEndpoint.ps1`
+is run by a human administrator on the management host, once per capability
+tier, from the PowerShell engine the endpoint is to use (Windows PowerShell 5.1
+for `AdObjects51`, PowerShell 7 for `AdObjects7`). The order is: create
+`AD-Terraform-Objects` and add `svc_tfacc`; run the script twice on `s-client1`
+with `-TierName AdObjects51`/`AdObjects7 -GrantTo 'CORP\AD-Terraform-Objects'`;
+add the group to **Remote Management Users**. A ticket obtained before the group
+membership exists does not carry it, so `kinit` again afterwards.
+
+Until that is done the PowerShell backend can only be exercised over `local`
+and `ssh`.
 
 ### Kerberos: fixed, and it was never the library
 
@@ -304,16 +384,111 @@ rebuilt per target host; an explicit `spn` still wins.
 
 All three are regression-tested in `go-adldap`. None needed a KDC to guard.
 
+### Close-out run, 2026-09-22
+
+The whole of Phases 4–6, re-run once at the end:
+
+| What | Result |
+|---|---|
+| `go test ./...` in `go-adcore`, `go-adldap`, `go-adpwsh` | green |
+| `make check` (build, vet, gofmt, terraform fmt, the fake-backed suites on **both** backends) | green |
+| `make lab-acc-ldap` against `corp.local` | **PASS 52 / FAIL 0 / SKIP 55** |
+| `go test -tags acc -run TestAccBackendsAgree` (the differential suite) | green, six classes |
+| `make lab-acc-ldap` with `LAB_LDAP_AUTH=ntlm` | green |
+| `make lab-acc-ldap` with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | green |
+| `make lab-acc-winrm-7` | **red — missing lab fixtures, not a regression** (see below) |
+
+The 55 skips are the e2e layer, which is a separately provisioned environment
+(`AD_E2E_CONTAINER`), plus the cells for transports this run did not select.
+
+### The cross-backend differential suite
+
+**Run 2026-09-22** against `corp.local`, comparing the two backends directly:
+one object of each class created through the LDAP backend and read back
+through both, with the models required to be identical
+(`go-adldap/acc_differential_test.go`, behind the `acc` tag and
+`AD_ACC_DIFFERENTIAL=1`). The PowerShell side reaches RSAT over SSH, since the
+WinRM endpoints are missing; the dialect and the cmdlets are the same either
+way.
+
+Classes compared: OU, group, user, computer, gMSA, and the DACL of a fresh OU.
+
+The first run found **three** real divergences, every one of which a user
+switching backends would have hit. All are fixed and the suite now passes on
+all six:
+
+| What differed | ldap said | pwsh said | Resolution |
+|---|---|---|---|
+| `Computer`/`GMSA` `SamAccountName` | `DIFFPC` | `DIFFPC$` | `go-adpwsh` strips the `$` in `model()`. The specs carry the un-suffixed base and the provider already stripped it on both paths, so no state a user holds changes. |
+| Rights covering `GENERIC_READ` | `[ListChildren ReadProperty ListObject ReadControl]` | `[GenericRead]` | `go-adldap`'s `RightsNames` now renders the .NET `ActiveDirectoryRights` composites, matching what the PowerShell side gets from .NET itself. Affected every inherited ACE on every object. |
+| Empty multi-valued fields | `nil` | `[]string{}` | `go-adpwsh` collapses an empty slice to nil. Reads identically either way; a different Go value is still a different answer. |
+
+The exclusion list is **empty**: no field is currently allowed to differ. An
+entry added to it needs a reason, because an exclusion without one is a bug
+being suppressed.
+
+### `origin/feat/psopenad-dialect`: superseded, to be deleted
+
+The branch (tip `145d428`) added a top-level `dialect` attribute so the
+PowerShell backend could drive AD through the PSOpenAD module instead of
+RSAT/ADWS — that is, reach a domain controller over raw LDAP while still
+running PowerShell to get there. It was parked pending the native backend.
+
+The native backend now does that job without the approximation: the `ldap`
+connection speaks LDAPS to a DC directly, needs no PowerShell, no RSAT and no
+Windows host, and as of the run above covers every resource. A second,
+PowerShell-mediated way to reach LDAP would be a third code path to keep green
+for a capability the provider already has, so the branch is **superseded and
+should be deleted**. Its SHA is recorded here, so the work is recoverable from
+the reflog or by pushing the SHA again if the decision is ever revisited.
+
+The delete itself is a remote mutation and is listed with the other pending
+pushes rather than done silently.
+
+### NTLM and StartTLS: both exercised 2026-09-22
+
+Both were offered in the schema and had never been run, so a user could select a
+path nobody had tested. Both now pass `TestAccOULifecycle` against `corp.local`.
+
+**NTLM works on this domain controller — and the answer depends entirely on its
+policy.** `s-server1` has:
+
+```
+LdapEnforceChannelBinding = <not set>     # i.e. 0, never
+LDAPServerIntegrity       = 1             # signing negotiated, not required
+```
+
+The LDAP library sends no channel-binding token, so where
+`LdapEnforceChannelBinding = 2` this bind is rejected even over TLS, with
+`data 80090346` and no mention of channel binding anywhere in the message. The
+`ldap.ntlm {}` schema documentation says so and points at `simple` over LDAPS.
+**Re-read the policy before reading a passing NTLM run as a general result.**
+
+```bash
+LAB_LDAP_AUTH=ntlm make lab-acc-ldap PATTERN='TestAccOULifecycle'
+```
+
+**StartTLS on 389 works**, with the same certificate verification LDAPS gets.
+Everything after the handshake is shared code, so one lifecycle suite is the
+whole proof:
+
+```bash
+LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
+  KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap PATTERN='TestAccOULifecycle'
+```
+
 ### Still unexercised
 
-- **NTLM.** Expected to fail where `LdapEnforceChannelBinding = 2`; never run.
-- **StartTLS on 389.** Only LDAPS 636 has been exercised.
 - **`ModifyDN` on the wire.** The in-process LDAP server used in CI cannot serve
   it — gldap rejects application 12 outright — so rename and move are covered
   above the go-ldap adapter but the request bytes have still never crossed a
-  socket. The lab run above does exercise them for real.
+  socket in CI. The lab runs above do exercise them for real.
 - **Windows as the client.** The Kerberos path reads a FILE credential cache,
-  which Windows does not have; a Windows operator uses `ldap.simple`.
+  which Windows does not have; a Windows operator uses `ldap.simple` or
+  `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
+  it is its own piece of work.
+- **A domain that enforces channel binding.** This lab does not, so the NTLM
+  refusal is documented from the policy rather than observed.
 
 ### Running it
 

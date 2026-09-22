@@ -280,9 +280,17 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 				MarkdownDescription: "Connect straight to a domain controller over LDAPS, with no " +
 					"PowerShell, no RSAT and no Windows host anywhere — the provider binary and TCP 636 " +
 					"are the whole runtime requirement.\n\n" +
+					"**Every resource this provider offers works over this connection**, including the " +
+					"ones backed by a security descriptor: `activedirectory_access_rule`, delegation " +
+					"templates, resource-based constrained delegation, " +
+					"`protected_from_accidental_deletion` and `can_change_password`.\n\n" +
 					"Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no " +
 					"attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform " +
-					"keeps every credential out of configuration.\n\n" +
+					"keeps every credential out of configuration. That path reads a `FILE:` credential " +
+					"cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.\n\n" +
+					"`replication.force_sync` is supported here and only here: it is a directory " +
+					"operation on this connection, and the PowerShell connections run `Sync-ADObject` " +
+					"instead.\n\n" +
 					"Mutually exclusive with `local`, `ssh` and `winrm`.",
 				Attributes: map[string]schema.Attribute{
 					"server": schema.StringAttribute{Optional: true,
@@ -294,7 +302,8 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 						MarkdownDescription: "TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`."},
 					"tls": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "`ldaps` (default, implicit TLS on 636) or `starttls` (upgrade " +
-							"on 389). Plain LDAP is deliberately not offered: a simple bind over it sends the " +
+							"on 389). Both are exercised against a real domain, with certificate verification. " +
+							"Plain LDAP is deliberately not offered: a simple bind over it sends the " +
 							"password in clear text, and a domain with LDAP signing required refuses it anyway. " +
 							"Falls back to `AD_LDAP_TLS`."},
 					"ca_certificate_file": schema.StringAttribute{Optional: true,
@@ -349,10 +358,13 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					},
 					"ntlm": schema.SingleNestedBlock{
 						MarkdownDescription: "Bind with NTLM, for a caller that cannot obtain a Kerberos " +
-							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.\n\n" +
+							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also " +
+							"the Windows client's path, since the Kerberos one reads a `FILE:` credential " +
+							"cache Windows does not have.\n\n" +
 							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
-							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS. Use " +
-							"`simple` over LDAPS there.",
+							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with " +
+							"`data 80090346` and no mention of channel binding. Use `simple` over LDAPS " +
+							"there. Verified working against a domain that does not enforce it.",
 						Attributes: map[string]schema.Attribute{
 							"domain": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`."},
@@ -396,7 +408,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 						MarkdownDescription: `Domain controllers to wait for, or ["all"].`},
 					"force_sync": schema.BoolAttribute{Optional: true,
 						MarkdownDescription: "Issue Sync-ADObject before polling. Defaults to `true`; " +
-							"passive replication can legitimately take 15 minutes, which presents as a hang."},
+							"passive replication can legitimately take 15 minutes, which presents as a hang. " +
+							"Supported on the `ldap` connection, where it is a directory operation rather " +
+							"than a cmdlet."},
 					"timeout": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "How long to wait. Defaults to `60s`."},
 					"poll_interval": schema.StringAttribute{Optional: true,

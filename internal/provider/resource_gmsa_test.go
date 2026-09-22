@@ -5,6 +5,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
+	"github.com/nemethhh/go-adcore/adcorefake"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
 )
 
@@ -14,10 +15,18 @@ import (
 // dns_hostname changed, kerberos_encryption_type grown, SPNs replaced),
 // rename plus move in one step, and import by objectGUID.
 func TestGMSALifecycleAgainstTheFake(t *testing.T) {
-	dir := fake.NewDirectory()
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps:                    gmsaLifecycleSteps(fakeSuiteEnv()),
+	t.Run("pwsh", func(t *testing.T) {
+		dir := fake.NewDirectory()
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(dir),
+			Steps:                    gmsaLifecycleSteps(fakeSuiteEnv()),
+		})
+	})
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			Steps:                    gmsaLifecycleSteps(fakeSuiteEnv()),
+		})
 	})
 }
 

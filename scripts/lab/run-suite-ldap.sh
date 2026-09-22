@@ -21,6 +21,11 @@ ca=${LAB_CA_FILE:-$HOME/.config/ad-lab/corp-lab-ca.pem}
 
 export TF_ACC=1
 export AD_ACC_CONNECTION=ldap
+# The TLS form and port default to LDAPS on 636; set LAB_LDAP_TLS=starttls with
+# LAB_LDAP_PORT=389 to exercise the StartTLS handshake instead. Everything after
+# the handshake is the same code, so one lifecycle suite proves it.
+export AD_ACC_LDAP_TLS=${LAB_LDAP_TLS:-ldaps}
+[[ -n ${LAB_LDAP_PORT:-} ]] && export AD_ACC_LDAP_PORT=$LAB_LDAP_PORT
 export AD_ACC_LDAP_SERVER=${LAB_LDAP_SERVER:-$dc}
 export AD_ACC_SERVER=$dc
 export AD_ACC_SECOND_DC=$dc2
@@ -39,7 +44,18 @@ fi
 # The GSSAPI bind is refused by Windows Server 2025 (see LAB.md), so a simple
 # bind is used when no ticket is present. KRB5CCNAME with a live ticket selects
 # the Kerberos path instead.
-if [[ -n ${KRB5CCNAME:-} ]] && klist -s 2>/dev/null; then
+# LAB_LDAP_AUTH names the bind explicitly: kerberos (the default when a ticket
+# is present), simple, or ntlm. It exists so the ntlm path can be run at all —
+# it is offered in the schema and, until this, had never been exercised.
+if [[ ${LAB_LDAP_AUTH:-} == ntlm ]]; then
+  AD_ACC_LDAP_AUTH=ntlm
+  AD_ACC_LDAP_USERNAME=$(cred svc.username)
+  AD_ACC_LDAP_PASSWORD=$(cred svc.password)
+  [[ -n $AD_ACC_LDAP_USERNAME && -n $AD_ACC_LDAP_PASSWORD ]] || {
+    echo "svc.username/svc.password missing from $creds" >&2; exit 1; }
+  export AD_ACC_LDAP_AUTH AD_ACC_LDAP_USERNAME AD_ACC_LDAP_PASSWORD
+  echo "auth: ntlm as $AD_ACC_LDAP_USERNAME"
+elif [[ -n ${KRB5CCNAME:-} ]] && klist -s 2>/dev/null; then
   echo "auth: kerberos (ticket in $KRB5CCNAME)"
 else
   AD_ACC_LDAP_USERNAME=$(cred svc.username)
@@ -52,5 +68,5 @@ else
   echo "auth: simple as $AD_ACC_LDAP_USERNAME"
 fi
 
-echo "server=$AD_ACC_LDAP_SERVER container=$AD_ACC_CONTAINER pattern=$pattern"
+echo "server=$AD_ACC_LDAP_SERVER tls=$AD_ACC_LDAP_TLS${AD_ACC_LDAP_PORT:+:$AD_ACC_LDAP_PORT} container=$AD_ACC_CONTAINER pattern=$pattern"
 exec go test ./internal/provider/ -run "$pattern" -v -count=1 -timeout "${minutes}m"

@@ -48,10 +48,27 @@ block run against the wrong identity, or over the wrong protocol. Note that
 `ldap` is not a transport — the `mode` (warm/cold) axis describes how `pwsh` is
 driven, and that path runs none.
 
-The `ldap` connection currently manages **organizational units, groups and
-users**. gMSAs, computers, and everything needing a security descriptor still
-require a PowerShell connection; `can_change_password = false` on the LDAP path
-is refused as unsupported rather than silently ignored.
+The `ldap` connection manages **every resource this provider offers** — OUs,
+groups, users, computers, gMSAs, membership, passwords and access rules,
+including everything backed by a security descriptor (ACLs, delegation
+templates, RBCD, `protected_from_accidental_deletion`, `can_change_password`).
+It refuses nothing.
+
+**A new resource is not done until it works on both backends.** The two are
+held to one contract and one set of assertions; a capability only one of them
+has is a split the provider cannot express, because a resource cannot tell
+which backend configured it. Every `Test*AgainstTheFake` suite therefore runs
+its step builder twice — a `pwsh` sub-test against `fake.Directory` and a
+`directory` sub-test against `adcorefake` — so a divergence surfaces in CI
+rather than on a real domain.
+
+**What proves the two agree is `go-adldap/acc_differential_test.go`**, behind
+the `acc` tag and `AD_ACC_DIFFERENTIAL=1`. It creates one object of each class,
+reads it back through *both* backends, and requires the models to be identical.
+The conformance suite proves each backend satisfies the contract; only this
+proves they produce the same answer. Its first run found three real
+divergences — see LAB.md. When a model field is changed in either library, run
+it.
 
 **When a task needs new AD behaviour, the change belongs in the library, not
 here.** The library's operation set is deliberately narrow: as of `go-adpwsh`
