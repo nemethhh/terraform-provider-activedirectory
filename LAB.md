@@ -377,10 +377,12 @@ depends on the one before:
 
 Two things that are *not* part of this, and cost time before they were ruled
 out: the clocks (below) and, separately, a nil-interface panic in the provider's
-own `directory` sub-tests. These cells run `GOWORK=off` against the released
-libraries, where `adcorefake` leaves `Computer`, `ServiceAccount`, `ACL` and
+own `directory` sub-tests. Those cells run `GOWORK=off` against the *released*
+libraries, and `adcorefake v0.1.0` left `Computer`, `ServiceAccount`, `ACL` and
 `Schema` nil; the sub-tests now skip on a missing class instead of taking the
-whole test binary down with a SIGSEGV and losing every suite after it.
+whole test binary down with a SIGSEGV and losing every suite after it. With
+`go-adcore v0.2.0` pinned they no longer skip — the guard is self-clearing, and
+that is what it is for.
 
 **Two corrections to an earlier version of this section.** *Remote Management
 Users is not needed*: each endpoint's SDDL grants local administrators plus the

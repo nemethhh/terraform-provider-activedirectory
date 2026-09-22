@@ -9,7 +9,7 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-log v0.11.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
-	github.com/nemethhh/go-adpwsh v0.22.0
+	github.com/nemethhh/go-adpwsh v0.23.0
 )
 
 require (
@@ -67,8 +67,8 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/nemethhh/go-adcore v0.1.0
-	github.com/nemethhh/go-adldap v0.1.0
+	github.com/nemethhh/go-adcore v0.2.0
+	github.com/nemethhh/go-adldap v0.4.0
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/pkg/sftp v1.13.11 // indirect
 	github.com/smnsjas/go-ntlm-cbt v0.0.0-20260107203125-46149984fac0 // indirect
