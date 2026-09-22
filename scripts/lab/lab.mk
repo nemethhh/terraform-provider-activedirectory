@@ -471,8 +471,13 @@ lab-channel-binding:
 # DC to VALUE=0 every time. Without it, the unconditional restore this recipe
 # used to put only at the bottom never ran on the early-exit path, which is
 # exactly the case a failed `lab-channel-binding` call takes.
+#
+# The restore is the operation most likely to fail (the documented failure
+# mode is an NTDS restart race), so its own failure is printed to stderr with
+# the manual command to re-run, rather than redirected away: silencing it
+# would leave the DC hardened with only the test loop's result reported.
 lab-acc-ldap-krb-matrix:
-	@trap '$(MAKE) --no-print-directory lab-channel-binding VALUE=0 >/dev/null 2>&1' EXIT; \
+	@trap '$(MAKE) --no-print-directory lab-channel-binding VALUE=0 >/dev/null 2>&1 || { echo >&2; echo "=== FATAL: the channel-binding restore to VALUE=0 FAILED ===" >&2; echo "$(or $(HOST),$(LAB_DC)) may still be hardened at a non-zero LdapEnforceChannelBinding. Run this by hand now:" >&2; echo "    make lab-channel-binding VALUE=0 HOST=$(or $(HOST),$(LAB_DC))" >&2; echo >&2; }' EXIT; \
 	fail=0; results=''; \
 	for v in 0 1 2; do \
 	  $(MAKE) --no-print-directory lab-channel-binding VALUE=$$v >/dev/null || exit 1; \

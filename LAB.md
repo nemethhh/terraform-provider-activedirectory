@@ -577,9 +577,16 @@ below. It has since been fixed with a `trap ... EXIT` so the restore now runs
 on every exit path, including the one this run hit twice.
 
 ```bash
+KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tfacc@CORP.LOCAL
 make lab-ca-cert
-make lab-acc-ldap-krb-matrix PATTERN=TestAccOULifecycle
+KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap-krb-matrix PATTERN=TestAccOULifecycle
 ```
+
+A ticket is required: the matrix's `kerberos` (ticket-cache) cells run
+`LAB_LDAP_AUTH=kerberos`, which — unlike the unset default — hard-exits if no
+ticket is present rather than silently falling back to a simple bind. Without
+`KRB5CCNAME` set, three of the six cells below fail immediately instead of
+reproducing.
 
 Six-cell result, each confirmed against a settled DC (NTDS/KDC/Netlogon
 `Running`, not mid-restart):
@@ -638,11 +645,16 @@ for later:
    the DC hardened at 1 or 2. The table above reflects every cell reconfirmed
    individually against a settled DC, not a single unattended pass; the policy
    was restored to 0 by hand both times this was hit. `lab-acc-ldap-krb-matrix`
-   now sets a `trap ... EXIT` as its first statement so the restore runs on
-   every exit path — normal completion, the early exit, or a signal — closing
-   that gap. No settle delay for the restart race itself was added, since that
-   was out of scope here; it is recorded as an open runbook gap, not a
-   channel-binding defect.
+   now sets a `trap ... EXIT` as its first statement so a restore is
+   *attempted* on every exit path — normal completion, the early exit, or a
+   signal. That does not guarantee the restore itself succeeds — the restart
+   race above is exactly what makes the restore the operation most likely to
+   fail — so the trap no longer redirects its output away: a failed restore
+   now prints an unmissable message to stderr naming the exact command to run
+   by hand, instead of leaving the run to report only the test loop's result
+   while the DC stays hardened. No settle delay for the restart race itself
+   was added, since that was out of scope here; it is recorded as an open
+   runbook gap, not a channel-binding defect.
 3. **The policy script's own readback was informational only.** Its header
    already said a run that silently tested the wrong policy is worse than one
    that failed, but nothing enforced that — a mismatch between the requested
@@ -661,6 +673,22 @@ for later:
   which Windows does not have; a Windows operator uses `ldap.simple` or
   `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
   it is its own piece of work.
+- **The keytab credential source was never run against a hardened DC.** The
+  channel-binding matrix above covers only `kerberos` (ticket cache) and
+  `kerberos-password`; `LAB_LDAP_AUTH=kerberos-keytab` needs a keytab fixture
+  the lab does not have and nothing here creates one, so it was left out of
+  `lab-acc-ldap-krb-matrix` rather than included as a skip that would have
+  recorded a pass. One of the three credential sources the feature ships is
+  therefore **not verified** against `LdapEnforceChannelBinding = 1` or `2` —
+  only reasoned to work the same way `kerberos-password` does, since both build
+  the same GSS-API token.
+- **Channel binding was never exercised over StartTLS.** `run-suite-ldap.sh`
+  defaults to LDAPS, and every cell in the table above ran on 636; StartTLS was
+  not part of this matrix. The token path is **reasoned to be fine** — go-ldap
+  swaps in a `*tls.Conn` on the same connection, so `TLSConnectionState()`
+  still returns `ok` and the certificate the token is bound to is the same one
+  — but that is reasoning, not evidence, and only the LDAPS row above is a
+  verified result.
 
 ### Running it
 

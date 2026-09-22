@@ -345,10 +345,15 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"`LdapEnforceChannelBinding` set to `2`, the same as `simple`.",
 						Attributes: map[string]schema.Attribute{
 							"ccache_path": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Credential cache file. Falls back to `KRB5CCNAME`."},
+								MarkdownDescription: "Credential cache file. Falls back to the ambient " +
+									"`KRB5CCNAME`, but only when this block sets none of `ccache_path`, " +
+									"`keytab` or `password` — a credential named here always wins over the " +
+									"environment, and `KRB5CCNAME` in turn wins over an ambient " +
+									"`AD_LDAP_KEYTAB` or `AD_LDAP_PASSWORD`."},
 							"keytab": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Keytab for unattended authentication, for CI with no " +
-									"`kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`."},
+									"`kinit`. Requires `username`; `realm` defaults from `server`'s domain " +
+									"suffix. Falls back to `AD_LDAP_KEYTAB`."},
 							"password": schema.StringAttribute{Optional: true, Sensitive: true,
 								// No AlsoRequires(username) here: that validator reads only req.Config, never
 								// the environment-resolved value, and username falls back to AD_LDAP_USERNAME
@@ -373,7 +378,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"username": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`."},
 							"realm": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Kerberos realm, with `keytab`. Falls back to `AD_LDAP_REALM`."},
+								MarkdownDescription: "Kerberos realm, used with `keytab` or `password`. " +
+									"Defaults from `server`'s domain suffix, uppercased, when unset. Falls " +
+									"back to `AD_LDAP_REALM`."},
 							"krb5_conf_path": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`."},
 							"spn": schema.StringAttribute{Optional: true,

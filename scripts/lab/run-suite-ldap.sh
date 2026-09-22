@@ -72,8 +72,14 @@ kerberos-keytab)
   unset KRB5CCNAME
   AD_ACC_LDAP_AUTH=kerberos
   AD_ACC_LDAP_KEYTAB=${LAB_KEYTAB:-$HOME/.config/ad-lab/svc.keytab}
+  # A distinct non-zero exit, with an unmissable stdout marker: exit 0 here
+  # would let a harness that only checks the exit code record a skip as a
+  # pass — the same vacuous-green mechanism deliberately removed from
+  # lab-acc-ldap-krb-matrix (LAB.md, "Still unexercised").
   [[ -s $AD_ACC_LDAP_KEYTAB ]] || {
-    echo "keytab missing at $AD_ACC_LDAP_KEYTAB; skipping" >&2; exit 0; }
+    echo "SKIP: keytab missing at $AD_ACC_LDAP_KEYTAB"
+    echo "SKIP: keytab missing at $AD_ACC_LDAP_KEYTAB; skipping" >&2
+    exit 3; }
   AD_ACC_LDAP_USERNAME=$(cred svc.username)
   AD_ACC_LDAP_USERNAME="${AD_ACC_LDAP_USERNAME#*\\}"
   AD_ACC_LDAP_REALM=${LAB_REALM:-CORP.LOCAL}
