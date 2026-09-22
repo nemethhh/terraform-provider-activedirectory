@@ -19,8 +19,8 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
-	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
+	github.com/oiweiwei/gokrb5.fork/v9 v9.0.6 // indirect
 )
 
 replace github.com/go-krb5/krb5 => github.com/smnsjas/krb5 v0.0.0-20260129173902-49e50274bc95
@@ -68,7 +68,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/nemethhh/go-adcore v0.2.0
-	github.com/nemethhh/go-adldap v0.4.0
+	github.com/nemethhh/go-adldap v0.5.0
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/pkg/sftp v1.13.11 // indirect
 	github.com/smnsjas/go-ntlm-cbt v0.0.0-20260107203125-46149984fac0 // indirect
