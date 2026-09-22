@@ -229,7 +229,7 @@ Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the default
 KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
 ```
 
-This is the Linux and macOS path. `username` and `password` is the credential form for a runner where `kinit` was never installed at all — CI, a scratch container. Every Kerberos bind now carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
+This is the Linux and macOS path. `username` and `password` are the credential form for a runner where `kinit` was never installed at all — CI, a scratch container. Every Kerberos bind now carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
 - `max_concurrency` (Number) Maximum pooled LDAP connections. Defaults to `4`.
 - `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also the Windows client's path, since the Kerberos one reads a `FILE:` credential cache Windows does not have.
 
@@ -248,7 +248,7 @@ Optional:
 - `ccache_path` (String) Credential cache file. Falls back to `KRB5CCNAME`.
 - `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`.
 - `krb5_conf_path` (String) Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`.
-- `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.
+- `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`, set in configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since the environment fallback means only the resolved value can be judged, but `Config.Validate` rejects the pair at connect time. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.
 - `realm` (String) Kerberos realm, with `keytab`. Falls back to `AD_LDAP_REALM`.
 - `spn` (String) Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`.
 - `username` (String) Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`.

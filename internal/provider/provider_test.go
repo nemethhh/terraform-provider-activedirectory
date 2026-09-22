@@ -288,6 +288,40 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
+// ldap.kerberos.password has no AlsoRequires(username) validator: that
+// validator only sees req.Config, and username here falls back to
+// AD_LDAP_USERNAME like every other credential attribute in this provider.
+// This config sets password in HCL and leaves username to the environment —
+// exactly what the lab runners do — and must reach Configure rather than
+// being rejected at plan time.
+func TestConfigureAcceptsKerberosPasswordWithEnvironmentUsername(t *testing.T) {
+	t.Setenv("AD_LDAP_USERNAME", "svc_tf")
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  ldap {
+    server               = "127.0.0.1"
+    port                 = 1
+    tls                  = "ldaps"
+    insecure_skip_verify = true
+
+    kerberos {
+      password = "x"
+    }
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`Cannot configure the Active Directory client`),
+		}},
+	})
+}
+
 // domain.credential is the identity the cmdlets run as; the ldap block
 // authenticates itself. Silently ignoring one of them would leave an operator
 // believing a credential is in use when it is not.

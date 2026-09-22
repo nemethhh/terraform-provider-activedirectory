@@ -338,7 +338,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the " +
 							"ticket into a file:\n\n" +
 							"```sh\nKRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL\n```\n\n" +
-							"This is the Linux and macOS path. `username` and `password` is the credential " +
+							"This is the Linux and macOS path. `username` and `password` are the credential " +
 							"form for a runner where `kinit` was never installed at all — CI, a scratch " +
 							"container. Every Kerberos bind now carries a `tls-server-end-point` channel-" +
 							"binding token, so this connection authenticates against a domain with " +
@@ -350,8 +350,17 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 								MarkdownDescription: "Keytab for unattended authentication, for CI with no " +
 									"`kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`."},
 							"password": schema.StringAttribute{Optional: true, Sensitive: true,
+								// No AlsoRequires(username) here: that validator reads only req.Config, never
+								// the environment-resolved value, and username falls back to AD_LDAP_USERNAME
+								// like every other credential attribute in this provider. Enforcing the pairing
+								// here would reject a config that sets password in HCL and username via the
+								// environment, which is valid and exactly what the lab runners do. Config.Validate
+								// sees the resolved values and already enforces this pairing at connect time.
 								MarkdownDescription: "Password for an unattended bind where `kinit` was " +
-									"never installed — CI, a scratch container. Requires `username`. " +
+									"never installed — CI, a scratch container. Requires `username`, set in " +
+									"configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since " +
+									"the environment fallback means only the resolved value can be judged, but " +
+									"`Config.Validate` rejects the pair at connect time. " +
 									"Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` " +
 									"and no `/etc/krb5.conf`, a minimal configuration is synthesized " +
 									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.",
@@ -359,9 +368,6 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 									stringvalidator.ConflictsWith(
 										path.MatchRelative().AtParent().AtName("keytab"),
 										path.MatchRelative().AtParent().AtName("ccache_path"),
-									),
-									stringvalidator.AlsoRequires(
-										path.MatchRelative().AtParent().AtName("username"),
 									),
 								}},
 							"username": schema.StringAttribute{Optional: true,
