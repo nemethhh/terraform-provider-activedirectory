@@ -353,7 +353,12 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"keytab": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Keytab for unattended authentication, for CI with no " +
 									"`kinit`. Requires `username`; `realm` defaults from `server`'s domain " +
-									"suffix. Falls back to `AD_LDAP_KEYTAB`."},
+									"suffix. Conflicts with `ccache_path`. Falls back to `AD_LDAP_KEYTAB`.",
+								Validators: []validator.String{
+									stringvalidator.ConflictsWith(
+										path.MatchRelative().AtParent().AtName("ccache_path"),
+									),
+								}},
 							"password": schema.StringAttribute{Optional: true, Sensitive: true,
 								// No AlsoRequires(username) here: that validator reads only req.Config, never
 								// the environment-resolved value, and username falls back to AD_LDAP_USERNAME

@@ -322,6 +322,46 @@ resource "activedirectory_ou" "unreachable" {
 	})
 }
 
+// Each pair of the three mutually exclusive Kerberos credential attributes has
+// to be rejected at plan time. resolveKerberosCredential picks the first source
+// it finds and returns, so a pair left undeclared here is discarded in silence
+// rather than reaching the library's own exclusivity check.
+func TestKerberosCredentialAttributesConflictPairwise(t *testing.T) {
+	for _, tc := range []struct{ name, a, b string }{
+		{"keytab and ccache_path", `keytab = "/k.keytab"`, `ccache_path = "/tmp/krb5cc"`},
+		{"password and keytab", `password = "x"`, `keytab = "/k.keytab"`},
+		{"password and ccache_path", `password = "x"`, `ccache_path = "/tmp/krb5cc"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: accFactories(),
+				Steps: []resource.TestStep{{
+					Config: `
+provider "activedirectory" {
+  ldap {
+    server               = "127.0.0.1"
+    port                 = 1
+    tls                  = "ldaps"
+    insecure_skip_verify = true
+
+    kerberos {
+      ` + tc.a + `
+      ` + tc.b + `
+    }
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+					ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Combination`),
+				}},
+			})
+		})
+	}
+}
+
 // domain.credential is the identity the cmdlets run as; the ldap block
 // authenticates itself. Silently ignoring one of them would leave an operator
 // believing a credential is in use when it is not.

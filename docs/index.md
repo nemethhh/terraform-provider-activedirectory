@@ -246,7 +246,7 @@ This is the Linux and macOS path. `username` and `password` are the credential f
 Optional:
 
 - `ccache_path` (String) Credential cache file. Falls back to the ambient `KRB5CCNAME`, but only when this block sets none of `ccache_path`, `keytab` or `password` — a credential named here always wins over the environment, and `KRB5CCNAME` in turn wins over an ambient `AD_LDAP_KEYTAB` or `AD_LDAP_PASSWORD`.
-- `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username`; `realm` defaults from `server`'s domain suffix. Falls back to `AD_LDAP_KEYTAB`.
+- `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username`; `realm` defaults from `server`'s domain suffix. Conflicts with `ccache_path`. Falls back to `AD_LDAP_KEYTAB`.
 - `krb5_conf_path` (String) Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`.
 - `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`, set in configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since the environment fallback means only the resolved value can be judged, but `Config.Validate` rejects the pair at connect time. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.
 - `realm` (String) Kerberos realm, used with `keytab` or `password`. Defaults from `server`'s domain suffix, uppercased, when unset. Falls back to `AD_LDAP_REALM`.
