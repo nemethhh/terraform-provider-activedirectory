@@ -92,6 +92,7 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
         lab-acc-winrm-cold lab-acc-winrm-failover lab-acc-winrm-roundrobin \
+        lab-channel-binding lab-acc-ldap-krb-matrix \
         lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
 
 lab-help:
@@ -118,6 +119,8 @@ lab-help:
 	@echo '    lab-acc-psrp               run the suite from here over psrp (LAB_PSRP_CONFIG picks the engine)'
 	@echo '    lab-acc-psrp-only PATTERN=<re>  one suite over psrp'
 	@echo '    lab-acc-ldap               run the suite over LDAPS, no PowerShell (PATTERN=<re>)'
+	@echo '    lab-channel-binding VALUE=<0|1|2>  set LdapEnforceChannelBinding on a DC and restart NTDS'
+	@echo '    lab-acc-ldap-krb-matrix    every Kerberos credential source x every channel-binding policy'
 	@echo '    lab-adcs                   install the Enterprise CA that LDAPS needs (once)'
 	@echo '    lab-ca-cert                cache the CA locally for ca_certificate_file'
 	@echo '    lab-dev-workspace          build the runners that run from here against the sibling'
@@ -449,6 +452,46 @@ lab-acc-matrix:
 # a member: the ldap connection needs no PowerShell and no jump box.
 lab-acc-ldap:
 	$(LAB_DIR)/run-suite-ldap.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),60)
+
+# Set the channel-binding policy on a DC. 0 never, 1 when supported, 2 always.
+# The lab ships at 0; 2 is what the CIS Benchmark and the DISA STIG require and
+# what the Kerberos bind's channel-binding token exists for.
+lab-channel-binding:
+	@test -n "$(VALUE)" || { echo 'VALUE=0|1|2 required'; exit 1; }
+	$(PSRUN) $(or $(HOST),$(LAB_DC)) $(LAB_DIR)/15-set-channel-binding.ps1 300 -- -Value $(VALUE)
+
+# Every Kerberos credential source against every channel-binding policy.
+# The ccache cell at 1 is the regression case: a client that sent no token
+# passed there before this feature, so a wrong token would newly fail.
+#
+# The whole recipe is one shell process (every line below is `\`-joined into
+# one logical command), so a `trap ... EXIT` set as its first statement fires
+# on every way that process can end -- the normal fall-through, the early
+# `exit 1` when a policy change itself fails, and a signal -- and restores the
+# DC to VALUE=0 every time. Without it, the unconditional restore this recipe
+# used to put only at the bottom never ran on the early-exit path, which is
+# exactly the case a failed `lab-channel-binding` call takes.
+#
+# The restore is the operation most likely to fail (the documented failure
+# mode is an NTDS restart race), so its own failure is printed to stderr with
+# the manual command to re-run, rather than redirected away: silencing it
+# would leave the DC hardened with only the test loop's result reported.
+lab-acc-ldap-krb-matrix:
+	@trap '$(MAKE) --no-print-directory lab-channel-binding VALUE=0 >/dev/null 2>&1 || { echo >&2; echo "=== FATAL: the channel-binding restore to VALUE=0 FAILED ===" >&2; echo "$(or $(HOST),$(LAB_DC)) may still be hardened at a non-zero LdapEnforceChannelBinding. Run this by hand now:" >&2; echo "    make lab-channel-binding VALUE=0 HOST=$(or $(HOST),$(LAB_DC))" >&2; echo >&2; }' EXIT; \
+	fail=0; results=''; \
+	for v in 0 1 2; do \
+	  $(MAKE) --no-print-directory lab-channel-binding VALUE=$$v >/dev/null || exit 1; \
+	  for a in kerberos kerberos-password; do \
+	    echo; echo "=== LdapEnforceChannelBinding=$$v auth=$$a ==="; \
+	    if LAB_LDAP_AUTH=$$a $(LAB_DIR)/run-suite-ldap.sh $(or $(PATTERN),TestAccOULifecycle) $(or $(MINUTES),40); then \
+	      results="$$results\nPASS  cb=$$v $$a"; \
+	    else \
+	      results="$$results\nFAIL  cb=$$v $$a"; fail=1; \
+	    fi; \
+	  done; \
+	done; \
+	echo; echo '=== channel-binding matrix ==='; printf '%b\n' "$$results"; \
+	exit $$fail
 
 lab-sweep:
 	$(LAB_DIR)/run-suite.sh --sweep 30

@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
+	"github.com/nemethhh/go-adcore"
 	adldap "github.com/nemethhh/go-adldap"
 	adwinrm "github.com/nemethhh/go-adpwsh/transport/winrm"
 )
@@ -729,5 +730,172 @@ func TestResolveLDAPReadsKRB5CCNAME(t *testing.T) {
 
 	if got.Kerberos == nil || got.Kerberos.CCachePath != "FILE:/tmp/krb5cc_tf" {
 		t.Errorf("CCachePath = %+v, want the value from KRB5CCNAME", got.Kerberos)
+	}
+}
+
+// The password reaches the library as a Secret, from configuration or from
+// the same AD_LDAP_PASSWORD the other two blocks use.
+func TestResolveLDAPKerberosPassword(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server: types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{
+			Username: types.StringValue("svc_tf"),
+			Password: types.StringValue("hunter2"),
+		},
+	}, env(nil), &diags)
+
+	if diags.HasError() {
+		t.Fatalf("resolveLDAP: %v", diags)
+	}
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if adcore.RevealSecret(got.Kerberos.Password) != "hunter2" {
+		t.Errorf("Password did not reach the config")
+	}
+}
+
+// AD_LDAP_PASSWORD is shared with `simple` and `ntlm` — that is the existing
+// convention, not an oversight.
+func TestResolveLDAPKerberosPasswordFromEnvironment(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{Username: types.StringValue("svc_tf")},
+	}, env(map[string]string{"AD_LDAP_PASSWORD": "from-env"}), &diags)
+
+	if got.Kerberos == nil || adcore.RevealSecret(got.Kerberos.Password) != "from-env" {
+		t.Errorf("AD_LDAP_PASSWORD did not reach the config")
+	}
+}
+
+// The ambient-cache path must keep working with nothing set at all, and no
+// password must appear from nowhere.
+func TestResolveLDAPKerberosStillNeedsNoCredential(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{},
+	}, env(nil), &diags)
+
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if !got.Kerberos.Password.IsZero() {
+		t.Error("a password appeared from nowhere")
+	}
+}
+
+// A configured password must not combine with an ambient KRB5CCNAME: the
+// library's Config.Validate rejects two credential sources, so a developer
+// with a live ticket in their shell and a password in configuration must not
+// trip it. Configuration wins over the environment, but only one source at a
+// time reaches the library.
+func TestResolveLDAPKerberosPasswordIgnoresAmbientCCache(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server: types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{
+			Username: types.StringValue("svc_tf"),
+			Password: types.StringValue("hunter2"),
+		},
+	}, env(map[string]string{"KRB5CCNAME": "FILE:/tmp/krb5cc_ambient"}), &diags)
+
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if got.Kerberos.CCachePath != "" {
+		t.Errorf("CCachePath = %q, want empty: a configured password must not combine with an ambient ticket cache", got.Kerberos.CCachePath)
+	}
+}
+
+// This is the FIX 1 regression: AD_LDAP_PASSWORD is shared with `simple`, so
+// anyone who previously used a `simple` bind is likely to have it exported.
+// With an empty `kerberos {}` block, an ambient KRB5CCNAME must still win —
+// silently abandoning the operator's live ticket for a password bind (or, with
+// no AD_LDAP_USERNAME, a validation error naming no password anywhere) is
+// exactly the hazard this fix closes.
+func TestResolveLDAPKerberosAmbientCCacheBeatsAmbientPassword(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{},
+	}, env(map[string]string{
+		"KRB5CCNAME":       "FILE:/tmp/krb5cc_ambient",
+		"AD_LDAP_PASSWORD": "from-env",
+	}), &diags)
+
+	if diags.HasError() {
+		t.Fatalf("resolveLDAP: %v", diags)
+	}
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if got.Kerberos.CCachePath != "FILE:/tmp/krb5cc_ambient" {
+		t.Errorf("CCachePath = %q, want the ambient KRB5CCNAME", got.Kerberos.CCachePath)
+	}
+	if !got.Kerberos.Password.IsZero() {
+		t.Error("Password must stay zero: an ambient KRB5CCNAME must not be shadowed by an ambient AD_LDAP_PASSWORD")
+	}
+}
+
+// Third in the ambient chain: with no KRB5CCNAME and no AD_LDAP_KEYTAB,
+// AD_LDAP_PASSWORD is still the fallback — this is the existing, intended
+// convention (also covered by TestResolveLDAPKerberosPasswordFromEnvironment),
+// pinned again here alongside its sibling so the whole precedence order lives
+// in one place.
+func TestResolveLDAPKerberosAmbientKeytabBeatsAmbientPassword(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server:   types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{},
+	}, env(map[string]string{
+		"AD_LDAP_KEYTAB":   "/etc/krb5.keytab",
+		"AD_LDAP_PASSWORD": "from-env",
+	}), &diags)
+
+	if diags.HasError() {
+		t.Fatalf("resolveLDAP: %v", diags)
+	}
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if got.Kerberos.Keytab != "/etc/krb5.keytab" {
+		t.Errorf("Keytab = %q, want the ambient AD_LDAP_KEYTAB", got.Kerberos.Keytab)
+	}
+	if !got.Kerberos.Password.IsZero() {
+		t.Error("Password must stay zero: an ambient AD_LDAP_KEYTAB must not be shadowed by an ambient AD_LDAP_PASSWORD")
+	}
+}
+
+// A credential named in the block itself beats every ambient source at once,
+// not just the one it happens to share a name with.
+func TestResolveLDAPKerberosConfiguredCCachePathBeatsAmbientKeytabAndPassword(t *testing.T) {
+	var diags diag.Diagnostics
+	got := resolveLDAP(ldapModel{
+		Server: types.StringValue("dc01.corp.local"),
+		Kerberos: &kerberosModel{
+			CCachePath: types.StringValue("FILE:/tmp/krb5cc_configured"),
+		},
+	}, env(map[string]string{
+		"AD_LDAP_KEYTAB":   "/etc/krb5.keytab",
+		"AD_LDAP_PASSWORD": "from-env",
+	}), &diags)
+
+	if diags.HasError() {
+		t.Fatalf("resolveLDAP: %v", diags)
+	}
+	if got.Kerberos == nil {
+		t.Fatal("Kerberos block did not reach the config")
+	}
+	if got.Kerberos.CCachePath != "FILE:/tmp/krb5cc_configured" {
+		t.Errorf("CCachePath = %q, want the configured value", got.Kerberos.CCachePath)
+	}
+	if got.Kerberos.Keytab != "" {
+		t.Errorf("Keytab = %q, want empty: a configured ccache_path must not combine with an ambient keytab", got.Kerberos.Keytab)
+	}
+	if !got.Kerberos.Password.IsZero() {
+		t.Error("Password must stay zero: a configured ccache_path must not combine with an ambient password")
 	}
 }

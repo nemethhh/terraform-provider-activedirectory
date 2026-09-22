@@ -338,18 +338,54 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the " +
 							"ticket into a file:\n\n" +
 							"```sh\nKRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL\n```\n\n" +
-							"This is the Linux and macOS path. Windows keeps credentials in the LSA with no " +
-							"readable cache, so a Windows operator uses `simple` or `ntlm`.",
+							"This is the Linux and macOS path. `username` and `password` are the credential " +
+							"form for a runner where `kinit` was never installed at all — CI, a scratch " +
+							"container. Every Kerberos bind now carries a `tls-server-end-point` channel-" +
+							"binding token, so this connection authenticates against a domain with " +
+							"`LdapEnforceChannelBinding` set to `2`, the same as `simple`.",
 						Attributes: map[string]schema.Attribute{
 							"ccache_path": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Credential cache file. Falls back to `KRB5CCNAME`."},
+								MarkdownDescription: "Credential cache file. Falls back to the ambient " +
+									"`KRB5CCNAME`, but only when this block sets none of `ccache_path`, " +
+									"`keytab` or `password` — a credential named here always wins over the " +
+									"environment, and `KRB5CCNAME` in turn wins over an ambient " +
+									"`AD_LDAP_KEYTAB` or `AD_LDAP_PASSWORD`."},
 							"keytab": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Keytab for unattended authentication, for CI with no " +
-									"`kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`."},
+									"`kinit`. Requires `username`; `realm` defaults from `server`'s domain " +
+									"suffix. Conflicts with `ccache_path`. Falls back to `AD_LDAP_KEYTAB`.",
+								Validators: []validator.String{
+									stringvalidator.ConflictsWith(
+										path.MatchRelative().AtParent().AtName("ccache_path"),
+									),
+								}},
+							"password": schema.StringAttribute{Optional: true, Sensitive: true,
+								// No AlsoRequires(username) here: that validator reads only req.Config, never
+								// the environment-resolved value, and username falls back to AD_LDAP_USERNAME
+								// like every other credential attribute in this provider. Enforcing the pairing
+								// here would reject a config that sets password in HCL and username via the
+								// environment, which is valid and exactly what the lab runners do. Config.Validate
+								// sees the resolved values and already enforces this pairing at connect time.
+								MarkdownDescription: "Password for an unattended bind where `kinit` was " +
+									"never installed — CI, a scratch container. Requires `username`, set in " +
+									"configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since " +
+									"the environment fallback means only the resolved value can be judged, but " +
+									"`Config.Validate` rejects the pair at connect time. " +
+									"Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` " +
+									"and no `/etc/krb5.conf`, a minimal configuration is synthesized " +
+									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.",
+								Validators: []validator.String{
+									stringvalidator.ConflictsWith(
+										path.MatchRelative().AtParent().AtName("keytab"),
+										path.MatchRelative().AtParent().AtName("ccache_path"),
+									),
+								}},
 							"username": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Principal name, with `keytab`. Falls back to `AD_LDAP_USERNAME`."},
+								MarkdownDescription: "Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`."},
 							"realm": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Kerberos realm, with `keytab`. Falls back to `AD_LDAP_REALM`."},
+								MarkdownDescription: "Kerberos realm, used with `keytab` or `password`. " +
+									"Defaults from `server`'s domain suffix, uppercased, when unset. Falls " +
+									"back to `AD_LDAP_REALM`."},
 							"krb5_conf_path": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`."},
 							"spn": schema.StringAttribute{Optional: true,
@@ -363,8 +399,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"cache Windows does not have.\n\n" +
 							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
 							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with " +
-							"`data 80090346` and no mention of channel binding. Use `simple` over LDAPS " +
-							"there. Verified working against a domain that does not enforce it.",
+							"`data 80090346` and no mention of channel binding. Use `kerberos`, which sends " +
+							"a token, or `simple` over LDAPS there. Verified working against a domain that " +
+							"does not enforce it.",
 						Attributes: map[string]schema.Attribute{
 							"domain": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`."},

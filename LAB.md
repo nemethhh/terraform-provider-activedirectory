@@ -561,6 +561,108 @@ LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
   KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap PATTERN='TestAccOULifecycle'
 ```
 
+### Channel binding: exercised against a hardened DC, 2026-09-22
+
+`s-server1` was reconfigured through the run — `LdapEnforceChannelBinding` set
+to 0, 1 and 2 in turn (`scripts/lab/15-set-channel-binding.ps1`, which writes
+the DWord under `NTDS\Parameters`, restarts NTDS so it takes effect, and now
+throws if the readback does not match). Every Kerberos credential source
+(ticket cache and supplied password) ran against every value. The policy is
+back at 0 — the lab's original state.
+
+**At the time of this run, `lab-acc-ldap-krb-matrix`'s auto-restore was not
+failure-safe**, and both attempts below needed a manual `make
+lab-channel-binding VALUE=0` afterward to actually get there — see finding 2
+below. It has since been fixed with a `trap ... EXIT` so the restore now runs
+on every exit path, including the one this run hit twice.
+
+```bash
+KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tfacc@CORP.LOCAL
+make lab-ca-cert
+KRB5CCNAME=FILE:/tmp/krb5cc_tf make lab-acc-ldap-krb-matrix PATTERN=TestAccOULifecycle
+```
+
+A ticket is required: the matrix's `kerberos` (ticket-cache) cells run
+`LAB_LDAP_AUTH=kerberos`, which — unlike the unset default — hard-exits if no
+ticket is present rather than silently falling back to a simple bind. Without
+`KRB5CCNAME` set, three of the six cells below fail immediately instead of
+reproducing.
+
+Six-cell result, each confirmed against a settled DC (NTDS/KDC/Netlogon
+`Running`, not mid-restart):
+
+| `LdapEnforceChannelBinding` | `kerberos` (ticket cache) | `kerberos-password` |
+|---|---|---|
+| 0 (never) | PASS | PASS |
+| 1 (when supported) | PASS | PASS |
+| 2 (always) | PASS | PASS |
+
+All six pass. **`KERB_AP_OPTIONS_CBT` turned out not to be needed** — the spec
+recorded it as unverified, and this run settles it: `apOptions()` in
+`go-adldap/internal/conn/bind_krb.go` was left unchanged
+(`APOptionMutualRequired` only), and the ticket-cache cell binds cleanly at
+both 1 and 2 without it. The `tls-server-end-point` channel-binding token every
+Kerberos bind now carries is sufficient on its own.
+
+`LAB_LDAP_AUTH=ntlm` was refused at `LdapEnforceChannelBinding=2`, exactly as
+predicted from the policy documentation above — `Azure/go-ntlmssp` cannot emit
+the channel-binding AV_PAIR the DC now requires:
+
+```
+New: transport failure: 80090346: LdapErr: DSID-0C0908CB, comment:
+AcceptSecurityContext error, data 80090346, v65f4
+```
+
+`simple` passed unaffected at `LdapEnforceChannelBinding=2` — the policy
+governs SASL (Kerberos/NTLM) binds only, not a simple bind:
+
+```bash
+make lab-channel-binding VALUE=2
+LAB_LDAP_AUTH=ntlm make lab-acc-ldap PATTERN=TestAccOULifecycle   # FAIL, data 80090346
+make lab-acc-ldap PATTERN=TestAccOULifecycle                       # simple, PASS
+make lab-channel-binding VALUE=0
+```
+
+Three things surfaced along the way, all fixed in this run rather than left
+for later:
+
+1. **`accClient` (the destroy-check helper in `acc_test.go`) still built a bare
+   `kerberos {}` client** regardless of which credential source the run under
+   test actually used, so a `kerberos-password`/`kerberos-keytab` cell's
+   teardown fell back to the (absent) ambient ticket cache and failed there
+   even though the provider's own bind had succeeded. It now mirrors
+   `accLDAPBlock`'s credential selection.
+2. **`Restart-Service -Name NTDS -Force` returns before the DC is fully ready
+   to serve.** A restart issued shortly after a previous one (the matrix
+   restarts NTDS three times in quick succession) has a real chance of leaving
+   Kerberos AS/TGS exchanges — and once, the SSH session itself — answering
+   `KDC_ERR_SVC_UNAVAILABLE` or refusing the connection for a few seconds. Both
+   automated `make lab-acc-ldap-krb-matrix` attempts here hit it once each (a
+   different cell each time) and, at the time, **aborted before the loop's own
+   `VALUE=0` restore ran, because that restore sat unconditionally near the
+   bottom of the recipe and the early `exit 1` on a failed policy change
+   skipped straight past it** — an unattended run could have been left with
+   the DC hardened at 1 or 2. The table above reflects every cell reconfirmed
+   individually against a settled DC, not a single unattended pass; the policy
+   was restored to 0 by hand both times this was hit. `lab-acc-ldap-krb-matrix`
+   now sets a `trap ... EXIT` as its first statement so a restore is
+   *attempted* on every exit path — normal completion, the early exit, or a
+   signal. That does not guarantee the restore itself succeeds — the restart
+   race above is exactly what makes the restore the operation most likely to
+   fail — so the trap no longer redirects its output away: a failed restore
+   now prints an unmissable message to stderr naming the exact command to run
+   by hand, instead of leaving the run to report only the test loop's result
+   while the DC stays hardened. No settle delay for the restart race itself
+   was added, since that was out of scope here; it is recorded as an open
+   runbook gap, not a channel-binding defect.
+3. **The policy script's own readback was informational only.** Its header
+   already said a run that silently tested the wrong policy is worse than one
+   that failed, but nothing enforced that — a mismatch between the requested
+   and actual value would have printed and been ignored.
+   `15-set-channel-binding.ps1` now throws when the readback disagrees with
+   `-Value`, so a mismatch fails the `lab-channel-binding` call (and, through
+   the trap above, still restores the policy) instead of passing silently.
+
 ### Still unexercised
 
 - **`ModifyDN` on the wire.** The in-process LDAP server used in CI cannot serve
@@ -571,8 +673,22 @@ LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389 \
   which Windows does not have; a Windows operator uses `ldap.simple` or
   `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
   it is its own piece of work.
-- **A domain that enforces channel binding.** This lab does not, so the NTLM
-  refusal is documented from the policy rather than observed.
+- **The keytab credential source was never run against a hardened DC.** The
+  channel-binding matrix above covers only `kerberos` (ticket cache) and
+  `kerberos-password`; `LAB_LDAP_AUTH=kerberos-keytab` needs a keytab fixture
+  the lab does not have and nothing here creates one, so it was left out of
+  `lab-acc-ldap-krb-matrix` rather than included as a skip that would have
+  recorded a pass. One of the three credential sources the feature ships is
+  therefore **not verified** against `LdapEnforceChannelBinding = 1` or `2` —
+  only reasoned to work the same way `kerberos-password` does, since both build
+  the same GSS-API token.
+- **Channel binding was never exercised over StartTLS.** `run-suite-ldap.sh`
+  defaults to LDAPS, and every cell in the table above ran on 636; StartTLS was
+  not part of this matrix. The token path is **reasoned to be fine** — go-ldap
+  swaps in a `*tls.Conn` on the same connection, so `TLSConnectionState()`
+  still returns `ok` and the certificate the token is bound to is the same one
+  — but that is reasoning, not evidence, and only the LDAPS row above is a
+  verified result.
 
 ### Running it
 

@@ -620,6 +620,7 @@ type ldapSimpleModel struct {
 type kerberosModel struct {
 	CCachePath   types.String `tfsdk:"ccache_path"`
 	Keytab       types.String `tfsdk:"keytab"`
+	Password     types.String `tfsdk:"password"`
 	Username     types.String `tfsdk:"username"`
 	Realm        types.String `tfsdk:"realm"`
 	Krb5ConfPath types.String `tfsdk:"krb5_conf_path"`
@@ -630,6 +631,39 @@ type ldapNTLMModel struct {
 	Domain   types.String `tfsdk:"domain"`
 	Username types.String `tfsdk:"username"`
 	Password types.String `tfsdk:"password"`
+}
+
+// resolveKerberosCredential picks exactly one of CCachePath, Keytab and
+// Password for a Kerberos bind. AD_LDAP_PASSWORD is shared with `simple`, so
+// anyone who previously used a `simple` bind is likely to have it exported;
+// consulting it before KRB5CCNAME would silently abandon an operator's live
+// ticket the moment that variable is present. Precedence, highest first:
+//
+//  1. A credential named in the `kerberos {}` block itself — configuration
+//     always wins, and it wins outright: the other two ambient sources are
+//     not consulted at all once one field is configured.
+//  2. Otherwise, the ambient KRB5CCNAME — the documented preferred path.
+//  3. Otherwise, ambient AD_LDAP_KEYTAB, then ambient AD_LDAP_PASSWORD.
+func resolveKerberosCredential(k kerberosModel, getenv func(string) string) (ccachePath, keytab string, password adcore.Secret) {
+	switch {
+	case !k.CCachePath.IsNull() && !k.CCachePath.IsUnknown():
+		return k.CCachePath.ValueString(), "", adcore.Secret{}
+	case !k.Keytab.IsNull() && !k.Keytab.IsUnknown():
+		return "", k.Keytab.ValueString(), adcore.Secret{}
+	case !k.Password.IsNull() && !k.Password.IsUnknown():
+		return "", "", adcore.NewSecret(k.Password.ValueString())
+	}
+
+	if v := getenv("KRB5CCNAME"); v != "" {
+		return v, "", adcore.Secret{}
+	}
+	if v := getenv("AD_LDAP_KEYTAB"); v != "" {
+		return "", v, adcore.Secret{}
+	}
+	if v := getenv("AD_LDAP_PASSWORD"); v != "" {
+		return "", "", adcore.NewSecret(v)
+	}
+	return "", "", adcore.Secret{}
 }
 
 // resolveLDAP turns the ldap block plus the environment into the library's
@@ -656,14 +690,17 @@ func resolveLDAP(m ldapModel, getenv func(string) string, diags *diag.Diagnostic
 			Password: adcore.NewSecret(str(m.Simple.Password, getenv, "AD_LDAP_PASSWORD")),
 		}
 	case m.Kerberos != nil:
-		cfg.Kerberos = &adldap.KerberosAuth{
-			CCachePath:   str(m.Kerberos.CCachePath, getenv, "KRB5CCNAME"),
-			Keytab:       str(m.Kerberos.Keytab, getenv, "AD_LDAP_KEYTAB"),
+		ccachePath, keytabPath, password := resolveKerberosCredential(*m.Kerberos, getenv)
+		kerb := &adldap.KerberosAuth{
+			CCachePath:   ccachePath,
+			Keytab:       keytabPath,
+			Password:     password,
 			Username:     str(m.Kerberos.Username, getenv, "AD_LDAP_USERNAME"),
 			Realm:        str(m.Kerberos.Realm, getenv, "AD_LDAP_REALM"),
 			Krb5ConfPath: str(m.Kerberos.Krb5ConfPath, getenv, "KRB5_CONFIG"),
 			SPN:          str(m.Kerberos.SPN, getenv, "AD_LDAP_SPN"),
 		}
+		cfg.Kerberos = kerb
 	case m.NTLM != nil:
 		cfg.NTLM = &adldap.NTLMAuth{
 			Domain:   str(m.NTLM.Domain, getenv, "AD_LDAP_DOMAIN"),

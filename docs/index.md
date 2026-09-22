@@ -229,11 +229,11 @@ Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the default
 KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
 ```
 
-This is the Linux and macOS path. Windows keeps credentials in the LSA with no readable cache, so a Windows operator uses `simple` or `ntlm`. (see [below for nested schema](#nestedblock--ldap--kerberos))
+This is the Linux and macOS path. `username` and `password` are the credential form for a runner where `kinit` was never installed at all — CI, a scratch container. Every Kerberos bind now carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
 - `max_concurrency` (Number) Maximum pooled LDAP connections. Defaults to `4`.
 - `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also the Windows client's path, since the Kerberos one reads a `FILE:` credential cache Windows does not have.
 
-**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `simple` over LDAPS there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
+**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `kerberos`, which sends a token, or `simple` over LDAPS there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
 - `port` (Number) TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`.
 - `server` (String) The domain controller to connect to, as an FQDN. Pinned for the provider's lifetime: there is no discovery and no failover, because a write that lands on one DC and a read-back that hits another reports "not found". Falls back to `AD_LDAP_SERVER`.
 - `simple` (Block, Optional) Username and password bind. Safe only because this connection is always TLS-protected. (see [below for nested schema](#nestedblock--ldap--simple))
@@ -245,12 +245,13 @@ This is the Linux and macOS path. Windows keeps credentials in the LSA with no r
 
 Optional:
 
-- `ccache_path` (String) Credential cache file. Falls back to `KRB5CCNAME`.
-- `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username` and `realm`. Falls back to `AD_LDAP_KEYTAB`.
+- `ccache_path` (String) Credential cache file. Falls back to the ambient `KRB5CCNAME`, but only when this block sets none of `ccache_path`, `keytab` or `password` — a credential named here always wins over the environment, and `KRB5CCNAME` in turn wins over an ambient `AD_LDAP_KEYTAB` or `AD_LDAP_PASSWORD`.
+- `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username`; `realm` defaults from `server`'s domain suffix. Conflicts with `ccache_path`. Falls back to `AD_LDAP_KEYTAB`.
 - `krb5_conf_path` (String) Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`.
-- `realm` (String) Kerberos realm, with `keytab`. Falls back to `AD_LDAP_REALM`.
+- `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`, set in configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since the environment fallback means only the resolved value can be judged, but `Config.Validate` rejects the pair at connect time. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.
+- `realm` (String) Kerberos realm, used with `keytab` or `password`. Defaults from `server`'s domain suffix, uppercased, when unset. Falls back to `AD_LDAP_REALM`.
 - `spn` (String) Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`.
-- `username` (String) Principal name, with `keytab`. Falls back to `AD_LDAP_USERNAME`.
+- `username` (String) Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`.
 
 
 <a id="nestedblock--ldap--ntlm"></a>
