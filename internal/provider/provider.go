@@ -289,9 +289,14 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"templates, resource-based constrained delegation, " +
 					"`protected_from_accidental_deletion` and `can_change_password`.\n\n" +
 					"Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no " +
-					"attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform " +
-					"keeps every credential out of configuration. That path reads a `FILE:` credential " +
-					"cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.\n\n" +
+					"attributes uses the ticket in the cache `KRB5CCNAME` names, so running " +
+					"`KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of " +
+					"configuration. `KRB5CCNAME` must be set: the default cache location is not " +
+					"searched. That path reads a `FILE:` credential cache, which **Windows does not " +
+					"have** — a Windows client uses `simple` or `ntlm`.\n\n" +
+					"Against a domain that enforces LDAP channel binding (`LdapEnforceChannelBinding = " +
+					"2`), `kerberos` binds over both `ldaps` and `starttls`, `simple` is not subject to " +
+					"the policy, and `ntlm` is refused.\n\n" +
 					"The `domain` block does not apply: `server` names the domain controller and the " +
 					"authentication block is the identity, so setting `domain.server` or " +
 					"`domain.credential` alongside `ldap` is an error rather than silently ignored. " +
@@ -342,14 +347,18 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"kerberos": schema.SingleNestedBlock{
 						MarkdownDescription: "Bind with a Kerberos ticket. Empty — `kerberos {}` — is the " +
 							"intended form: the operator runs `kinit` in their own shell and the ticket is " +
-							"read from `KRB5CCNAME`, so no credential reaches Terraform configuration.\n\n" +
+							"read from the cache `KRB5CCNAME` names, so no credential reaches Terraform " +
+							"configuration. `KRB5CCNAME` (or `ccache_path`) must be set — the default cache " +
+							"location is not searched, so a plain `kinit` with no `KRB5CCNAME` fails with " +
+							"\"no Kerberos credential cache\".\n\n" +
 							"Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the defaults " +
 							"on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the " +
 							"ticket into a file:\n\n" +
 							"```sh\nKRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL\n```\n\n" +
-							"This is the Linux and macOS path. `username` and `password` are the credential " +
-							"form for a runner where `kinit` was never installed at all — CI, a scratch " +
-							"container. Every Kerberos bind carries a `tls-server-end-point` channel-" +
+							"The ticket cache is the Linux and macOS path. `username` with `password` or " +
+							"`keytab` is the credential form for a runner where `kinit` was never installed " +
+							"at all — CI, a scratch container — and needs no `krb5.conf` (see " +
+							"`krb5_conf_path`). Every Kerberos bind carries a `tls-server-end-point` channel-" +
 							"binding token, so this connection authenticates against a domain with " +
 							"`LdapEnforceChannelBinding` set to `2`, the same as `simple`.",
 						Attributes: map[string]schema.Attribute{
@@ -382,7 +391,8 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 									"password with no username is refused when the provider connects. " +
 									"Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` " +
 									"and no `/etc/krb5.conf`, a minimal configuration is synthesized " +
-									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.",
+									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`, but only " +
+									"when neither `KRB5CCNAME` nor `AD_LDAP_KEYTAB` is set.",
 								Validators: []validator.String{
 									stringvalidator.ConflictsWith(
 										path.MatchRelative().AtParent().AtName("keytab"),
@@ -390,13 +400,19 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 									),
 								}},
 							"username": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`."},
+								MarkdownDescription: "Principal name, with `keytab` or `password`: the account " +
+									"name alone (`svc_tf`), with the realm in `realm` — unlike `simple`, not a UPN " +
+									"or `DOMAIN\\user`. Not used with a ticket cache, which names its own " +
+									"principal. Falls back to `AD_LDAP_USERNAME`."},
 							"realm": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Kerberos realm, used with `keytab` or `password`. " +
 									"Defaults from `server`'s domain suffix, uppercased, when unset. Falls " +
 									"back to `AD_LDAP_REALM`."},
 							"krb5_conf_path": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`."},
+								MarkdownDescription: "Kerberos configuration file. Falls back to `KRB5_CONFIG`, " +
+									"then `/etc/krb5.conf`; with none of them present, a minimal configuration is " +
+									"synthesized naming `realm` and `server` as the KDC, for every credential " +
+									"source."},
 							"spn": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`."},
 						},
@@ -409,13 +425,15 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
 							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with " +
 							"`data 80090346` and no mention of channel binding. Use `kerberos`, which sends " +
-							"a token, or `simple` over LDAPS there. Verified working against a domain that " +
+							"a token, or `simple` there. Verified working against a domain that " +
 							"does not enforce it.",
 						Attributes: map[string]schema.Attribute{
 							"domain": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`."},
+								MarkdownDescription: "NetBIOS domain name (`CORP`). Falls back to `AD_LDAP_DOMAIN`."},
 							"username": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Falls back to `AD_LDAP_USERNAME`."},
+								MarkdownDescription: "The account name alone (`svc_tf`), with the domain in " +
+									"`domain` — unlike `simple`, not a UPN or `DOMAIN\\user`. Falls back to " +
+									"`AD_LDAP_USERNAME`."},
 							"password": schema.StringAttribute{Optional: true, Sensitive: true,
 								MarkdownDescription: "Falls back to `AD_LDAP_PASSWORD`."},
 						},

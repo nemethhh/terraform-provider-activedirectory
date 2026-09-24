@@ -127,11 +127,13 @@ A few things worth knowing:
   discover one at configure time); on `ldap` it is `ldap.server`, and the
   `domain` block is refused. Pinning is what keeps a write and its read-back on
   the same replica.
-- **Choosing an `ldap` bind.** `kerberos {}` reads a `FILE:` credential cache,
-  so it is the Linux and macOS path; `kerberos` also takes a `keytab` or a
-  `password` for CI. A Windows client uses `simple` or `ntlm`. Against a domain
-  that enforces LDAP channel binding (`LdapEnforceChannelBinding = 2`),
-  `kerberos` and `simple` work and `ntlm` is refused.
+- **Choosing an `ldap` bind.** `kerberos {}` reads the `FILE:` credential cache
+  `KRB5CCNAME` names — it must be set, since the default cache location is not
+  searched — so it is the Linux and macOS path. `kerberos` also takes `username`
+  with a `keytab` or `password` for CI, and needs no `krb5.conf` then. A Windows
+  client uses `simple` or `ntlm`. Against a domain that enforces LDAP channel
+  binding (`LdapEnforceChannelBinding = 2`), `kerberos` binds over both LDAPS and
+  StartTLS, `simple` is not subject to the policy, and `ntlm` is refused.
 - **The double hop.** Over `ssh` (public-key) or `winrm` against a *member* host,
   the session carries no delegatable credentials, so onward auth to AD Web
   Services fails. Add a `domain.credential { username = …, password = … }` block

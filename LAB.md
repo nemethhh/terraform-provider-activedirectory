@@ -682,13 +682,33 @@ for later:
   therefore **not verified** against `LdapEnforceChannelBinding = 1` or `2` —
   only reasoned to work the same way `kerberos-password` does, since both build
   the same GSS-API token.
-- **Channel binding was never exercised over StartTLS.** `run-suite-ldap.sh`
-  defaults to LDAPS, and every cell in the table above ran on 636; StartTLS was
-  not part of this matrix. The token path is **reasoned to be fine** — go-ldap
-  swaps in a `*tls.Conn` on the same connection, so `TLSConnectionState()`
-  still returns `ok` and the certificate the token is bound to is the same one
-  — but that is reasoning, not evidence, and only the LDAPS row above is a
-  verified result.
+- **`simple` at `LdapEnforceChannelBinding = 2` over StartTLS.** The policy
+  governs SASL binds only and `simple` passed it over LDAPS, but the StartTLS
+  cell was not run.
+
+### Release-readiness run, 2026-09-24
+
+Branch `release/v0.13-readiness` (go-adldap v0.5.0, grpc v1.83.2, x/crypto
+v0.57.0), the **full** `TestAcc` suite in every cell rather than
+`TestAccOULifecycle`:
+
+| What | Result |
+|---|---|
+| `make lab-acc-ldap` (simple, LDAPS) | PASS 52 / FAIL 0 / SKIP 55 |
+| `lab-acc-ldap-krb-matrix PATTERN=TestAcc` (LDAPS, policy 0/1/2 × ticket cache/password) | six cells, each PASS 52 / FAIL 0 / SKIP 55 |
+| the same six cells with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | six cells, each PASS 52 / FAIL 0 / SKIP 55 |
+
+This closes the StartTLS channel-binding gap above: the token binds over
+StartTLS at 1 and 2 for both the ticket cache and a supplied password.
+
+The first automated StartTLS attempt hit the NTDS restart race again —
+`KDC_ERR_SVC_UNAVAILABLE` on every bind right after the policy restart, then an
+SSH failure (exit 255) on the next policy change and on the trap's restore. The
+policy did read back 0 afterwards. That run's aborted tests left six `tfacc-`
+OUs behind, which failed the next run on already-exists until `make lab-sweep`
+cleared them. The StartTLS cells above were run by a script that retries the
+policy change and probes a bind until the DC answers before each cell; the
+matrix target itself still has no settle step.
 
 ### Running it
 

@@ -185,7 +185,9 @@ provider "activedirectory" {
 
 **Every resource this provider offers works over this connection**, including the ones backed by a security descriptor: `activedirectory_access_rule`, delegation templates, resource-based constrained delegation, `protected_from_accidental_deletion` and `can_change_password`.
 
-Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform keeps every credential out of configuration. That path reads a `FILE:` credential cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.
+Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket in the cache `KRB5CCNAME` names, so running `KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of configuration. `KRB5CCNAME` must be set: the default cache location is not searched. That path reads a `FILE:` credential cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.
+
+Against a domain that enforces LDAP channel binding (`LdapEnforceChannelBinding = 2`), `kerberos` binds over both `ldaps` and `starttls`, `simple` is not subject to the policy, and `ntlm` is refused.
 
 The `domain` block does not apply: `server` names the domain controller and the authentication block is the identity, so setting `domain.server` or `domain.credential` alongside `ldap` is an error rather than silently ignored. `replication` applies as on the other connections; `force_sync` there is a directory operation rather than `Sync-ADObject`.
 
@@ -221,7 +223,7 @@ Optional:
 
 - `ca_certificate_file` (String) PEM file holding the CA that signed the domain controller's certificate. Naming one replaces the system trust store rather than adding to it. Falls back to `AD_LDAP_CA_CERTIFICATE_FILE`.
 - `insecure_skip_verify` (Boolean) Disable certificate verification. For a lab with a self-signed DC certificate only — it makes the connection trivially interceptable.
-- `kerberos` (Block, Optional) Bind with a Kerberos ticket. Empty — `kerberos {}` — is the intended form: the operator runs `kinit` in their own shell and the ticket is read from `KRB5CCNAME`, so no credential reaches Terraform configuration.
+- `kerberos` (Block, Optional) Bind with a Kerberos ticket. Empty — `kerberos {}` — is the intended form: the operator runs `kinit` in their own shell and the ticket is read from the cache `KRB5CCNAME` names, so no credential reaches Terraform configuration. `KRB5CCNAME` (or `ccache_path`) must be set — the default cache location is not searched, so a plain `kinit` with no `KRB5CCNAME` fails with "no Kerberos credential cache".
 
 Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the defaults on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the ticket into a file:
 
@@ -229,11 +231,11 @@ Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the default
 KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
 ```
 
-This is the Linux and macOS path. `username` and `password` are the credential form for a runner where `kinit` was never installed at all — CI, a scratch container. Every Kerberos bind carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
+The ticket cache is the Linux and macOS path. `username` with `password` or `keytab` is the credential form for a runner where `kinit` was never installed at all — CI, a scratch container — and needs no `krb5.conf` (see `krb5_conf_path`). Every Kerberos bind carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
 - `max_concurrency` (Number) Maximum pooled LDAP connections. Defaults to `4`.
 - `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also the Windows client's path, since the Kerberos one reads a `FILE:` credential cache Windows does not have.
 
-**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `kerberos`, which sends a token, or `simple` over LDAPS there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
+**Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `kerberos`, which sends a token, or `simple` there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
 - `port` (Number) TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`.
 - `server` (String) The domain controller to connect to, as an FQDN. Pinned for the provider's lifetime: there is no discovery and no failover, because a write that lands on one DC and a read-back that hits another reports "not found". Falls back to `AD_LDAP_SERVER`.
 - `simple` (Block, Optional) Username and password bind. Safe only because this connection is always TLS-protected. (see [below for nested schema](#nestedblock--ldap--simple))
@@ -247,11 +249,11 @@ Optional:
 
 - `ccache_path` (String) Credential cache file. Falls back to the ambient `KRB5CCNAME`, but only when this block sets none of `ccache_path`, `keytab` or `password` — a credential named here always wins over the environment, and `KRB5CCNAME` in turn wins over an ambient `AD_LDAP_KEYTAB` or `AD_LDAP_PASSWORD`.
 - `keytab` (String) Keytab for unattended authentication, for CI with no `kinit`. Requires `username`; `realm` defaults from `server`'s domain suffix. Conflicts with `ccache_path`. Falls back to `AD_LDAP_KEYTAB`.
-- `krb5_conf_path` (String) Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`.
-- `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`, set in configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since the environment fallback means only the resolved value can be judged, so a password with no username is refused when the provider connects. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.
+- `krb5_conf_path` (String) Kerberos configuration file. Falls back to `KRB5_CONFIG`, then `/etc/krb5.conf`; with none of them present, a minimal configuration is synthesized naming `realm` and `server` as the KDC, for every credential source.
+- `password` (String, Sensitive) Password for an unattended bind where `kinit` was never installed — CI, a scratch container. Requires `username`, set in configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since the environment fallback means only the resolved value can be judged, so a password with no username is refused when the provider connects. Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` and no `/etc/krb5.conf`, a minimal configuration is synthesized naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`, but only when neither `KRB5CCNAME` nor `AD_LDAP_KEYTAB` is set.
 - `realm` (String) Kerberos realm, used with `keytab` or `password`. Defaults from `server`'s domain suffix, uppercased, when unset. Falls back to `AD_LDAP_REALM`.
 - `spn` (String) Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`.
-- `username` (String) Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`.
+- `username` (String) Principal name, with `keytab` or `password`: the account name alone (`svc_tf`), with the realm in `realm` — unlike `simple`, not a UPN or `DOMAIN\user`. Not used with a ticket cache, which names its own principal. Falls back to `AD_LDAP_USERNAME`.
 
 
 <a id="nestedblock--ldap--ntlm"></a>
@@ -259,9 +261,9 @@ Optional:
 
 Optional:
 
-- `domain` (String) NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`.
+- `domain` (String) NetBIOS domain name (`CORP`). Falls back to `AD_LDAP_DOMAIN`.
 - `password` (String, Sensitive) Falls back to `AD_LDAP_PASSWORD`.
-- `username` (String) Falls back to `AD_LDAP_USERNAME`.
+- `username` (String) The account name alone (`svc_tf`), with the domain in `domain` — unlike `simple`, not a UPN or `DOMAIN\user`. Falls back to `AD_LDAP_USERNAME`.
 
 
 <a id="nestedblock--ldap--simple"></a>
