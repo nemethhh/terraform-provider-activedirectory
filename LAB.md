@@ -698,6 +698,16 @@ v0.57.0), the **full** `TestAcc` suite in every cell rather than
 | `lab-acc-ldap-krb-matrix PATTERN=TestAcc` (LDAPS, policy 0/1/2 × ticket cache/password) | six cells, each PASS 52 / FAIL 0 / SKIP 55 |
 | the same six cells with `LAB_LDAP_TLS=starttls LAB_LDAP_PORT=389` | six cells, each PASS 52 / FAIL 0 / SKIP 55 |
 
+After the bump to go-adldap v0.5.1 and go-adpwsh v0.23.1, with no `go.work`:
+
+| What | Result |
+|---|---|
+| `make lab-acc-ldap` (kerberos ticket cache, LDAPS) | PASS 53 / FAIL 0 / SKIP 55 — the 53rd is the new `TestAccOUAlreadyExistsSuggestsImport` |
+| `make lab-acc-winrm-7 PATTERN=TestAccOUAlreadyExistsSuggestsImport` | PASS |
+
+That test requires the import block's `id` to be the colliding DN. It failed
+over `ldap` against go-adldap v0.5.0, which rendered `id = ""`.
+
 This closes the StartTLS channel-binding gap above: the token binds over
 StartTLS at 1 and 2 for both the ticket cache and a supplied password.
 

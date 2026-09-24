@@ -71,6 +71,27 @@ func fakeSuiteEnv() suiteEnv {
 // ouLifecycleSteps is the create / read / update / delete / import cycle.
 // Against the fake it proves the provider's plan and state mapping; against a
 // real domain it proves the cmdlets accept what the fake accepted.
+func ouAlreadyExistsSteps(e suiteEnv) []resource.TestStep {
+	name := accNamePrefix + "exists"
+	first := e.ProviderConfig + fmt.Sprintf(`
+resource "activedirectory_ou" "first" {
+  name      = %q
+  container = %q
+}`, name, e.Container)
+	collide := first + fmt.Sprintf(`
+resource "activedirectory_ou" "second" {
+  name      = %q
+  container = %q
+}`, name, e.Container)
+	return []resource.TestStep{
+		{Config: first},
+		{
+			Config:      collide,
+			ExpectError: regexp.MustCompile(`id = "` + regexp.QuoteMeta(e.dn("OU="+name)) + `"`),
+		},
+	}
+}
+
 func ouLifecycleSteps(e suiteEnv) []resource.TestStep {
 	staff := accNamePrefix + "ou"
 	renamed := accNamePrefix + "ou-renamed"

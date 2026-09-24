@@ -169,10 +169,10 @@ github.com/mitchellh/reflectwalk v1.0.2 h1:G2LzWKi524PWgd3mLHV8Y5k7s6XUvT0Gef6zx
 github.com/mitchellh/reflectwalk v1.0.2/go.mod h1:mSTlrgnPZtwu0c4WaC2kGObEpuNDbx0jmZXqmk4esnw=
 github.com/nemethhh/go-adcore v0.2.0 h1:Y2obml9xqsEqX4JxTvayI3JEDFivDT3DY3TVd3iNaEo=
 github.com/nemethhh/go-adcore v0.2.0/go.mod h1:MAfL99yKr23XTxNgEl8TYvNk7cn4fhRvnYutUHpob8k=
-github.com/nemethhh/go-adldap v0.5.0 h1:Wa2Py7wd3DJR0SbVk0Hj4Xc9hBjhpIC8ZWMg8PYdXcQ=
-github.com/nemethhh/go-adldap v0.5.0/go.mod h1:dAzO7uZK9SDeCpN9GLqVN+Yy2uLV8UnNgsmIhf8oRRo=
-github.com/nemethhh/go-adpwsh v0.23.0 h1:cjuwLb0/hobhU3gRYwXahIoId8ECa8ThorZXDqPLph0=
-github.com/nemethhh/go-adpwsh v0.23.0/go.mod h1:thstToTZCmC4hqZ5A70OES3XQMvYAHUMY+vs7WFB5ww=
+github.com/nemethhh/go-adldap v0.5.1 h1:xer90RGdGoyYiJaZ7y7bVQrL+CoQfZRw4Ya+Rr9Tols=
+github.com/nemethhh/go-adldap v0.5.1/go.mod h1:FG/CWm018AOFpGz+dm60mDd4HxvIlwR5JeDI+i7r6Uk=
+github.com/nemethhh/go-adpwsh v0.23.1 h1:GHXA8Yq1o4Bv9pVhTNXzWj/5DgkfQd+Odnw19+XAhVI=
+github.com/nemethhh/go-adpwsh v0.23.1/go.mod h1:thstToTZCmC4hqZ5A70OES3XQMvYAHUMY+vs7WFB5ww=
 github.com/oiweiwei/gokrb5.fork/v9 v9.0.6 h1:ZMXO5OtzPPSqZ7KPgknVuvHE5iAbSXq5JLgzrkiXknM=
 github.com/oiweiwei/gokrb5.fork/v9 v9.0.6/go.mod h1:KEnkAYUYqZ5VwzxLFbv3JHlRhCvdFahjrdjjssMJJkI=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=
