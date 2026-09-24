@@ -45,17 +45,18 @@ real Terraform CLI against an in-memory directory. It needs no Windows, no
 
 ## Local library development
 
-A gitignored `go.work` resolves a sibling `../go-adpwsh` checkout:
+A gitignored `go.work` resolves sibling library checkouts:
 
 ```bash
-go work init . ../go-adpwsh
+go work init . ../go-adcore ../go-adldap ../go-adpwsh
 ```
 
 `go.mod` still pins the published version, so `GOWORK=off go build ./...` and
 `GOWORK=off go test ./...` must both pass — that is what a consumer without the
 workspace gets, and it is the only way to catch depending on unreleased library
-code. When a change spans both repositories, publish the go-adpwsh tag first,
-then bump the pin here.
+code. When a change spans repositories, publish the library tags first —
+`go-adcore` before the `go-adldap`/`go-adpwsh` releases that depend on it —
+then bump the pins here.
 
 ## Test architecture
 
@@ -217,6 +218,8 @@ picks the release up through a webhook.
 ```bash
 make check          # build, vet, fmt, test all green
 make docs           # regenerate docs/ and commit if anything changed
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...   # no reachable advisories
+make lab-acc-ldap   # and the pwsh transports' lab targets; see LAB.md
 # bump the version constraint in README.md / examples if the minor changes
 git tag v0.2.0      # a valid semver, preceded by v
 git push origin v0.2.0

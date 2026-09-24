@@ -11,7 +11,9 @@ the third.
 
 - **Registry:** [`nemethhh/activedirectory`](https://registry.terraform.io/providers/nemethhh/activedirectory/latest)
 - **Full schema reference:** [registry docs](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs)
-- **AD engine library:** [`nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh)
+- **AD engine libraries:** [`nemethhh/go-adldap`](https://github.com/nemethhh/go-adldap)
+  (LDAP), [`nemethhh/go-adpwsh`](https://github.com/nemethhh/go-adpwsh)
+  (PowerShell), sharing one contract in [`nemethhh/go-adcore`](https://github.com/nemethhh/go-adcore)
 
 ## Features
 
@@ -21,9 +23,11 @@ the third.
   destroy-and-recreate, so SIDs and ACLs survive), import and search.
 - **First-apply convergence** — each write pins a domain controller and reads
   the object back from that same replica; no second apply to settle drift.
-- **Three transports** — run the AD cmdlets locally on a domain-joined host,
-  over SSH to a jump box, or over WinRM from anywhere (including Linux); each
-  keeps a persistent PowerShell 7 runspace (`mode = "warm"`) by default.
+- **Two backends, one set of resources** — speak LDAPS to a domain controller
+  directly (`ldap`: no PowerShell, no RSAT, no Windows host), or run the AD
+  cmdlets locally on a domain-joined host, over SSH to a jump box, or over WinRM
+  from anywhere (including Linux). The PowerShell transports keep a persistent
+  PowerShell 7 runspace (`mode = "warm"`) by default.
 - **Write-only passwords** — a user's `password` never touches state or a plan
   file (Terraform 1.11+); rotation is driven by a version counter.
 - **Adoption is first-class** — import by GUID, DN, SID or sAMAccountName, and a
@@ -32,8 +36,9 @@ the third.
 - **Delegation without raw ACLs** — friendly rights names and curated
   delegation templates instead of hand-assembled access masks and schema GUIDs.
 
-Nothing is installed on a domain controller: the provider drives the standard
-`ActiveDirectory` PowerShell module over AD Web Services.
+Nothing is installed on a domain controller: the provider either speaks LDAP
+to it directly or drives the standard `ActiveDirectory` PowerShell module over
+AD Web Services.
 
 ## Quick start
 
@@ -42,7 +47,7 @@ terraform {
   required_providers {
     activedirectory = {
       source  = "nemethhh/activedirectory"
-      version = "~> 0.12"
+      version = "~> 0.13"
     }
   }
   required_version = ">= 1.11"
@@ -65,6 +70,20 @@ resource "activedirectory_ou" "staff" {
 }
 ```
 
+To run Terraform on Linux or macOS with no Windows host at all, replace the
+`local` and `domain` blocks with an `ldap` block and run `kinit` first:
+
+```hcl
+provider "activedirectory" {
+  ldap {
+    server              = "dc01.corp.local"
+    ca_certificate_file = "/etc/pki/corp-root.pem"
+
+    kerberos {} # the ticket from KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
+  }
+}
+```
+
 Per-attribute schemas for every resource and data source live in the
 [registry documentation](https://registry.terraform.io/providers/nemethhh/activedirectory/latest/docs);
 this README covers the shape and the conventions.
@@ -74,11 +93,11 @@ this README covers the shape and the conventions.
 | | |
 |---|---|
 | **Terraform** | 1.11 or later — the write-only `password` attribute requires it |
-| **PowerShell host** | A Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 |
-| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm`. The `ldap` connection needs none of this: TCP 636 to a domain controller and nothing else |
+| **PowerShell host** | For `local`, `ssh` and `winrm` only: a Windows **member server** (not a domain controller) with `RSAT-AD-PowerShell` and PowerShell 7 (`pwsh`) or Windows PowerShell 5.1. The `ldap` connection needs none |
+| **Network** | TCP 9389 (AD Web Services) from that host to the domain controller — plus TCP 22 for the `ssh` transport, or 5985/5986 for `winrm`. The `ldap` connection needs none of this: TCP 636 (or 389 with StartTLS) to a domain controller and nothing else |
 
-Every setting can also come from the environment (`AD_PWSH_PATH`, `AD_SSH_*`,
-`AD_WINRM_*`, …), and configuration always wins over the environment.
+Every setting can also come from the environment (`AD_LDAP_*`, `AD_PWSH_PATH`,
+`AD_SSH_*`, `AD_WINRM_*`, …), and configuration always wins over the environment.
 
 ## Connecting to Active Directory
 
@@ -94,8 +113,8 @@ identity.
 | `ldap` | anywhere; speaks LDAPS to a domain controller directly, with **no PowerShell, no RSAT and no Windows host** | a ticket from `KRB5CCNAME` (run `kinit`), or `ldap.simple` / `ldap.ntlm` | you want the provider binary and TCP 636 to be the whole runtime requirement |
 
 The `ldap` connection is not a transport: the other three differ only in where
-`pwsh` runs, and this one runs none, so the `mode` (warm/cold) axis and the
-`dialect` setting do not apply to it. It manages **every resource this provider
+`pwsh` runs, and this one runs none, so the `mode` (warm/cold) axis does not
+apply to it. It manages **every resource this provider
 offers** — organizational units, groups, users, computers, gMSAs, group
 membership, passwords and access rules, including everything backed by a
 security descriptor (ACLs, delegation templates, resource-based constrained
@@ -104,8 +123,15 @@ Validated end to end against a real domain; see [`LAB.md`](./LAB.md).
 
 A few things worth knowing:
 
-- **Pin a DC with `domain.server`.** Omit it to discover one at configure time.
-  Pinning is what keeps a write and its read-back on the same replica.
+- **Pin a DC.** On the PowerShell transports that is `domain.server` (omit it to
+  discover one at configure time); on `ldap` it is `ldap.server`, and the
+  `domain` block is refused. Pinning is what keeps a write and its read-back on
+  the same replica.
+- **Choosing an `ldap` bind.** `kerberos {}` reads a `FILE:` credential cache,
+  so it is the Linux and macOS path; `kerberos` also takes a `keytab` or a
+  `password` for CI. A Windows client uses `simple` or `ntlm`. Against a domain
+  that enforces LDAP channel binding (`LdapEnforceChannelBinding = 2`),
+  `kerberos` and `simple` work and `ntlm` is refused.
 - **The double hop.** Over `ssh` (public-key) or `winrm` against a *member* host,
   the session carries no delegatable credentials, so onward auth to AD Web
   Services fails. Add a `domain.credential { username = …, password = … }` block
@@ -254,8 +280,10 @@ This repository is the Terraform provider — **schemas, plan/state mapping,
 diagnostics and import, and nothing else**. Every Active Directory behaviour
 (cmdlet composition, DC pinning, the read-back after each write, delete
 verification, error classification, serialized writes, the replication wait)
-lives in [`go-adpwsh`](https://github.com/nemethhh/go-adpwsh). A change that
-needs new AD behaviour belongs in the library, not here.
+lives in the backend libraries — [`go-adldap`](https://github.com/nemethhh/go-adldap)
+and [`go-adpwsh`](https://github.com/nemethhh/go-adpwsh), both implementing
+[`go-adcore`](https://github.com/nemethhh/go-adcore)'s contract. A change that
+needs new AD behaviour belongs in a library, not here.
 
 ```bash
 make check     # build, vet, gofmt, test — exactly what CI runs, in CI's order
