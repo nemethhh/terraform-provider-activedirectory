@@ -2,7 +2,7 @@ terraform {
   required_providers {
     activedirectory = {
       source  = "nemethhh/activedirectory"
-      version = "~> 0.12"
+      version = "~> 0.13"
     }
   }
   required_version = ">= 1.11"
@@ -58,8 +58,10 @@ provider "activedirectory" {
 # Shell per operation and feeds the script on stdin to powershell -EncodedCommand
 # (Windows PowerShell 5.1) — slower, but it needs NO server-side PSRP session
 # configuration, so it fits a host where PSRP remoting is disabled but WinRS is
-# allowed. For cold, the winrm.user must have WinRS shell access (Remote
-# Management Users, or admin).
+# allowed. For cold, the winrm.user needs execute permission in the target's
+# WinRM service RootSDDL (an admin has it; grant anyone else with
+# `winrm configSDDL default`) — Remote Management Users membership alone is not
+# enough on a default host.
 # provider "activedirectory" {
 #   winrm {
 #     host = "dc1.corp.local" # an FQDN; SPN defaults to HTTP/dc1.corp.local
@@ -137,7 +139,8 @@ provider "activedirectory" {
 # The FILE: prefix matters: only file credential caches can be read, so a
 # KEYRING or KCM cache — the default on sssd-managed hosts — will not work.
 # This is the Linux and macOS path; Windows keeps credentials in the LSA with
-# no readable cache, so a Windows operator uses ldap.simple or ldap.ntlm.
+# no readable cache, so a Windows operator uses ldap.simple, ldap.ntlm, or
+# ldap.kerberos with username and password.
 #
 # The domain block is not used here: the ldap block carries both the pinned
 # domain controller and its own authentication.

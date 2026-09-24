@@ -45,17 +45,18 @@ real Terraform CLI against an in-memory directory. It needs no Windows, no
 
 ## Local library development
 
-A gitignored `go.work` resolves a sibling `../go-adpwsh` checkout:
+A gitignored `go.work` resolves sibling library checkouts:
 
 ```bash
-go work init . ../go-adpwsh
+go work init . ../go-adcore ../go-adldap ../go-adpwsh
 ```
 
 `go.mod` still pins the published version, so `GOWORK=off go build ./...` and
 `GOWORK=off go test ./...` must both pass — that is what a consumer without the
 workspace gets, and it is the only way to catch depending on unreleased library
-code. When a change spans both repositories, publish the go-adpwsh tag first,
-then bump the pin here.
+code. When a change spans repositories, publish the library tags first —
+`go-adcore` before the `go-adldap`/`go-adpwsh` releases that depend on it —
+then bump the pins here.
 
 ## Test architecture
 
@@ -217,20 +218,20 @@ picks the release up through a webhook.
 ```bash
 make check          # build, vet, fmt, test all green
 make docs           # regenerate docs/ and commit if anything changed
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...   # no reachable advisories
+make lab-acc-ldap   # and the pwsh transports' lab targets; see LAB.md
 # bump the version constraint in README.md / examples if the minor changes
 git tag v0.2.0      # a valid semver, preceded by v
 git push origin v0.2.0
 ```
 
-The lab member is a consumer, not a checkout: `lab-ship` sends `git archive
-HEAD`, `go.work` is gitignored so it never rides along, and the member resolves
-`go-adpwsh` from `go.mod` like anyone installing the provider would. A
-member-side lab run (`lab-acc`, `lab-e2e`) therefore cannot exercise a library
-change that has not been released yet — only `lab-acc-psrp`, running from a
-workspace-enabled checkout here, can. This is exactly why [local library
-development](#local-library-development) says to publish the go-adpwsh tag
-before bumping the pin: bump `go.mod` first and the member keeps testing the
-old library while the release goes out believing the new one was covered.
+`lab-ship` sends `git archive HEAD` of this repository **and of each sibling
+library** (`go-adcore`, `go-adldap`, `go-adpwsh`) together with a `go.work`, so
+a member-side run (`lab-acc`, `lab-e2e`) builds against the libraries' committed
+HEADs, not the versions `go.mod` pins. That is what lets a library fix be
+proven on the lab before it is tagged — and why the last run before a release
+must be against the released pins: tag the libraries, bump `go.mod`, check out
+the release tags in the sibling repositories, and re-run the lab.
 
 The tag push triggers `release.yml`; when it finishes, a GitHub Release carrying
 the signed artefacts exists and the Registry ingests the new version.

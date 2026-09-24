@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 
+	"github.com/nemethhh/go-adcore"
+	adldap "github.com/nemethhh/go-adldap"
 	adpwsh "github.com/nemethhh/go-adpwsh"
 	adlocalwarm "github.com/nemethhh/go-adpwsh/transport/localwarm"
 )
@@ -60,6 +63,11 @@ func e2ePreCheck(t *testing.T, alsoRequired ...string) func() {
 func e2eProviderConfig(user, pass string) string {
 	var b strings.Builder
 	b.WriteString("provider \"activedirectory\" {\n")
+	if accTransportName() == "ldap" {
+		b.WriteString(e2eLDAPBlock(user, pass))
+		b.WriteString("}\n")
+		return b.String()
+	}
 	b.WriteString("  local {\n")
 	if v := os.Getenv(envPwshPath); v != "" {
 		fmt.Fprintf(&b, "    pwsh_path = %q\n", v)
@@ -86,8 +94,54 @@ func e2eSuiteEnv(user, pass, container string) suiteEnv {
 // the drift scenarios and for CheckDestroy. Building it as the principal keeps
 // a mutation performed by an identity that actually holds the right, and keeps
 // the whole run free of admin credentials.
-func e2eClient(t *testing.T, user, pass string) *adpwsh.Client {
+// e2eLDAPBlock binds as the scenario's delegated principal with a simple bind,
+// the one form every principal can use without a keytab or a ticket of its own.
+func e2eLDAPBlock(user, pass string) string {
+	var b strings.Builder
+	b.WriteString("  ldap {\n")
+	fmt.Fprintf(&b, "    server = %q\n", os.Getenv(envLDAPServer))
+	fmt.Fprintf(&b, "    tls = %q\n", accLDAPTLS())
+	if p := os.Getenv(envLDAPPort); p != "" {
+		fmt.Fprintf(&b, "    port = %s\n", p)
+	}
+	if ca := os.Getenv(envLDAPCAFile); ca != "" {
+		fmt.Fprintf(&b, "    ca_certificate_file = %q\n", ca)
+	}
+	if strings.EqualFold(os.Getenv(envLDAPInsecure), "true") {
+		b.WriteString("    insecure_skip_verify = true\n")
+	}
+	b.WriteString("    max_concurrency = 4\n")
+	fmt.Fprintf(&b, "\n    simple {\n      username = %q\n      password = %q\n    }\n", user, pass)
+	b.WriteString("  }\n")
+	return b.String()
+}
+
+func e2eClient(t *testing.T, user, pass string) adcore.Directory {
 	t.Helper()
+	if accTransportName() == "ldap" {
+		tls := adldap.TLSLDAPS
+		if accLDAPTLS() == "starttls" {
+			tls = adldap.TLSStartTLS
+		}
+		cfg := adldap.Config{
+			Server:             os.Getenv(envLDAPServer),
+			TLS:                tls,
+			CACertificateFile:  os.Getenv(envLDAPCAFile),
+			InsecureSkipVerify: strings.EqualFold(os.Getenv(envLDAPInsecure), "true"),
+			Simple:             &adldap.SimpleAuth{Username: user, Password: adcore.NewSecret(pass)},
+		}
+		if p := os.Getenv(envLDAPPort); p != "" {
+			if n, err := strconv.Atoi(p); err == nil {
+				cfg.Port = n
+			}
+		}
+		client, err := adldap.New(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("e2e: cannot configure the LDAP client: %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		return client.Directory()
+	}
 	// Warm, not cold, and for a reason the ACL suites found: cold passes each
 	// script to `pwsh -EncodedCommand`, and base64 inflates it by a third, so a
 	// revoke carrying every explicit ACE on an object overruns the Windows
@@ -110,7 +164,7 @@ func e2eClient(t *testing.T, user, pass string) *adpwsh.Client {
 		t.Fatalf("e2e: cannot configure the Active Directory client: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return client
+	return client.Directory()
 }
 
 // e2eCheckDestroy asserts every managed object is gone from the directory,

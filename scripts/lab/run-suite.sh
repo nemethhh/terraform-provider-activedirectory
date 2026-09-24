@@ -39,6 +39,33 @@ large_line=""
 # provider default (warm). Forwarded to the member only when set.
 mode_line=""
 [[ -n ${LAB_MODE:-} ]] && mode_line="\$env:AD_ACC_MODE = '${LAB_MODE}'"
+# LAB_CONNECTION=ldap runs the member as an LDAP client: Windows as the client,
+# trusting the DC certificate through its own store. LAB_LDAP_AUTH picks simple
+# (default), ntlm or kerberos-password; the member has no FILE ticket cache.
+ldap_lines=""
+if [[ ${LAB_CONNECTION:-} == ldap ]]; then
+    domain=${LAB_DOMAIN:-corp.local}
+    bare=${user#*\\}
+    ldap_lines="\$env:AD_ACC_CONNECTION = 'ldap'
+\$env:AD_ACC_LDAP_SERVER = '$dc'
+\$env:AD_ACC_LDAP_TLS = '${LAB_LDAP_TLS:-ldaps}'
+\$env:AD_ACC_LDAP_PASSWORD = \$Password"
+    [[ -n ${LAB_LDAP_PORT:-} ]] && ldap_lines+="
+\$env:AD_ACC_LDAP_PORT = '$LAB_LDAP_PORT'"
+    case ${LAB_LDAP_AUTH:-simple} in
+    simple) ldap_lines+="
+\$env:AD_ACC_LDAP_AUTH = 'simple'
+\$env:AD_ACC_LDAP_USERNAME = '$bare@$domain'" ;;
+    ntlm) ldap_lines+="
+\$env:AD_ACC_LDAP_AUTH = 'ntlm'
+\$env:AD_ACC_LDAP_USERNAME = \$Username" ;;
+    kerberos-password) ldap_lines+="
+\$env:AD_ACC_LDAP_AUTH = 'kerberos'
+\$env:AD_ACC_LDAP_USERNAME = '$bare'
+\$env:AD_ACC_LDAP_REALM = '${domain^^}'" ;;
+    *) echo "LAB_LDAP_AUTH=${LAB_LDAP_AUTH}: want simple, ntlm or kerberos-password" >&2; exit 1 ;;
+    esac
+fi
 
 if [[ $pattern == --sweep ]]; then
     go_cmd='go test ./internal/provider -v -sweep=domain -timeout 30m'
@@ -64,6 +91,7 @@ Set-Location 'C:\src\provider'
 \$env:AD_ACC_PWSH_PATH        = '$pwsh_path'
 $mode_line
 $large_line
+$ldap_lines
 \$log = 'C:\Windows\Temp\lab-run.log'
 Remove-Item \$log -Force -ErrorAction SilentlyContinue
 \$sw = [Diagnostics.Stopwatch]::StartNew()
@@ -74,6 +102,11 @@ PS1
 
 # psrun's own timeout must outlast the test timeout, or the ssh session is cut
 # before go test can report.
+# The exit status is go test's on the member, not grep's here: lab-acc-matrix
+# grades a cell by it, and a filtered pipeline always exits 0.
+out=$(mktemp); trap 'rm -f "$script" "$out"' EXIT
 bash "$here/psrun.sh" "$member" "$script" $(( minutes * 60 + 300 )) -- \
     -Username "$user" -Password "$pass" 2>&1 |
-    grep -vE 'WARNING: |vulnerable to|openssh.com/pq.html|^\*\* '
+    grep -vE 'WARNING: |vulnerable to|openssh.com/pq.html|^\*\* ' | tee "$out" || true
+code=$(sed -n "s/^${label}_EXIT=\([0-9]*\).*/\1/p" "$out" | tail -1)
+exit "${code:-1}"

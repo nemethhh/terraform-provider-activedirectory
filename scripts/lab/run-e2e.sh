@@ -79,6 +79,11 @@ Write-Output "${label}_EXIT=\$LASTEXITCODE ELAPSED=\$([int]\$sw.Elapsed.TotalSec
 Get-Content \$log | Select-String -Pattern '^(--- (PASS|FAIL|SKIP)|ok |FAIL|panic|sweep:)|\[INFO\] sweep'
 PS1
 
+# The exit status is go test's on the member, not grep's here: lab-acc-matrix
+# grades a cell by it, and a filtered pipeline always exits 0.
+out=$(mktemp); trap 'rm -f "$script" "$out"' EXIT
 bash "$here/psrun.sh" "$member" "$script" $(( minutes * 60 + 300 )) -- \
     -E2EPassword "$e2e_pw" -AdminUser "$admin_user" -AdminPassword "$admin_pw" 2>&1 |
-    grep -vE 'WARNING: |vulnerable to|openssh.com/pq.html|^\*\* '
+    grep -vE 'WARNING: |vulnerable to|openssh.com/pq.html|^\*\* ' | tee "$out" || true
+code=$(sed -n "s/^${label}_EXIT=\([0-9]*\).*/\1/p" "$out" | tail -1)
+exit "${code:-1}"

@@ -6,6 +6,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -71,17 +72,19 @@ func (p *adProvider) Metadata(_ context.Context, _ provider.MetadataRequest, res
 
 func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages Active Directory objects through the ActiveDirectory " +
-			"PowerShell module. `pwsh` runs either on the Windows host Terraform itself runs on " +
-			"(the `local` block), on a Windows jump box reached over SSH (the `ssh` block), or " +
-			"on a Windows host reached over PSRP/WinRM (the `winrm` block). Exactly one of the " +
-			"three is required.",
+		MarkdownDescription: "Manages Active Directory objects over one of two backends. The " +
+			"`ldap` block speaks LDAPS to a domain controller directly, with no PowerShell and no " +
+			"Windows host. The other three drive the ActiveDirectory PowerShell module: `pwsh` " +
+			"runs on the Windows host Terraform itself runs on (the `local` block), on a Windows " +
+			"jump box reached over SSH (the `ssh` block), or on a Windows host reached over " +
+			"PSRP/WinRM (the `winrm` block). Exactly one of the four is required. Every resource " +
+			"and data source works on both backends.",
 		Attributes: map[string]schema.Attribute{
 			"pwsh_path": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Path to PowerShell 7 on whichever machine runs it. " +
 					"`local.pwsh_path` overrides it when the `local` block is used. Environment: " +
-					"`AD_PWSH_PATH`. Defaults to `pwsh`.",
+					"`AD_PWSH_PATH`. Defaults to `pwsh`. Not used by the `ldap` connection.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -90,7 +93,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"domain-joined Windows host. The spawned process inherits that machine's " +
 					"logon token, so Active Directory operations authenticate as whoever launched " +
 					"Terraform unless `domain.credential` says otherwise. Mutually exclusive with " +
-					"`ssh` and `winrm`; exactly one of the three is required.",
+					"`ssh`, `winrm` and `ldap`; exactly one of the four is required.",
 				Attributes: map[string]schema.Attribute{
 					"pwsh_path": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Path to PowerShell 7 on this machine. Overrides the " +
@@ -119,7 +122,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 				},
 			},
 			"ssh": schema.SingleNestedBlock{
-				MarkdownDescription: "Connection to the Windows jump box.",
+				MarkdownDescription: "Run `pwsh` on a Windows jump box reached over SSH. " +
+					"Mutually exclusive with `local`, `winrm` and `ldap`; exactly one of the four " +
+					"is required.",
 				Attributes: map[string]schema.Attribute{
 					"host": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Jump box host name. Environment: `AD_SSH_HOST`."},
@@ -168,8 +173,8 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"PSRP/WinRM. Kerberos over HTTP (5985) by default, using the runner's " +
 					"ambient Kerberos ticket; set `use_tls` for HTTPS (5986). Target a " +
 					"domain controller, or a member/management host together with " +
-					"`domain.credential`. Mutually exclusive with `local` and `ssh`; " +
-					"exactly one of the three is required.",
+					"`domain.credential`. Mutually exclusive with `local`, `ssh` and `ldap`; " +
+					"exactly one of the four is required.",
 				Attributes: map[string]schema.Attribute{
 					"host": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "Target host, an FQDN (the Kerberos SPN defaults to `HTTP/<host>`). Environment: `AD_WINRM_HOST`."},
@@ -240,9 +245,11 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"(Windows PowerShell 5.1 by default) — slower, but it needs **no** " +
 							"server-side PSRP session configuration, so it fits a host where PSRP " +
 							"remoting is disabled but WinRS is allowed. `cold` uses only the default " +
-							"WinRS shell, so `configuration_name`/`language_mode` do not apply; the " +
-							"`user` here must have WinRS shell access (Remote Management Users, or " +
-							"admin)."},
+							"WinRS shell, so `configuration_name`/`language_mode` do not apply. The " +
+							"`user` here needs execute permission in the target's WinRM service " +
+							"`RootSDDL`: a local administrator has it, and anyone else must be granted " +
+							"it (`winrm configSDDL default`). Membership in Remote Management Users " +
+							"alone does not open a shell on a default host."},
 					"server_selection": schema.StringAttribute{Optional: true,
 						Validators: []validator.String{stringvalidator.OneOf("failover", "round_robin")},
 						MarkdownDescription: "How the provider picks among multiple `server` blocks at " +
@@ -285,13 +292,22 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"templates, resource-based constrained delegation, " +
 					"`protected_from_accidental_deletion` and `can_change_password`.\n\n" +
 					"Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no " +
-					"attributes uses the ticket from `KRB5CCNAME`, so running `kinit` before Terraform " +
-					"keeps every credential out of configuration. That path reads a `FILE:` credential " +
-					"cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.\n\n" +
-					"`replication.force_sync` is supported here and only here: it is a directory " +
-					"operation on this connection, and the PowerShell connections run `Sync-ADObject` " +
-					"instead.\n\n" +
-					"Mutually exclusive with `local`, `ssh` and `winrm`.",
+					"attributes uses the ticket in the cache `KRB5CCNAME` names, so running " +
+					"`KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of " +
+					"configuration. `KRB5CCNAME` must be set: the default cache location is not " +
+					"searched. That path reads a `FILE:` credential cache, which **Windows does not " +
+					"have**: a Windows client uses `simple`, `ntlm`, or `kerberos` with `username` " +
+					"and `password`.\n\n" +
+					"Against a domain that enforces LDAP channel binding (`LdapEnforceChannelBinding = " +
+					"2`), `kerberos` binds over both `ldaps` and `starttls`, `simple` is not subject to " +
+					"the policy, and `ntlm` is refused.\n\n" +
+					"The `domain` block does not apply: `server` names the domain controller and the " +
+					"authentication block is the identity, so setting `domain.server` or " +
+					"`domain.credential` alongside `ldap` is an error rather than silently ignored. " +
+					"`replication` applies as on the other connections; `force_sync` there is a " +
+					"directory operation rather than `Sync-ADObject`.\n\n" +
+					"Mutually exclusive with `local`, `ssh` and `winrm`; exactly one of the four is " +
+					"required.",
 				Attributes: map[string]schema.Attribute{
 					"server": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "The domain controller to connect to, as an FQDN. Pinned for " +
@@ -316,7 +332,9 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"max_concurrency": schema.Int64Attribute{Optional: true,
 						MarkdownDescription: "Maximum pooled LDAP connections. Defaults to `4`."},
 					"timeout": schema.StringAttribute{Optional: true,
-						MarkdownDescription: "Per-operation deadline, as a Go duration (`\"60s\"`)."},
+						MarkdownDescription: "Per-operation deadline, as a Go duration (`\"60s\"`). " +
+							"Defaults to `90s` — deliberately longer than a resource's own default 60s " +
+							"operation budget, so the caller's deadline expires first."},
 				},
 				Blocks: map[string]schema.Block{
 					"simple": schema.SingleNestedBlock{
@@ -333,14 +351,18 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"kerberos": schema.SingleNestedBlock{
 						MarkdownDescription: "Bind with a Kerberos ticket. Empty — `kerberos {}` — is the " +
 							"intended form: the operator runs `kinit` in their own shell and the ticket is " +
-							"read from `KRB5CCNAME`, so no credential reaches Terraform configuration.\n\n" +
+							"read from the cache `KRB5CCNAME` names, so no credential reaches Terraform " +
+							"configuration. `KRB5CCNAME` (or `ccache_path`) must be set — the default cache " +
+							"location is not searched, so a plain `kinit` with no `KRB5CCNAME` fails with " +
+							"\"no Kerberos credential cache\".\n\n" +
 							"Only **FILE** credential caches can be read. `KEYRING` and `KCM` — the defaults " +
 							"on sssd-managed RHEL, Fedora and Ubuntu — are not readable from Go, so obtain the " +
 							"ticket into a file:\n\n" +
 							"```sh\nKRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL\n```\n\n" +
-							"This is the Linux and macOS path. `username` and `password` are the credential " +
-							"form for a runner where `kinit` was never installed at all — CI, a scratch " +
-							"container. Every Kerberos bind now carries a `tls-server-end-point` channel-" +
+							"The ticket cache is the Linux and macOS path. `username` with `password` or " +
+							"`keytab` is the credential form for a runner where `kinit` was never installed " +
+							"at all — CI, a scratch container — and needs no `krb5.conf` (see " +
+							"`krb5_conf_path`). Every Kerberos bind carries a `tls-server-end-point` channel-" +
 							"binding token, so this connection authenticates against a domain with " +
 							"`LdapEnforceChannelBinding` set to `2`, the same as `simple`.",
 						Attributes: map[string]schema.Attribute{
@@ -369,11 +391,12 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 								MarkdownDescription: "Password for an unattended bind where `kinit` was " +
 									"never installed — CI, a scratch container. Requires `username`, set in " +
 									"configuration or from `AD_LDAP_USERNAME` — unchecked at plan time, since " +
-									"the environment fallback means only the resolved value can be judged, but " +
-									"`Config.Validate` rejects the pair at connect time. " +
+									"the environment fallback means only the resolved value can be judged, so a " +
+									"password with no username is refused when the provider connects. " +
 									"Conflicts with `keytab` and `ccache_path`. With no `krb5_conf_path` " +
 									"and no `/etc/krb5.conf`, a minimal configuration is synthesized " +
-									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`.",
+									"naming `server` as the KDC. Falls back to `AD_LDAP_PASSWORD`, but only " +
+									"when neither `KRB5CCNAME` nor `AD_LDAP_KEYTAB` is set.",
 								Validators: []validator.String{
 									stringvalidator.ConflictsWith(
 										path.MatchRelative().AtParent().AtName("keytab"),
@@ -381,32 +404,38 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 									),
 								}},
 							"username": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Principal name, with `keytab` or `password`. Falls back to `AD_LDAP_USERNAME`."},
+								MarkdownDescription: "Principal name, with `keytab` or `password`: the account " +
+									"name alone (`svc_tf`), with the realm in `realm` — unlike `simple`, not a UPN " +
+									"or `DOMAIN\\user`. Not used with a ticket cache, which names its own " +
+									"principal. Falls back to `AD_LDAP_USERNAME`."},
 							"realm": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Kerberos realm, used with `keytab` or `password`. " +
 									"Defaults from `server`'s domain suffix, uppercased, when unset. Falls " +
 									"back to `AD_LDAP_REALM`."},
 							"krb5_conf_path": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Overrides `/etc/krb5.conf`. Falls back to `KRB5_CONFIG`."},
+								MarkdownDescription: "Kerberos configuration file. Falls back to `KRB5_CONFIG`, " +
+									"then `/etc/krb5.conf`; with none of them present, a minimal configuration is " +
+									"synthesized naming `realm` and `server` as the KDC, for every credential " +
+									"source."},
 							"spn": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "Service principal. Defaults to `ldap/<server>`. Falls back to `AD_LDAP_SPN`."},
 						},
 					},
 					"ntlm": schema.SingleNestedBlock{
 						MarkdownDescription: "Bind with NTLM, for a caller that cannot obtain a Kerberos " +
-							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also " +
-							"the Windows client's path, since the Kerberos one reads a `FILE:` credential " +
-							"cache Windows does not have.\n\n" +
+							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.\n\n" +
 							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
 							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with " +
 							"`data 80090346` and no mention of channel binding. Use `kerberos`, which sends " +
-							"a token, or `simple` over LDAPS there. Verified working against a domain that " +
+							"a token, or `simple` there. Verified working against a domain that " +
 							"does not enforce it.",
 						Attributes: map[string]schema.Attribute{
 							"domain": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "NetBIOS domain name. Falls back to `AD_LDAP_DOMAIN`."},
+								MarkdownDescription: "NetBIOS domain name (`CORP`). Falls back to `AD_LDAP_DOMAIN`."},
 							"username": schema.StringAttribute{Optional: true,
-								MarkdownDescription: "Falls back to `AD_LDAP_USERNAME`."},
+								MarkdownDescription: "The account name alone (`svc_tf`), with the domain in " +
+									"`domain` — unlike `simple`, not a UPN or `DOMAIN\\user`. Falls back to " +
+									"`AD_LDAP_USERNAME`."},
 							"password": schema.StringAttribute{Optional: true, Sensitive: true,
 								MarkdownDescription: "Falls back to `AD_LDAP_PASSWORD`."},
 						},
@@ -419,12 +448,14 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"server": schema.StringAttribute{Optional: true,
 						MarkdownDescription: "The domain controller to pin. Omit to discover one " +
 							"at configure time. Every cmdlet this provider runs targets it, so a " +
-							"write and its read-back cannot land on different replicas."},
+							"write and its read-back cannot land on different replicas. Refused with " +
+							"the `ldap` connection, which pins `ldap.server` instead."},
 				},
 				Blocks: map[string]schema.Block{
 					"credential": schema.SingleNestedBlock{
 						MarkdownDescription: "Credentials passed to the AD cmdlets. Omit to use " +
-							"the transport session's own identity.",
+							"the transport session's own identity. Refused with the `ldap` connection, " +
+							"which authenticates with its own `simple`, `kerberos` or `ntlm` block.",
 						Attributes: map[string]schema.Attribute{
 							"username": schema.StringAttribute{Optional: true,
 								MarkdownDescription: "The account the cmdlets run as, in " +
@@ -485,6 +516,9 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		return
 	}
 
+	// A transport connects lazily, so a host that refuses the shell or the
+	// session first fails inside adpwsh.New below, not at construction.
+	connectionDetail := func(err error) string { return transportErrDetail(modeCold, err) }
 	transport := p.transport
 	if transport == nil {
 		kind, diags := chooseConnection(cfg)
@@ -494,7 +528,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		}
 
 		if kind == connectionLDAP {
-			p.configureLDAP(ctx, cfg, credential, replication, resp)
+			p.configureLDAP(ctx, cfg, server, credential, replication, resp)
 			return
 		}
 
@@ -502,6 +536,12 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
+		}
+		connectionDetail = func(err error) string {
+			if kind == transportWinrm && mode == modeCold {
+				return winrmColdErrDetail(err)
+			}
+			return transportErrDetail(mode, err)
 		}
 
 		// (transport, mode) selects the go-adpwsh constructor: cold is a fresh
@@ -615,6 +655,11 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		Replication: replication,
 		Log:         tflogLogger{},
 	})
+	var failed *adpwsh.Error
+	if errors.As(err, &failed) && (failed.Kind == adpwsh.KindTransport || failed.Kind == adpwsh.KindTransient) {
+		resp.Diagnostics.AddError("Cannot configure the Active Directory client", connectionDetail(err))
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot configure the Active Directory client",
 			"The provider reached PowerShell but could not query the domain. "+
@@ -696,8 +741,8 @@ func transportErrDetail(mode executionMode, err error) string {
 
 // winrmColdErrDetail frames a winrm+cold construction/connection failure. The
 // two identities are separate for cold: the `winrm { user }` TRANSPORT account
-// must have WinRS shell access (member of Remote Management Users, or an admin,
-// and present in the WSMan service RootSDDL), which is a different grant than the
+// must have execute permission in the WSMan service RootSDDL (an admin has it),
+// which is a different grant than the
 // PSRP session-configuration SDDL warm relies on. A WSMan "access denied" here
 // is almost always that transport-side grant — NOT a `domain.credential`
 // problem, which is the AD-cmdlet identity delivered in the payload and consumed
@@ -705,9 +750,10 @@ func transportErrDetail(mode executionMode, err error) string {
 func winrmColdErrDetail(err error) string {
 	return "This is a transport problem, not an Active Directory one.\n\n" +
 		"winrm `mode = \"cold\"` opens a Windows Remote Shell as the `winrm` block's " +
-		"`user`. That account needs WinRS shell access on the target — membership in " +
-		"`Remote Management Users` (or local Administrators), and inclusion in the WSMan " +
-		"service RootSDDL. An \"access denied\" is that grant, not a `domain.credential` " +
+		"`user`. That account needs execute permission in the target's WinRM service " +
+		"RootSDDL: local Administrators have it, and anyone else must be granted it " +
+		"(`winrm configSDDL default`) — membership in Remote Management Users alone does " +
+		"not open a shell. An \"access denied\" is that grant, not a `domain.credential` " +
 		"issue (the AD identity is delivered separately, in the payload).\n\n" + err.Error()
 }
 
@@ -731,7 +777,15 @@ func withTimeout(ctx context.Context, v func(context.Context, time.Duration) (ti
 // configureLDAP builds the native-LDAP directory. It shares nothing with the
 // PowerShell path: no transport, no execution mode, and no credential from the
 // `domain` block — the `ldap` block carries its own authentication.
-func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, credential *adpwsh.Credential, replication adpwsh.ReplicationConfig, resp *provider.ConfigureResponse) {
+func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, server string, credential *adpwsh.Credential, replication adpwsh.ReplicationConfig, resp *provider.ConfigureResponse) {
+	if server != "" {
+		resp.Diagnostics.AddAttributeError(path.Root("domain").AtName("server"),
+			"domain.server does not apply to the ldap connection",
+			"`domain.server` is the domain controller the PowerShell cmdlets target. The `ldap` "+
+				"block connects to `ldap.server` and pins it for the provider's lifetime, so a "+
+				"server here would be silently ignored.\n\n"+
+				"Move the value into `ldap.server`, or remove it.")
+	}
 	if credential != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("domain").AtName("credential"),
 			"domain.credential does not apply to the ldap connection",
@@ -739,6 +793,8 @@ func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, crede
 				"block authenticates itself — with `simple`, `kerberos` or `ntlm` — so a "+
 				"credential here would be silently ignored.\n\n"+
 				"Move the credential into `ldap.simple`, or remove it and use `ldap.kerberos {}`.")
+	}
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -756,6 +812,14 @@ func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, crede
 	}
 
 	client, err := adldap.New(ctx, lcfg)
+	var refused *adcore.Error
+	if errors.As(err, &refused) && refused.Kind == adcore.KindDenied {
+		resp.Diagnostics.AddAttributeError(path.Root("ldap"),
+			"Cannot configure the Active Directory client",
+			"Authentication failed: the domain controller refused the credential in the "+
+				"`ldap` block's authentication. The connection itself worked.\n\n"+err.Error())
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("ldap"),
 			"Cannot configure the Active Directory client",

@@ -1,8 +1,6 @@
 package provider_test
 
 import (
-	"fmt"
-	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -43,25 +41,28 @@ func TestOUImportByDNAgainstTheFake(t *testing.T) {
 }
 
 // Creating over an existing object must hand back a ready-to-paste import block
-// rather than only naming the conflict. The fake is the right backend for this:
-// it can seed the collision without a directory of its own.
+// rather than only naming the conflict.
 func TestOUAlreadyExistsSuggestsImportAgainstTheFake(t *testing.T) {
-	e := fakeSuiteEnv()
-	name := accNamePrefix + "ou"
-	dir := fake.NewDirectory()
-	dir.Seed("organizationalUnit", name, e.Container, map[string]any{
-		"description": "", "protected": true,
+	t.Run("pwsh", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWith(fake.NewDirectory()),
+			Steps:                    ouAlreadyExistsSteps(fakeSuiteEnv()),
+		})
 	})
-	resource.UnitTest(t, resource.TestCase{
-		ProtoV6ProviderFactories: factoriesWith(dir),
-		Steps: []resource.TestStep{{
-			Config: e.ProviderConfig + fmt.Sprintf(`
-resource "activedirectory_ou" "staff" {
-  name      = %q
-  container = %q
-}`, name, e.Container),
-			ExpectError: regexp.MustCompile(`import \{`),
-		}},
+	t.Run("directory", func(t *testing.T) {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factoriesWithDirectory(adcorefake.New(fakeSuiteEnv().Container)),
+			Steps:                    ouAlreadyExistsSteps(fakeSuiteEnv()),
+		})
+	})
+}
+
+func TestAccOUAlreadyExistsSuggestsImport(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 accPreCheck(t),
+		ProtoV6ProviderFactories: accFactories(),
+		CheckDestroy:             accCheckDestroy(t),
+		Steps:                    ouAlreadyExistsSteps(accSuiteEnv()),
 	})
 }
 
