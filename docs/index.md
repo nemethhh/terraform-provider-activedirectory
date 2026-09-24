@@ -153,7 +153,8 @@ provider "activedirectory" {
 # The FILE: prefix matters: only file credential caches can be read, so a
 # KEYRING or KCM cache — the default on sssd-managed hosts — will not work.
 # This is the Linux and macOS path; Windows keeps credentials in the LSA with
-# no readable cache, so a Windows operator uses ldap.simple or ldap.ntlm.
+# no readable cache, so a Windows operator uses ldap.simple, ldap.ntlm, or
+# ldap.kerberos with username and password.
 #
 # The domain block is not used here: the ldap block carries both the pinned
 # domain controller and its own authentication.
@@ -187,7 +188,7 @@ provider "activedirectory" {
 
 **Every resource this provider offers works over this connection**, including the ones backed by a security descriptor: `activedirectory_access_rule`, delegation templates, resource-based constrained delegation, `protected_from_accidental_deletion` and `can_change_password`.
 
-Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket in the cache `KRB5CCNAME` names, so running `KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of configuration. `KRB5CCNAME` must be set: the default cache location is not searched. That path reads a `FILE:` credential cache, which **Windows does not have** — a Windows client uses `simple` or `ntlm`.
+Exactly one of `simple`, `kerberos` or `ntlm` is required. `kerberos {}` with no attributes uses the ticket in the cache `KRB5CCNAME` names, so running `KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of configuration. `KRB5CCNAME` must be set: the default cache location is not searched. That path reads a `FILE:` credential cache, which **Windows does not have**: a Windows client uses `simple`, `ntlm`, or `kerberos` with `username` and `password`.
 
 Against a domain that enforces LDAP channel binding (`LdapEnforceChannelBinding = 2`), `kerberos` binds over both `ldaps` and `starttls`, `simple` is not subject to the policy, and `ntlm` is refused.
 
@@ -235,7 +236,7 @@ KRB5CCNAME=FILE:/tmp/krb5cc_tf kinit svc_tf@CORP.LOCAL
 
 The ticket cache is the Linux and macOS path. `username` with `password` or `keytab` is the credential form for a runner where `kinit` was never installed at all — CI, a scratch container — and needs no `krb5.conf` (see `krb5_conf_path`). Every Kerberos bind carries a `tls-server-end-point` channel-binding token, so this connection authenticates against a domain with `LdapEnforceChannelBinding` set to `2`, the same as `simple`. (see [below for nested schema](#nestedblock--ldap--kerberos))
 - `max_concurrency` (Number) Maximum pooled LDAP connections. Defaults to `4`.
-- `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also the Windows client's path, since the Kerberos one reads a `FILE:` credential cache Windows does not have.
+- `ntlm` (Block, Optional) Bind with NTLM, for a caller that cannot obtain a Kerberos ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.
 
 **Known gap:** the LDAP library sends no channel-binding token, so a domain with `LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with `data 80090346` and no mention of channel binding. Use `kerberos`, which sends a token, or `simple` there. Verified working against a domain that does not enforce it. (see [below for nested schema](#nestedblock--ldap--ntlm))
 - `port` (Number) TCP port. Defaults to `636` for `ldaps` and `389` for `starttls`.

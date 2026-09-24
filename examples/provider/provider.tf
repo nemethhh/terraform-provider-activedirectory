@@ -139,7 +139,8 @@ provider "activedirectory" {
 # The FILE: prefix matters: only file credential caches can be read, so a
 # KEYRING or KCM cache — the default on sssd-managed hosts — will not work.
 # This is the Linux and macOS path; Windows keeps credentials in the LSA with
-# no readable cache, so a Windows operator uses ldap.simple or ldap.ntlm.
+# no readable cache, so a Windows operator uses ldap.simple, ldap.ntlm, or
+# ldap.kerberos with username and password.
 #
 # The domain block is not used here: the ldap block carries both the pinned
 # domain controller and its own authentication.

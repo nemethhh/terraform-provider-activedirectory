@@ -296,7 +296,8 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					"`KRB5CCNAME=FILE:… kinit` before Terraform keeps every credential out of " +
 					"configuration. `KRB5CCNAME` must be set: the default cache location is not " +
 					"searched. That path reads a `FILE:` credential cache, which **Windows does not " +
-					"have** — a Windows client uses `simple` or `ntlm`.\n\n" +
+					"have**: a Windows client uses `simple`, `ntlm`, or `kerberos` with `username` " +
+					"and `password`.\n\n" +
 					"Against a domain that enforces LDAP channel binding (`LdapEnforceChannelBinding = " +
 					"2`), `kerberos` binds over both `ldaps` and `starttls`, `simple` is not subject to " +
 					"the policy, and `ntlm` is refused.\n\n" +
@@ -422,9 +423,7 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 					},
 					"ntlm": schema.SingleNestedBlock{
 						MarkdownDescription: "Bind with NTLM, for a caller that cannot obtain a Kerberos " +
-							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner. It is also " +
-							"the Windows client's path, since the Kerberos one reads a `FILE:` credential " +
-							"cache Windows does not have.\n\n" +
+							"ticket — no KDC reachability, no `krb5.conf`, a workgroup runner.\n\n" +
 							"**Known gap:** the LDAP library sends no channel-binding token, so a domain with " +
 							"`LdapEnforceChannelBinding` set to `2` rejects this bind even over TLS, with " +
 							"`data 80090346` and no mention of channel binding. Use `kerberos`, which sends " +

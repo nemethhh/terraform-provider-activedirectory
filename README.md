@@ -131,7 +131,7 @@ A few things worth knowing:
   `KRB5CCNAME` names — it must be set, since the default cache location is not
   searched — so it is the Linux and macOS path. `kerberos` also takes `username`
   with a `keytab` or `password` for CI, and needs no `krb5.conf` then. A Windows
-  client uses `simple` or `ntlm`. Against a domain that enforces LDAP channel
+  client uses `simple`, `ntlm`, or `kerberos` with a `password`. Against a domain that enforces LDAP channel
   binding (`LdapEnforceChannelBinding = 2`), `kerberos` binds over both LDAPS and
   StartTLS, `simple` is not subject to the policy, and `ntlm` is refused.
 - **The double hop.** Over `ssh` (public-key) or `winrm` against a *member* host,

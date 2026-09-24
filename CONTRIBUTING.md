@@ -225,15 +225,13 @@ git tag v0.2.0      # a valid semver, preceded by v
 git push origin v0.2.0
 ```
 
-The lab member is a consumer, not a checkout: `lab-ship` sends `git archive
-HEAD`, `go.work` is gitignored so it never rides along, and the member resolves
-`go-adpwsh` from `go.mod` like anyone installing the provider would. A
-member-side lab run (`lab-acc`, `lab-e2e`) therefore cannot exercise a library
-change that has not been released yet — only `lab-acc-psrp`, running from a
-workspace-enabled checkout here, can. This is exactly why [local library
-development](#local-library-development) says to publish the go-adpwsh tag
-before bumping the pin: bump `go.mod` first and the member keeps testing the
-old library while the release goes out believing the new one was covered.
+`lab-ship` sends `git archive HEAD` of this repository **and of each sibling
+library** (`go-adcore`, `go-adldap`, `go-adpwsh`) together with a `go.work`, so
+a member-side run (`lab-acc`, `lab-e2e`) builds against the libraries' committed
+HEADs, not the versions `go.mod` pins. That is what lets a library fix be
+proven on the lab before it is tagged — and why the last run before a release
+must be against the released pins: tag the libraries, bump `go.mod`, check out
+the release tags in the sibling repositories, and re-run the lab.
 
 The tag push triggers `release.yml`; when it finishes, a GitHub Release carrying
 the signed artefacts exists and the Registry ingests the new version.

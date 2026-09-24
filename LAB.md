@@ -669,22 +669,11 @@ for later:
   it — gldap rejects application 12 outright — so rename and move are covered
   above the go-ldap adapter but the request bytes have still never crossed a
   socket in CI. The lab runs above do exercise them for real.
-- **Windows as the client.** The Kerberos path reads a FILE credential cache,
-  which Windows does not have; a Windows operator uses `ldap.simple` or
-  `ldap.ntlm`. Closing this means an SSPI client under a Windows build tag, and
-  it is its own piece of work.
-- **The keytab credential source was never run against a hardened DC.** The
-  channel-binding matrix above covers only `kerberos` (ticket cache) and
-  `kerberos-password`; `LAB_LDAP_AUTH=kerberos-keytab` needs a keytab fixture
-  the lab does not have and nothing here creates one, so it was left out of
-  `lab-acc-ldap-krb-matrix` rather than included as a skip that would have
-  recorded a pass. One of the three credential sources the feature ships is
-  therefore **not verified** against `LdapEnforceChannelBinding = 1` or `2` —
-  only reasoned to work the same way `kerberos-password` does, since both build
-  the same GSS-API token.
-- **`simple` at `LdapEnforceChannelBinding = 2` over StartTLS.** The policy
-  governs SASL binds only and `simple` passed it over LDAPS, but the StartTLS
-  cell was not run.
+- **Kerberos from a Windows client's own logon.** A Windows client binds with
+  `simple`, `ntlm` or `kerberos` with a supplied password (all three pass the
+  full suite, below), but not with the logged-on user's ticket: that needs an
+  SSPI client under a Windows build tag. The keytab form was not run from
+  Windows.
 
 ### Release-readiness run, 2026-09-24
 
@@ -719,6 +708,43 @@ OUs behind, which failed the next run on already-exists until `make lab-sweep`
 cleared them. The StartTLS cells above were run by a script that retries the
 policy change and probes a bind until the DC answers before each cell; the
 matrix target itself still has no settle step.
+
+### Untested paths, run 2026-09-24
+
+Everything the earlier runs left out, run against go-adldap v0.5.2 and
+go-adpwsh v0.23.2 (the releases these runs forced).
+
+| What | Result |
+|---|---|
+| keytab, `simple`, `ntlm` × LDAPS/StartTLS × `LdapEnforceChannelBinding` 0/1/2, full suite | keytab and `simple` PASS 53 / FAIL 0 in all 12 cells; `ntlm` PASS at 0 and 1, refused at 2 with `data 80090346` as documented |
+| large sets over ldap, `AD_ACC_LARGE_COUNT=5000` | PASS — **failed on v0.5.1**: `Size Limit Exceeded` past 1000 members (fixed in v0.5.2 by paging) |
+| `make lab-e2e-ldap` (the e2e layer over ldap, delegated principals) | PASS 53 / FAIL 0 — **`TestAccE2EWrongPassword` failed on v0.5.1**: a refused bind read as a transport failure (fixed in v0.5.2) |
+| Windows as the ldap client (`LAB_CONNECTION=ldap make lab-acc-only`) | PASS 38 / FAIL 0 for `simple`, `ntlm` and `kerberos-password` |
+| `lab-acc-matrix PATTERN=TestAcc`, every PowerShell cell | all PASS after the fixes below |
+
+The PowerShell matrix found:
+
+- **winrm cold** returned non-ASCII values as `�` (the WinRS process wrote the
+  result in the OEM code page) — fixed in go-adpwsh v0.23.2.
+- **local cold** failed every `activedirectory_access_rule` op: the ACL script
+  passes Windows' 32767-character command-line cap — fixed in go-adpwsh
+  v0.23.2 with a temp-file path.
+- **ssh warm** failed configure in every suite: the rebuild lost the
+  `powershell` sshd subsystem. `make lab-ssh-subsystem` restores it.
+- **winrm cold** never ran: the rebuild lost `svc_tfcold`, and Remote
+  Management Users membership alone opens no WinRS shell — the RootSDDL must
+  grant it. `make lab-winrm-cold-fixture` does both.
+- Two flakes, each 3 of 3 green in isolation: `TestAccAccessRuleLifecycle` on
+  winrm 7 (a WinRM shell refused mid-run) and `TestAccReplicationTimeoutSavesState`
+  on ssh cold 5.1 (a slow cell lets replication finish inside the 1ms wait).
+- The member lost the CA root until `gpupdate`; a Windows ldap client needs the
+  DC's issuer in its machine store, or `ca_certificate_file`.
+- `lab-acc-matrix` graded member cells by grep's exit status, so a failing local
+  cell read PASS. The runners now exit with go test's status.
+
+Final pass on the released pins, no `go.work`: ldap full suite with large sets
+PASS 56 / FAIL 0, e2e over ldap PASS 53 / FAIL 0, winrm cold PASS 53 / FAIL 0,
+local cold PASS 38 / FAIL 0.
 
 ### Running it
 
