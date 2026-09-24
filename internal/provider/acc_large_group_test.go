@@ -7,10 +7,9 @@ import (
 	"os"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	adpwsh "github.com/nemethhh/go-adpwsh"
+	"github.com/nemethhh/go-adcore"
 	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 )
 
@@ -195,37 +194,12 @@ func TestAccGroupMembershipLargeSet(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath), Timeout: 15 * time.Minute})
-	if err != nil {
-		t.Fatalf("start PowerShell: %v", err)
-	}
-	defer func() { _ = tr.Close() }()
-
 	tag := accNamePrefix + "large"
-	prov, err := runLargeGroup(ctx, tr, map[string]any{
+	prov := provisionLargeGroup(t, map[string]any{
 		"action": "provision", "base": container, "tag": tag, "count": count,
 	})
-	if err != nil {
-		t.Fatalf("provision %d members: %v", count, err)
-	}
-	t.Cleanup(func() {
-		if _, err := runLargeGroup(context.Background(), tr, map[string]any{
-			"action": "teardown", "ou": prov.OU,
-		}); err != nil {
-			t.Errorf("teardown %s: %v", prov.OU, err)
-		}
-	})
 
-	cfg := adpwsh.Config{Transport: tr, Server: os.Getenv(envServer)}
-	if u, p := os.Getenv(envUsername), os.Getenv(envPassword); u != "" && p != "" {
-		cfg.Credential = &adpwsh.Credential{Username: u, Password: adpwsh.NewSecret(p)}
-	}
-	client, err := adpwsh.New(ctx, cfg)
-	if err != nil {
-		t.Fatalf("configure client: %v", err)
-	}
-
-	members, err := client.Group.Members(ctx, adpwsh.ByGUID(prov.GroupGUID))
+	members, err := largeGroupReader(t).Group.Members(ctx, adcore.ByGUID(prov.GroupGUID))
 	if err != nil {
 		t.Fatalf("Group.Members: %v", err)
 	}
@@ -261,26 +235,9 @@ func TestAccGroupMembersRecursiveLargeSet(t *testing.T) {
 	}
 	const buckets = 5
 
-	ctx := context.Background()
-	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath), Timeout: 30 * time.Minute})
-	if err != nil {
-		t.Fatalf("start PowerShell: %v", err)
-	}
-	defer func() { _ = tr.Close() }()
-
 	tag := accNamePrefix + "rl" // short: "tfacc-rl-m4999" is 14 chars (<= 20)
-	prov, err := runLargeGroup(ctx, tr, map[string]any{
+	prov := provisionLargeGroup(t, map[string]any{
 		"action": "provision_nested", "base": container, "tag": tag, "count": count, "buckets": buckets,
-	})
-	if err != nil {
-		t.Fatalf("provision nested %d members: %v", count, err)
-	}
-	t.Cleanup(func() {
-		if _, err := runLargeGroup(context.Background(), tr, map[string]any{
-			"action": "teardown", "ou": prov.OU,
-		}); err != nil {
-			t.Errorf("teardown %s: %v", prov.OU, err)
-		}
 	})
 
 	config := accProviderConfigWithTimeout("20m") + fmt.Sprintf(`

@@ -1,17 +1,14 @@
 package provider_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/nemethhh/go-adpwsh/transport/fake"
-	adlocal "github.com/nemethhh/go-adpwsh/transport/local"
 )
 
 func TestGroupMembersDataSourceAgainstTheFake(t *testing.T) {
@@ -95,40 +92,32 @@ func TestAccGroupMembersDataSourceLargeSet(t *testing.T) {
 		t.Fatalf("%s must be set", envContainer)
 	}
 
-	ctx := context.Background()
-	tr, err := adlocal.New(adlocal.Config{PwshPath: os.Getenv(envPwshPath), Timeout: 15 * time.Minute})
-	if err != nil {
-		t.Fatalf("start PowerShell: %v", err)
-	}
-	defer func() { _ = tr.Close() }()
-
 	tag := accNamePrefix + "large-ds"
-	prov, err := runLargeGroup(ctx, tr, map[string]any{
+	prov := provisionLargeGroup(t, map[string]any{
 		"action": "provision", "base": container, "tag": tag, "count": count,
-	})
-	if err != nil {
-		t.Fatalf("provision %d members: %v", count, err)
-	}
-	t.Cleanup(func() {
-		if _, err := runLargeGroup(context.Background(), tr, map[string]any{
-			"action": "teardown", "ou": prov.OU,
-		}); err != nil {
-			t.Errorf("teardown %s: %v", prov.OU, err)
-		}
 	})
 
 	config := accProviderConfig() + fmt.Sprintf(`
 data "activedirectory_group_members" "large" {
   guid = %q
-}`, prov.GroupGUID)
+}
+data "activedirectory_users" "large" {
+  container   = %q
+  scope       = "one_level"
+  max_results = %d
+}`, prov.GroupGUID, prov.OU, count+1)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 accPreCheck(t),
 		ProtoV6ProviderFactories: accFactories(),
 		Steps: []resource.TestStep{{
 			Config: config,
-			Check: resource.TestCheckResourceAttr(
-				"data.activedirectory_group_members.large", "members.#", strconv.Itoa(count)),
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr(
+					"data.activedirectory_group_members.large", "members.#", strconv.Itoa(count)),
+				resource.TestCheckResourceAttr(
+					"data.activedirectory_users.large", "users.#", strconv.Itoa(count)),
+			),
 		}},
 	})
 }
