@@ -92,8 +92,8 @@ labcred = $$(awk -F'=' '/^$(1)[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print}' $(LAB_CRE
         lab-acc-matrix lab-acc-local-cold lab-acc-local-warm lab-acc-ssh-cold-51 \
         lab-acc-ssh-cold-7 lab-acc-ssh-warm lab-acc-winrm-51 lab-acc-winrm-7 \
         lab-acc-winrm-cold lab-acc-winrm-failover lab-acc-winrm-roundrobin \
-        lab-channel-binding lab-acc-ldap-krb-matrix \
-        lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-sweep
+        lab-ssh-subsystem lab-winrm-cold-fixture lab-channel-binding lab-acc-ldap-krb-matrix \
+        lab-e2e-fixtures lab-e2e lab-e2e-only lab-e2e-ldap lab-e2e-sweep
 
 lab-help:
 	@echo 'Lab targets. HOST defaults where sensible; override on the command line.'
@@ -107,6 +107,8 @@ lab-help:
 	@echo '    lab-promote-dc2 HOST=<alias>  promote an additional DC (needs LAB_ADMIN_PW)'
 	@echo '    lab-open-ssh HOST=<ip>     re-open SSH after a firewall-profile change'
 	@echo '    lab-acceptance-fixtures    containers, service account and delegation'
+	@echo '    lab-winrm-cold-fixture     svc_tfcold, the winrm cold cell'"'"'s WinRS-only transport account'
+	@echo '    lab-ssh-subsystem HOST=<alias>  register the powershell sshd subsystem ssh warm needs'
 	@echo '    lab-grant-deleg            grant svc SeEnableDelegationPrivilege (computer delegation; reboot the DC after)'
 	@echo ''
 	@echo '  Using the lab:'
@@ -139,6 +141,7 @@ lab-help:
 	@echo '    lab-e2e-fixtures           e2e OUs and three delegated principals (one-time, admin)'
 	@echo '    lab-e2e                    ship, then run the whole e2e suite'
 	@echo '    lab-e2e-only PATTERN=<re>  run one e2e suite, or any -run pattern'
+	@echo '    lab-e2e-ldap               the e2e layer over LDAPS, from here (PATTERN=<re>)'
 	@echo '    lab-e2e-sweep              delete tfacc- leftovers beneath OU=e2e (admin)'
 
 # --- host build-out ---------------------------------------------------------
@@ -453,6 +456,18 @@ lab-acc-matrix:
 lab-acc-ldap:
 	$(LAB_DIR)/run-suite-ldap.sh $(or $(PATTERN),TestAcc) $(or $(MINUTES),60)
 
+# The winrm cold cell's WinRS-only transport account, svc_tfcold (cred file
+# cold.*): created on the DC, then allowed a remote shell on the WinRM target.
+lab-winrm-cold-fixture:
+	$(PSRUN) $(LAB_DC) $(LAB_DIR)/17-provision-winrm-cold.ps1 300 -- \
+	  -Role account -Password "$(call labcred,cold.password)"
+	$(PSRUN) $(or $(HOST),$(LAB_MEMBER)) $(LAB_DIR)/17-provision-winrm-cold.ps1 120 -- -Role winrs
+
+# Register the `powershell` sshd subsystem ssh warm mode connects to. The lab
+# rebuild of 2026-09-21 lost it, and ssh warm failed every suite in configure.
+lab-ssh-subsystem:
+	$(PSRUN) $(or $(HOST),$(LAB_MEMBER)) $(LAB_DIR)/16-register-pwsh-subsystem.ps1 120
+
 # Set the channel-binding policy on a DC. 0 never, 1 when supported, 2 always.
 # The lab ships at 0; 2 is what the CIS Benchmark and the DISA STIG require and
 # what the Kerberos bind's channel-binding token exists for.
@@ -502,6 +517,11 @@ lab-sweep:
 lab-e2e-fixtures:
 	$(PSRUN) $(LAB_DC) $(LAB_DIR)/13-provision-e2e.ps1 300 -- \
 	  -SvcPassword "$(call labcred,e2e.password)"
+
+# The e2e layer over LDAPS, from here: each scenario binds as its delegated
+# principal. Needs no admin and no ticket.
+lab-e2e-ldap:
+	$(LAB_DIR)/run-e2e-ldap.sh $(or $(PATTERN),TestAccE2E) $(or $(MINUTES),60)
 
 # Ship this working tree, then run the whole e2e suite there. Needs no admin.
 lab-e2e: lab-ship
