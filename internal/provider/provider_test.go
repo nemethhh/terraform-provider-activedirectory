@@ -391,3 +391,27 @@ resource "activedirectory_ou" "unreachable" {
 		}},
 	})
 }
+
+func TestConfigureRefusesDomainServerWithLDAP(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: accFactories(),
+		Steps: []resource.TestStep{{
+			Config: `
+provider "activedirectory" {
+  ldap {
+    server = "dc01.corp.local"
+    kerberos {}
+  }
+  domain {
+    server = "dc02.corp.local"
+  }
+}
+
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`domain.server does not apply to the ldap connection`),
+		}},
+	})
+}

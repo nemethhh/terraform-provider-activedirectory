@@ -494,7 +494,7 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		}
 
 		if kind == connectionLDAP {
-			p.configureLDAP(ctx, cfg, credential, replication, resp)
+			p.configureLDAP(ctx, cfg, server, credential, replication, resp)
 			return
 		}
 
@@ -731,7 +731,15 @@ func withTimeout(ctx context.Context, v func(context.Context, time.Duration) (ti
 // configureLDAP builds the native-LDAP directory. It shares nothing with the
 // PowerShell path: no transport, no execution mode, and no credential from the
 // `domain` block — the `ldap` block carries its own authentication.
-func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, credential *adpwsh.Credential, replication adpwsh.ReplicationConfig, resp *provider.ConfigureResponse) {
+func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, server string, credential *adpwsh.Credential, replication adpwsh.ReplicationConfig, resp *provider.ConfigureResponse) {
+	if server != "" {
+		resp.Diagnostics.AddAttributeError(path.Root("domain").AtName("server"),
+			"domain.server does not apply to the ldap connection",
+			"`domain.server` is the domain controller the PowerShell cmdlets target. The `ldap` "+
+				"block connects to `ldap.server` and pins it for the provider's lifetime, so a "+
+				"server here would be silently ignored.\n\n"+
+				"Move the value into `ldap.server`, or remove it.")
+	}
 	if credential != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("domain").AtName("credential"),
 			"domain.credential does not apply to the ldap connection",
@@ -739,6 +747,8 @@ func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, crede
 				"block authenticates itself — with `simple`, `kerberos` or `ntlm` — so a "+
 				"credential here would be silently ignored.\n\n"+
 				"Move the credential into `ldap.simple`, or remove it and use `ldap.kerberos {}`.")
+	}
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
