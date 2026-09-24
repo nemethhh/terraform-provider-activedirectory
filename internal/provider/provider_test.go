@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -412,6 +413,25 @@ resource "activedirectory_ou" "unreachable" {
   container = "DC=corp,DC=local"
 }`,
 			ExpectError: regexp.MustCompile(`domain.server does not apply to the ldap connection`),
+		}},
+	})
+}
+
+func TestConfigureReportsATransportFailureAsTransport(t *testing.T) {
+	refused := fake.New(func(fake.Call) fake.Response {
+		return fake.Response{RunErr: errors.New("winrs: create shell: Access is denied")}
+	})
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: map[string]func() (tfprotov6.ProviderServer, error){
+			"activedirectory": providerserver.NewProtocol6WithError(provider.NewWithTransport(refused)),
+		},
+		Steps: []resource.TestStep{{
+			Config: providerConfig + `
+resource "activedirectory_ou" "unreachable" {
+  name      = "tfacc-never-created"
+  container = "DC=corp,DC=local"
+}`,
+			ExpectError: regexp.MustCompile(`(?s)Cannot configure the Active Directory client.*transport problem`),
 		}},
 	})
 }

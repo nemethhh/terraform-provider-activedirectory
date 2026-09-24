@@ -6,6 +6,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -244,9 +245,11 @@ func (p *adProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 							"(Windows PowerShell 5.1 by default) — slower, but it needs **no** " +
 							"server-side PSRP session configuration, so it fits a host where PSRP " +
 							"remoting is disabled but WinRS is allowed. `cold` uses only the default " +
-							"WinRS shell, so `configuration_name`/`language_mode` do not apply; the " +
-							"`user` here must have WinRS shell access (Remote Management Users, or " +
-							"admin)."},
+							"WinRS shell, so `configuration_name`/`language_mode` do not apply. The " +
+							"`user` here needs execute permission in the target's WinRM service " +
+							"`RootSDDL`: a local administrator has it, and anyone else must be granted " +
+							"it (`winrm configSDDL default`). Membership in Remote Management Users " +
+							"alone does not open a shell on a default host."},
 					"server_selection": schema.StringAttribute{Optional: true,
 						Validators: []validator.String{stringvalidator.OneOf("failover", "round_robin")},
 						MarkdownDescription: "How the provider picks among multiple `server` blocks at " +
@@ -514,6 +517,9 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		return
 	}
 
+	// A transport connects lazily, so a host that refuses the shell or the
+	// session first fails inside adpwsh.New below, not at construction.
+	connectionDetail := func(err error) string { return transportErrDetail(modeCold, err) }
 	transport := p.transport
 	if transport == nil {
 		kind, diags := chooseConnection(cfg)
@@ -531,6 +537,12 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
+		}
+		connectionDetail = func(err error) string {
+			if kind == transportWinrm && mode == modeCold {
+				return winrmColdErrDetail(err)
+			}
+			return transportErrDetail(mode, err)
 		}
 
 		// (transport, mode) selects the go-adpwsh constructor: cold is a fresh
@@ -644,6 +656,11 @@ func (p *adProvider) Configure(ctx context.Context, req provider.ConfigureReques
 		Replication: replication,
 		Log:         tflogLogger{},
 	})
+	var failed *adpwsh.Error
+	if errors.As(err, &failed) && (failed.Kind == adpwsh.KindTransport || failed.Kind == adpwsh.KindTransient) {
+		resp.Diagnostics.AddError("Cannot configure the Active Directory client", connectionDetail(err))
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot configure the Active Directory client",
 			"The provider reached PowerShell but could not query the domain. "+
@@ -725,8 +742,8 @@ func transportErrDetail(mode executionMode, err error) string {
 
 // winrmColdErrDetail frames a winrm+cold construction/connection failure. The
 // two identities are separate for cold: the `winrm { user }` TRANSPORT account
-// must have WinRS shell access (member of Remote Management Users, or an admin,
-// and present in the WSMan service RootSDDL), which is a different grant than the
+// must have execute permission in the WSMan service RootSDDL (an admin has it),
+// which is a different grant than the
 // PSRP session-configuration SDDL warm relies on. A WSMan "access denied" here
 // is almost always that transport-side grant — NOT a `domain.credential`
 // problem, which is the AD-cmdlet identity delivered in the payload and consumed
@@ -734,9 +751,10 @@ func transportErrDetail(mode executionMode, err error) string {
 func winrmColdErrDetail(err error) string {
 	return "This is a transport problem, not an Active Directory one.\n\n" +
 		"winrm `mode = \"cold\"` opens a Windows Remote Shell as the `winrm` block's " +
-		"`user`. That account needs WinRS shell access on the target — membership in " +
-		"`Remote Management Users` (or local Administrators), and inclusion in the WSMan " +
-		"service RootSDDL. An \"access denied\" is that grant, not a `domain.credential` " +
+		"`user`. That account needs execute permission in the target's WinRM service " +
+		"RootSDDL: local Administrators have it, and anyone else must be granted it " +
+		"(`winrm configSDDL default`) — membership in Remote Management Users alone does " +
+		"not open a shell. An \"access denied\" is that grant, not a `domain.credential` " +
 		"issue (the AD identity is delivered separately, in the payload).\n\n" + err.Error()
 }
 
@@ -795,6 +813,14 @@ func (p *adProvider) configureLDAP(ctx context.Context, cfg providerModel, serve
 	}
 
 	client, err := adldap.New(ctx, lcfg)
+	var refused *adcore.Error
+	if errors.As(err, &refused) && refused.Kind == adcore.KindDenied {
+		resp.Diagnostics.AddAttributeError(path.Root("ldap"),
+			"Cannot configure the Active Directory client",
+			"Authentication failed: the domain controller refused the credential in the "+
+				"`ldap` block's authentication. The connection itself worked.\n\n"+err.Error())
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("ldap"),
 			"Cannot configure the Active Directory client",
